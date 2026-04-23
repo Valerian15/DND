@@ -11,6 +11,8 @@ db.pragma('foreign_keys = ON');
 
 export function initSchema() {
   db.exec(`
+    -- USERS / AUTH
+
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
@@ -28,6 +30,144 @@ export function initSchema() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+    -- LIBRARY CONTENT
+    -- One table per content type. JSON 'data' column holds the full object.
+    -- 'source' tracks origin: 'srd-2014', 'homebrew', custom names, etc.
+
+    CREATE TABLE IF NOT EXISTS races (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      data TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'srd-2014',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS classes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      data TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'srd-2014',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS subclasses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      class_slug TEXT,
+      data TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'srd-2014',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_subclasses_class ON subclasses(class_slug);
+
+    CREATE TABLE IF NOT EXISTS backgrounds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      data TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'srd-2014',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS spells (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      level INTEGER NOT NULL,
+      school TEXT,
+      data TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'srd-2014',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_spells_level ON spells(level);
+    CREATE INDEX IF NOT EXISTS idx_spells_name ON spells(name);
+
+    CREATE TABLE IF NOT EXISTS items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      item_type TEXT,
+      rarity TEXT,
+      data TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'srd-2014',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);
+
+    CREATE TABLE IF NOT EXISTS monsters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      cr REAL,
+      type TEXT,
+      data TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'srd-2014',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_monsters_cr ON monsters(cr);
+    CREATE INDEX IF NOT EXISTS idx_monsters_name ON monsters(name);
+
+    CREATE TABLE IF NOT EXISTS feats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      data TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'srd-2014',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS conditions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      data TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'srd-2014',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    -- CHARACTERS
+    -- Most 5e character data lives in JSON columns for flexibility.
+    -- Commonly queried fields (level, hp, class, owner) are top-level.
+
+    CREATE TABLE IF NOT EXISTS characters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      level INTEGER NOT NULL DEFAULT 1,
+      class_slug TEXT,
+      subclass_slug TEXT,
+      race_slug TEXT,
+      background_slug TEXT,
+      hp_current INTEGER NOT NULL DEFAULT 0,
+      hp_max INTEGER NOT NULL DEFAULT 0,
+      hp_temp INTEGER NOT NULL DEFAULT 0,
+      ac INTEGER NOT NULL DEFAULT 10,
+      portrait_url TEXT,
+      abilities TEXT NOT NULL DEFAULT '{"str":10,"dex":10,"con":10,"int":10,"wis":10,"cha":10}',
+      skills TEXT NOT NULL DEFAULT '{}',
+      saves TEXT NOT NULL DEFAULT '{}',
+      inventory TEXT NOT NULL DEFAULT '[]',
+      spells_known TEXT NOT NULL DEFAULT '[]',
+      spells_prepared TEXT NOT NULL DEFAULT '[]',
+      spell_slots TEXT NOT NULL DEFAULT '{}',
+      features TEXT NOT NULL DEFAULT '[]',
+      notes TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_characters_owner ON characters(owner_id);
   `);
+
   console.log('✅ Database schema ready');
 }
