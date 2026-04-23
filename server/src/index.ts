@@ -1,5 +1,9 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import { db, initSchema } from './db/index.js';
+
+initSchema();
 
 const app = express();
 app.use(cors());
@@ -9,7 +13,12 @@ app.get('/api/hello', (_req, res) => {
   res.json({ message: 'Hello from the DND server! 🐉' });
 });
 
-const PORT = 3001;
+app.get('/api/users/count', (_req, res) => {
+  const row = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+  res.json({ count: row.count });
+});
+
+const PORT = Number(process.env.PORT) || 3001;
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });

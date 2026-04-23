@@ -6,5 +6,5 @@ build/
 *.log
 .DS_Store
 .vscode/
-server/data/*.db
+server/data/
 server/uploads/
