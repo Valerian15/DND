@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { Character } from './types';
-import { createCharacter, getCharacter, updateCharacter } from './api';
+import { createCharacter, getCharacter, getLibraryItem, updateCharacter } from './api';
 import CharacterPreview from './CharacterPreview';
 import RaceStep from './steps/RaceStep';
 import ClassStep from './steps/ClassStep';
 import AbilitiesStep from './steps/AbilitiesStep';
+import BackgroundStep from './steps/BackgroundStep';
+import SkillsStep from './steps/SkillsStep';
+import EquipmentStep from './steps/EquipmentStep';
+import DetailsStep from './steps/DetailsStep';
+import { parseHitDie, recomputeDerived } from './rules';
 
 const STEPS = [
   { key: 'race', label: 'Race' },
@@ -25,6 +30,7 @@ export default function CharacterWizard() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hitDieSize, setHitDieSize] = useState<number>(8);
 
   useEffect(() => {
     async function load() {
@@ -46,11 +52,34 @@ export default function CharacterWizard() {
     load();
   }, [id, navigate]);
 
+  // Fetch hit die when class changes
+  useEffect(() => {
+    if (!character?.class_slug) {
+      setHitDieSize(8);
+      return;
+    }
+    getLibraryItem<{ data: any }>('classes', character.class_slug)
+      .then((r) => setHitDieSize(parseHitDie(r.data?.hit_dice)))
+      .catch(() => setHitDieSize(8));
+  }, [character?.class_slug]);
+
   async function save(patch: Partial<Character>) {
     if (!character) return;
     setSaving(true);
     try {
-      const updated = await updateCharacter(character.id, patch);
+      // First save the user-driven change
+      let updated = await updateCharacter(character.id, patch);
+
+      // Recompute derived stats when anything that affects them changed
+      const affectsDerived =
+        'abilities' in patch ||
+        'class_slug' in patch ||
+        'level' in patch;
+      if (affectsDerived) {
+        const derived = recomputeDerived(updated, hitDieSize);
+        updated = await updateCharacter(character.id, derived);
+      }
+
       setCharacter(updated);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');
@@ -74,7 +103,6 @@ export default function CharacterWizard() {
         </button>
       </div>
 
-      {/* Step progress bar */}
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '2rem', flexWrap: 'wrap' }}>
         {STEPS.map((s, i) => {
           const isCurrent = i === stepIndex;
@@ -99,36 +127,15 @@ export default function CharacterWizard() {
         })}
       </div>
 
-      {/* Main 2-column layout */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '2rem', alignItems: 'start' }}>
         <div style={{ background: '#fff', padding: '1.5rem', borderRadius: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
           {currentStep.key === 'race' && <RaceStep character={character} onChange={save} />}
           {currentStep.key === 'class' && <ClassStep character={character} onChange={save} />}
           {currentStep.key === 'abilities' && <AbilitiesStep character={character} onChange={save} />}
-          {currentStep.key === 'background' && (
-            <div>
-              <h2>Background</h2>
-              <p style={{ color: '#888' }}>Coming in Phase 1f.</p>
-            </div>
-          )}
-          {currentStep.key === 'skills' && (
-            <div>
-              <h2>Skills</h2>
-              <p style={{ color: '#888' }}>Coming in Phase 1f.</p>
-            </div>
-          )}
-          {currentStep.key === 'equipment' && (
-            <div>
-              <h2>Equipment</h2>
-              <p style={{ color: '#888' }}>Coming in Phase 1f.</p>
-            </div>
-          )}
-          {currentStep.key === 'details' && (
-            <div>
-              <h2>Details</h2>
-              <p style={{ color: '#888' }}>Coming in Phase 1f.</p>
-            </div>
-          )}
+          {currentStep.key === 'background' && <BackgroundStep character={character} onChange={save} />}
+          {currentStep.key === 'skills' && <SkillsStep character={character} onChange={save} />}
+          {currentStep.key === 'equipment' && <EquipmentStep character={character} onChange={save} />}
+          {currentStep.key === 'details' && <DetailsStep character={character} onChange={save} />}
 
           <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'space-between' }}>
             <button

@@ -48,8 +48,18 @@ export default function ClassStep({ character, onChange }: Props) {
   }, [character.class_slug]);
 
   function selectClass(slug: string) {
-    // Clear subclass when class changes
-    onChange({ class_slug: slug, subclass_slug: null });
+    if (slug === character.class_slug) return;
+    // Clear subclass + skill proficiencies when class changes (different class = different options)
+    // Also clear class-starter items since they'll no longer match
+    const inventory = ((character.inventory ?? []) as any[]).filter(
+      (i) => i?.source !== 'class-starter',
+    );
+    onChange({
+      class_slug: slug,
+      subclass_slug: null,
+      skills: {},
+      inventory,
+    });
   }
 
   if (loadingList) return <p>Loading classes…</p>;
@@ -58,6 +68,9 @@ export default function ClassStep({ character, onChange }: Props) {
     <div>
       <h2 style={{ marginTop: 0 }}>Choose your class</h2>
       <p style={{ color: '#666' }}>Your character's profession and source of power. Determines hit points, proficiencies, and class features.</p>
+      <p style={{ color: '#888', fontSize: '0.85rem', fontStyle: 'italic' }}>
+        Note: changing class resets your skill proficiencies and class starter kit.
+      </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '0.75rem', marginBottom: '1.5rem' }}>
         {classes.map((c) => {
