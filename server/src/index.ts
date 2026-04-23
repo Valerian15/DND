@@ -5,6 +5,7 @@ import { db, initSchema } from './db/index.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import libraryRoutes from './routes/library.js';
+import characterRoutes from './routes/characters.js';
 
 initSchema();
 
@@ -24,6 +25,7 @@ app.get('/api/users/count', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/library', libraryRoutes);
+app.use('/api/characters', characterRoutes);
 
 const PORT = Number(process.env.PORT) || 3001;
 app.listen(PORT, () => {

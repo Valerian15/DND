@@ -5,6 +5,8 @@ import RequireAdmin from './features/auth/RequireAdmin';
 import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
 import AdminPage from './pages/AdminPage';
+import CharactersPage from './pages/CharactersPage';
+import CharacterWizard from './features/character/CharacterWizard';
 
 export default function App() {
   return (
@@ -26,6 +28,30 @@ export default function App() {
               <RequireAdmin>
                 <AdminPage />
               </RequireAdmin>
+            }
+          />
+          <Route
+            path="/characters"
+            element={
+              <RequireAuth>
+                <CharactersPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/characters/new"
+            element={
+              <RequireAuth>
+                <CharacterWizard />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/characters/:id/edit"
+            element={
+              <RequireAuth>
+                <CharacterWizard />
+              </RequireAuth>
             }
           />
         </Routes>

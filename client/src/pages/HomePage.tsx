@@ -18,7 +18,34 @@ export default function HomePage() {
           </button>
         </div>
       </div>
-      <p>Welcome, {user?.username}. Character creator, campaigns, and sessions land in the next phases.</p>
+
+      <div style={{ marginTop: '2rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '1rem' }}>
+        <Link
+          to="/characters"
+          style={{
+            padding: '1.5rem',
+            background: '#fff',
+            borderRadius: 8,
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+            textDecoration: 'none',
+            color: '#333',
+          }}
+        >
+          <h3 style={{ marginTop: 0 }}>Characters</h3>
+          <p style={{ color: '#666', margin: 0 }}>Create and manage your D&D characters.</p>
+        </Link>
+        <div
+          style={{
+            padding: '1.5rem',
+            background: '#f5f5f5',
+            borderRadius: 8,
+            color: '#999',
+          }}
+        >
+          <h3 style={{ marginTop: 0 }}>Campaigns</h3>
+          <p style={{ margin: 0 }}>Coming in Phase 3.</p>
+        </div>
+      </div>
     </div>
   );
 }
