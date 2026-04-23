@@ -1,28 +1,25 @@
-import { useEffect, useState } from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider } from './features/auth/AuthContext';
+import RequireAuth from './features/auth/RequireAuth';
+import LoginPage from './pages/LoginPage';
+import HomePage from './pages/HomePage';
 
-function App() {
-  const [message, setMessage] = useState('Loading...');
-  const [userCount, setUserCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    fetch('http://localhost:3001/api/hello')
-      .then((r) => r.json())
-      .then((d) => setMessage(d.message))
-      .catch((e) => setMessage(`Error: ${e.message}`));
-
-    fetch('http://localhost:3001/api/users/count')
-      .then((r) => r.json())
-      .then((d) => setUserCount(d.count))
-      .catch(() => setUserCount(null));
-  }, []);
-
+export default function App() {
   return (
-    <div style={{ padding: '2rem', fontFamily: 'system-ui' }}>
-      <h1>DND VTT</h1>
-      <p>{message}</p>
-      <p>Users in database: {userCount === null ? '(error)' : userCount}</p>
-    </div>
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/"
+            element={
+              <RequireAuth>
+                <HomePage />
+              </RequireAuth>
+            }
+          />
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
-
-export default App;

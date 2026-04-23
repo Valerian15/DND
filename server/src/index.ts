@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { db, initSchema } from './db/index.js';
+import authRoutes from './routes/auth.js';
 
 initSchema();
 
@@ -17,6 +18,8 @@ app.get('/api/users/count', (_req, res) => {
   const row = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
   res.json({ count: row.count });
 });
+
+app.use('/api/auth', authRoutes);
 
 const PORT = Number(process.env.PORT) || 3001;
 app.listen(PORT, () => {
