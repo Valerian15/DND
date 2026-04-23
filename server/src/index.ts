@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import { db, initSchema } from './db/index.js';
 import authRoutes from './routes/auth.js';
+import userRoutes from './routes/users.js';
 
 initSchema();
 
@@ -20,6 +21,7 @@ app.get('/api/users/count', (_req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 
 const PORT = Number(process.env.PORT) || 3001;
 app.listen(PORT, () => {
