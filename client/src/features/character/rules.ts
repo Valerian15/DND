@@ -1,4 +1,4 @@
-import type { Abilities, Character } from './types';
+import type { Abilities, AbilityKey, Character } from './types';
 import { abilityModifier } from './pointBuy';
 
 /** 5e proficiency bonus by character level */
@@ -10,30 +10,23 @@ export function proficiencyBonus(level: number): number {
   return 2;
 }
 
-/** Fixed-average HP gain per level by class hit die size */
 export function hpAverageForHitDie(hitDieSize: number): number {
-  // 5e rule: floor(avg) + 1 = (die/2) + 1
   return Math.floor(hitDieSize / 2) + 1;
 }
 
-/** Parse "1d8", "1d10", etc. → the die size, defaults to 8 */
 export function parseHitDie(s: string | undefined): number {
   if (!s) return 8;
   const m = s.match(/d(\d+)/i);
   return m ? parseInt(m[1], 10) : 8;
 }
 
-/** Computes max HP at a given level using fixed averages. */
 export function computeMaxHp(level: number, hitDieSize: number, conMod: number): number {
-  // Level 1: max hit die + CON
-  // Level 2+: (fixed average + CON) per level
   const level1 = hitDieSize + conMod;
   const extraLevels = level - 1;
   const perExtra = hpAverageForHitDie(hitDieSize) + conMod;
   return Math.max(1, level1 + extraLevels * perExtra);
 }
 
-/** 5e Wizard/Sorcerer-style full-caster spell slots per level (quick reference table) */
 export const FULL_CASTER_SLOTS: Record<number, number[]> = {
   1: [2], 2: [3], 3: [4, 2], 4: [4, 3], 5: [4, 3, 2], 6: [4, 3, 3],
   7: [4, 3, 3, 1], 8: [4, 3, 3, 2], 9: [4, 3, 3, 3, 1], 10: [4, 3, 3, 3, 2],
@@ -68,7 +61,6 @@ export const WARLOCK_SLOTS: Record<number, { count: number; level: number }> = {
 
 export type CasterType = 'full' | 'half' | 'third' | 'warlock' | 'none';
 
-/** Maps class slug → caster type */
 export function casterTypeForClass(classSlug: string | null): CasterType {
   if (!classSlug) return 'none';
   switch (classSlug) {
@@ -83,7 +75,6 @@ export function casterTypeForClass(classSlug: string | null): CasterType {
   }
 }
 
-/** Returns a map of slot level → slot count */
 export function computeSpellSlots(classSlug: string | null, level: number): Record<string, number> {
   const type = casterTypeForClass(classSlug);
   if (type === 'none') return {};
@@ -103,25 +94,18 @@ export function computeSpellSlots(classSlug: string | null, level: number): Reco
   return out;
 }
 
-/** Unarmored AC = 10 + DEX mod. Real AC from armor is handled when equipped. */
 export function baseAc(abilities: Abilities): number {
   return 10 + abilityModifier(abilities.dex);
 }
 
-/** Initiative modifier = DEX mod */
 export function initiative(abilities: Abilities): number {
   return abilityModifier(abilities.dex);
 }
 
-/** Passive perception = 10 + WIS mod (+ prof if proficient in Perception) */
 export function passivePerception(abilities: Abilities, proficient: boolean, profBonus: number): number {
   return 10 + abilityModifier(abilities.wis) + (proficient ? profBonus : 0);
 }
 
-/**
- * Recompute derived stats when something changes.
- * Returns a partial character patch you can send to the API.
- */
 export function recomputeDerived(
   character: Character,
   hitDieSize: number,
@@ -130,14 +114,37 @@ export function recomputeDerived(
   const hpMax = computeMaxHp(character.level, hitDieSize, conMod);
   const ac = baseAc(character.abilities);
   const slots = computeSpellSlots(character.class_slug, character.level);
-
-  // When HP max grows, keep current HP capped at new max (but don't shrink if already below)
   const hpCurrent = character.hp_current === 0 ? hpMax : Math.min(character.hp_current, hpMax);
-
   return {
     hp_max: hpMax,
     hp_current: hpCurrent,
     ac,
     spell_slots: slots,
   };
+}
+
+/** Saving throws each class is proficient in (5e 2014 SRD). */
+export const CLASS_SAVE_PROFICIENCIES: Record<string, AbilityKey[]> = {
+  barbarian: ['str', 'con'],
+  bard: ['dex', 'cha'],
+  cleric: ['wis', 'cha'],
+  druid: ['int', 'wis'],
+  fighter: ['str', 'con'],
+  monk: ['str', 'dex'],
+  paladin: ['wis', 'cha'],
+  ranger: ['str', 'dex'],
+  rogue: ['dex', 'int'],
+  sorcerer: ['con', 'cha'],
+  warlock: ['wis', 'cha'],
+  wizard: ['int', 'wis'],
+};
+
+/** Parse Open5e's background skill_proficiencies string into skill keys. */
+export function parseBackgroundSkillProficiencies(raw: string | undefined): string[] {
+  if (!raw) return [];
+  // Examples: "Insight, Religion" or "History, Religion"
+  return raw
+    .split(/,|and/i)
+    .map((s) => s.trim().toLowerCase().replace(/\s+/g, '-'))
+    .filter((s) => s.length > 0);
 }

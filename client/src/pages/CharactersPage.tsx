@@ -25,9 +25,7 @@ export default function CharactersPage() {
     }
   }
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
   async function handleCreate() {
     setCreating(true);
@@ -93,24 +91,24 @@ export default function CharactersPage() {
               alignItems: 'center',
             }}
           >
-            <div>
+            <Link to={`/characters/${c.id}`} style={{ textDecoration: 'none', color: '#333', flex: 1 }}>
               <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{c.name}</div>
               <div style={{ fontSize: '0.85rem', color: '#666' }}>
                 Level {c.level}
                 {c.race_slug && ` · ${c.race_slug}`}
                 {c.class_slug && ` · ${c.class_slug}`}
               </div>
-            </div>
+            </Link>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <Link
+                to={`/characters/${c.id}`}
+                style={{ padding: '0.5rem 1rem', background: '#fff', color: '#333', border: '1px solid #333', borderRadius: 4, textDecoration: 'none' }}
+              >
+                View
+              </Link>
+              <Link
                 to={`/characters/${c.id}/edit`}
-                style={{
-                  padding: '0.5rem 1rem',
-                  background: '#333',
-                  color: '#fff',
-                  borderRadius: 4,
-                  textDecoration: 'none',
-                }}
+                style={{ padding: '0.5rem 1rem', background: '#333', color: '#fff', borderRadius: 4, textDecoration: 'none' }}
               >
                 Edit
               </Link>

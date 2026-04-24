@@ -27,21 +27,34 @@ export const SKILLS: SkillDef[] = [
   { key: 'survival', name: 'Survival', ability: 'wis' },
 ];
 
-/** Number of skill proficiencies a class grants at level 1 */
+const ALL_SKILL_KEYS = SKILLS.map((s) => s.key);
+
 export const CLASS_SKILL_COUNT: Record<string, number> = {
   barbarian: 2, bard: 3, cleric: 2, druid: 2, fighter: 2,
   monk: 2, paladin: 2, ranger: 3, rogue: 4, sorcerer: 2,
   warlock: 2, wizard: 2,
 };
 
-/** Parse Open5e's prof_skills string like "Choose two from Arcana, History, ..." into skill keys */
+/**
+ * Parse a class's prof_skills string into a list of skill keys the player can choose from.
+ * Handles:
+ * - "Choose two from Arcana, History, ..."  → the listed skills
+ * - "Choose any three"                        → all skills (bard, rogue-like)
+ * - Empty/missing                             → empty list
+ */
 export function parseClassSkillChoices(profSkills: string | undefined): string[] {
   if (!profSkills) return [];
-  // Grab everything after "from"
+
+  // Bard-style: "Choose any N" means any skill from the full 5e list
+  if (/choose\s+any/i.test(profSkills)) {
+    return ALL_SKILL_KEYS;
+  }
+
+  // Standard: "Choose N from A, B, C, ..."
   const m = profSkills.match(/from\s+(.+?)(?:\.|$)/i);
   const listPart = m ? m[1] : profSkills;
   return listPart
     .split(/,|and/i)
     .map((s) => s.trim().toLowerCase().replace(/\s+/g, '-').replace(/\.$/, ''))
-    .filter((s) => SKILLS.some((sk) => sk.key === s));
+    .filter((s) => ALL_SKILL_KEYS.includes(s));
 }

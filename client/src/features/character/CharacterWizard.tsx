@@ -9,6 +9,7 @@ import AbilitiesStep from './steps/AbilitiesStep';
 import BackgroundStep from './steps/BackgroundStep';
 import SkillsStep from './steps/SkillsStep';
 import EquipmentStep from './steps/EquipmentStep';
+import SpellsStep from './steps/SpellsStep';
 import DetailsStep from './steps/DetailsStep';
 import { parseHitDie, recomputeDerived } from './rules';
 
@@ -19,6 +20,7 @@ const STEPS = [
   { key: 'background', label: 'Background' },
   { key: 'skills', label: 'Skills' },
   { key: 'equipment', label: 'Equipment' },
+  { key: 'spells', label: 'Spells' },
   { key: 'details', label: 'Details' },
 ] as const;
 
@@ -52,7 +54,6 @@ export default function CharacterWizard() {
     load();
   }, [id, navigate]);
 
-  // Fetch hit die when class changes
   useEffect(() => {
     if (!character?.class_slug) {
       setHitDieSize(8);
@@ -67,19 +68,12 @@ export default function CharacterWizard() {
     if (!character) return;
     setSaving(true);
     try {
-      // First save the user-driven change
       let updated = await updateCharacter(character.id, patch);
-
-      // Recompute derived stats when anything that affects them changed
-      const affectsDerived =
-        'abilities' in patch ||
-        'class_slug' in patch ||
-        'level' in patch;
+      const affectsDerived = 'abilities' in patch || 'class_slug' in patch || 'level' in patch;
       if (affectsDerived) {
         const derived = recomputeDerived(updated, hitDieSize);
         updated = await updateCharacter(character.id, derived);
       }
-
       setCharacter(updated);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');
@@ -93,14 +87,17 @@ export default function CharacterWizard() {
   if (!character) return null;
 
   const currentStep = STEPS[stepIndex];
+  const exitTarget = character ? `/characters/${character.id}` : '/characters';
+  const exitLabel = '← Back to sheet';
 
   return (
     <div style={{ padding: '2rem', fontFamily: 'system-ui', maxWidth: 1200, margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
-        <h1 style={{ margin: 0 }}>Create character</h1>
-        <button onClick={() => navigate('/characters')} style={{ cursor: 'pointer' }}>
-          ← Back to list
-        </button>
+        <h1 style={{ margin: 0 }}>Edit character</h1>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button onClick={() => navigate('/characters')} style={{ cursor: 'pointer' }}>← All characters</button>
+          <button onClick={() => navigate(exitTarget)} style={{ cursor: 'pointer' }}>{exitLabel}</button>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '2rem', flexWrap: 'wrap' }}>
@@ -135,9 +132,10 @@ export default function CharacterWizard() {
           {currentStep.key === 'background' && <BackgroundStep character={character} onChange={save} />}
           {currentStep.key === 'skills' && <SkillsStep character={character} onChange={save} />}
           {currentStep.key === 'equipment' && <EquipmentStep character={character} onChange={save} />}
+          {currentStep.key === 'spells' && <SpellsStep character={character} onChange={save} />}
           {currentStep.key === 'details' && <DetailsStep character={character} onChange={save} />}
 
-          <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'space-between' }}>
+          <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <button
               onClick={() => setStepIndex(Math.max(0, stepIndex - 1))}
               disabled={stepIndex === 0}
@@ -148,13 +146,21 @@ export default function CharacterWizard() {
             <span style={{ fontSize: '0.85rem', color: '#666' }}>
               {saving ? 'Saving…' : 'All changes saved'}
             </span>
-            <button
-              onClick={() => setStepIndex(Math.min(STEPS.length - 1, stepIndex + 1))}
-              disabled={stepIndex === STEPS.length - 1}
-              style={{ padding: '0.5rem 1rem', cursor: stepIndex === STEPS.length - 1 ? 'not-allowed' : 'pointer' }}
-            >
-              Next →
-            </button>
+            {stepIndex === STEPS.length - 1 ? (
+              <button
+                onClick={() => navigate(exitTarget)}
+                style={{ padding: '0.5rem 1.25rem', cursor: 'pointer', background: '#333', color: '#fff', border: 'none', borderRadius: 4 }}
+              >
+                Done →
+              </button>
+            ) : (
+              <button
+                onClick={() => setStepIndex(Math.min(STEPS.length - 1, stepIndex + 1))}
+                style={{ padding: '0.5rem 1rem', cursor: 'pointer' }}
+              >
+                Next →
+              </button>
+            )}
           </div>
         </div>
 
