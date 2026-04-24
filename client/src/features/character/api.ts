@@ -39,6 +39,13 @@ export async function listLibrary(type: string): Promise<LibraryItem[]> {
   return data.items;
 }
 
+export async function listSubclassesFor(classSlug: string): Promise<LibraryItem[]> {
+  const data = await apiFetch<{ items: LibraryItem[] }>(
+    `/library/subclasses?class=${encodeURIComponent(classSlug)}`,
+  );
+  return data.items;
+}
+
 export async function getLibraryItem<T = any>(
   type: string,
   slug: string,

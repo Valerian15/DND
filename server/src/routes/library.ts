@@ -23,6 +23,16 @@ router.get('/:type', (req, res) => {
     return res.status(400).json({ error: 'Unknown content type' });
   }
 
+  // Subclasses can be filtered by class_slug via ?class=wizard
+  if (type === 'subclasses' && typeof req.query.class === 'string') {
+    const rows = db
+      .prepare(
+        `SELECT id, slug, name, class_slug, source FROM subclasses WHERE class_slug = ? ORDER BY name`,
+      )
+      .all(req.query.class);
+    return res.json({ items: rows, count: rows.length });
+  }
+
   const rows = db.prepare(`SELECT id, slug, name, source FROM ${type} ORDER BY name`).all();
   res.json({ items: rows, count: rows.length });
 });

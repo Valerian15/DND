@@ -5,6 +5,7 @@ import { createCharacter, getCharacter, getLibraryItem, updateCharacter } from '
 import CharacterPreview from './CharacterPreview';
 import RaceStep from './steps/RaceStep';
 import ClassStep from './steps/ClassStep';
+import SubclassStep from './steps/SubclassStep';
 import AbilitiesStep from './steps/AbilitiesStep';
 import BackgroundStep from './steps/BackgroundStep';
 import SkillsStep from './steps/SkillsStep';
@@ -16,6 +17,7 @@ import { parseHitDie, recomputeDerived } from './rules';
 const STEPS = [
   { key: 'race', label: 'Race' },
   { key: 'class', label: 'Class' },
+  { key: 'subclass', label: 'Subclass' },
   { key: 'abilities', label: 'Abilities' },
   { key: 'background', label: 'Background' },
   { key: 'skills', label: 'Skills' },
@@ -87,8 +89,7 @@ export default function CharacterWizard() {
   if (!character) return null;
 
   const currentStep = STEPS[stepIndex];
-  const exitTarget = character ? `/characters/${character.id}` : '/characters';
-  const exitLabel = '← Back to sheet';
+  const exitTarget = `/characters/${character.id}`;
 
   return (
     <div style={{ padding: '2rem', fontFamily: 'system-ui', maxWidth: 1200, margin: '0 auto' }}>
@@ -96,7 +97,7 @@ export default function CharacterWizard() {
         <h1 style={{ margin: 0 }}>Edit character</h1>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button onClick={() => navigate('/characters')} style={{ cursor: 'pointer' }}>← All characters</button>
-          <button onClick={() => navigate(exitTarget)} style={{ cursor: 'pointer' }}>{exitLabel}</button>
+          <button onClick={() => navigate(exitTarget)} style={{ cursor: 'pointer' }}>← Back to sheet</button>
         </div>
       </div>
 
@@ -128,6 +129,7 @@ export default function CharacterWizard() {
         <div style={{ background: '#fff', padding: '1.5rem', borderRadius: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
           {currentStep.key === 'race' && <RaceStep character={character} onChange={save} />}
           {currentStep.key === 'class' && <ClassStep character={character} onChange={save} />}
+          {currentStep.key === 'subclass' && <SubclassStep character={character} onChange={save} />}
           {currentStep.key === 'abilities' && <AbilitiesStep character={character} onChange={save} />}
           {currentStep.key === 'background' && <BackgroundStep character={character} onChange={save} />}
           {currentStep.key === 'skills' && <SkillsStep character={character} onChange={save} />}
