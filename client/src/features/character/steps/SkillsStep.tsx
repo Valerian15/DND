@@ -11,6 +11,11 @@ interface Props {
   onChange: (patch: Partial<Character>) => void;
 }
 
+interface SkillEntry {
+  proficient?: boolean;
+  source?: string;
+}
+
 export default function SkillsStep({ character, onChange }: Props) {
   const [allowedSkills, setAllowedSkills] = useState<string[]>([]);
   const [maxChoices, setMaxChoices] = useState(0);
@@ -32,19 +37,43 @@ export default function SkillsStep({ character, onChange }: Props) {
       .finally(() => setLoading(false));
   }, [character.class_slug]);
 
-  const selected = new Set(
-    Object.keys(character.skills).filter((k) => (character.skills as any)[k]?.proficient),
+  const skillsMap = character.skills as Record<string, SkillEntry>;
+
+  // All skills that are proficient
+  const proficient = new Set(
+    Object.entries(skillsMap)
+      .filter(([_, v]) => v?.proficient)
+      .map(([k]) => k),
+  );
+
+  // Class picks = proficient skills WITHOUT a non-class source (i.e. without source === 'background')
+  const classPicked = new Set(
+    Object.entries(skillsMap)
+      .filter(([_, v]) => v?.proficient && v?.source !== 'background')
+      .map(([k]) => k),
+  );
+
+  const backgroundGranted = new Set(
+    Object.entries(skillsMap)
+      .filter(([_, v]) => v?.proficient && v?.source === 'background')
+      .map(([k]) => k),
   );
 
   function toggle(skillKey: string) {
-    const isOn = selected.has(skillKey);
-    if (isOn) {
-      const next = { ...(character.skills as any) };
+    const entry = skillsMap[skillKey];
+    const isProf = !!entry?.proficient;
+    const isBackgroundGranted = entry?.source === 'background';
+
+    // Background-granted skills can't be toggled off here (they come from the background, not from the player's choice)
+    if (isBackgroundGranted) return;
+
+    const next = { ...skillsMap };
+    if (isProf) {
       delete next[skillKey];
       onChange({ skills: next });
     } else {
-      if (selected.size >= maxChoices) return; // over limit
-      const next = { ...(character.skills as any), [skillKey]: { proficient: true } };
+      if (classPicked.size >= maxChoices) return; // class budget hit
+      next[skillKey] = { proficient: true };
       onChange({ skills: next });
     }
   }
@@ -59,56 +88,93 @@ export default function SkillsStep({ character, onChange }: Props) {
   }
 
   const profBonus = proficiencyBonus(character.level);
-  const remaining = maxChoices - selected.size;
+  const remaining = maxChoices - classPicked.size;
+
+  // Orphans: class picks (non-background) that are not in the class's allowed list
+  const hasOrphans = [...classPicked].some((k) => !allowedSkills.includes(k));
 
   return (
     <div>
       <h2 style={{ marginTop: 0 }}>Skill proficiencies</h2>
       <p style={{ color: '#666' }}>
-        Your class lets you pick {maxChoices} skill proficienc{maxChoices === 1 ? 'y' : 'ies'} from the list below.
-        Background skills are granted separately and will be merged on the final sheet.
+        Your class lets you pick {maxChoices} skill proficienc{maxChoices === 1 ? 'y' : 'ies'}.
+        Background-granted skills are shown but don't count against your class budget.
       </p>
 
       {loading && <p>Loading class skill list…</p>}
-
       {!loading && allowedSkills.length === 0 && (
         <p style={{ color: '#888' }}>No skill choices listed for this class.</p>
       )}
 
       <div style={{ marginBottom: '1rem', padding: '0.5rem 0.75rem', background: remaining === 0 ? '#efe' : '#f0f0f0', borderRadius: 4, fontSize: '0.9rem' }}>
-        Selected {selected.size} / {maxChoices}
+        <strong>Class picks:</strong> {classPicked.size} / {maxChoices}
+        {backgroundGranted.size > 0 && (
+          <span style={{ marginLeft: '1rem', color: '#666' }}>
+            (+{backgroundGranted.size} from background)
+          </span>
+        )}
+        {hasOrphans && (
+          <span style={{ marginLeft: '1rem', color: '#a60' }}>
+            Some class picks are outside your current class's list — marked below, click to remove.
+          </span>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
         {SKILLS.map((skill) => {
           const isAllowed = allowedSkills.includes(skill.key);
-          const isSelected = selected.has(skill.key);
+          const isProf = proficient.has(skill.key);
+          const isBg = backgroundGranted.has(skill.key);
+          const isClassPick = classPicked.has(skill.key);
+          const isOrphan = isClassPick && !isAllowed;
+
+          // Clickable: background skills are NOT clickable here (immutable)
+          //            class picks already on can always be unselected
+          //            otherwise need to be in the allowed list
+          const clickable = !isBg && (isClassPick || isAllowed);
+
           const abilityMod = abilityModifier(character.abilities[skill.ability]);
-          const total = abilityMod + (isSelected ? profBonus : 0);
+          const total = abilityMod + (isProf ? profBonus : 0);
+
           return (
             <button
               key={skill.key}
-              onClick={() => isAllowed && toggle(skill.key)}
-              disabled={!isAllowed}
+              onClick={() => clickable && toggle(skill.key)}
+              disabled={!clickable}
+              title={
+                isBg ? 'Granted by background — change in the Background step'
+                : isOrphan ? 'Not offered by your current class — click to remove'
+                : undefined
+              }
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
                 padding: '0.5rem 0.75rem',
                 borderRadius: 4,
-                border: isSelected ? '2px solid #333' : '1px solid #ddd',
-                background: isSelected ? '#fafafa' : !isAllowed ? '#f5f5f5' : '#fff',
-                color: !isAllowed ? '#999' : '#333',
-                cursor: isAllowed ? 'pointer' : 'not-allowed',
+                border: isBg
+                  ? '2px solid #6cf'
+                  : isOrphan
+                  ? '2px dashed #a60'
+                  : isClassPick
+                  ? '2px solid #333'
+                  : '1px solid #ddd',
+                background: isProf ? '#fafafa' : !isAllowed && !isBg ? '#f5f5f5' : '#fff',
+                color: !clickable && !isBg ? '#999' : '#333',
+                cursor: clickable ? 'pointer' : 'not-allowed',
                 textAlign: 'left',
               }}
             >
               <span>
                 <strong>{skill.name}</strong>{' '}
                 <span style={{ fontSize: '0.8rem', color: '#888' }}>({ABILITY_NAMES[skill.ability].slice(0, 3)})</span>
+                {isBg && <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#27a' }}>background</span>}
               </span>
               <span style={{ fontSize: '0.9rem' }}>
-                {formatModifier(total)}{isSelected && <span style={{ color: '#2a7', marginLeft: '0.5rem' }}>●</span>}
+                {formatModifier(total)}
+                {isProf && (
+                  <span style={{ color: isBg ? '#27a' : isOrphan ? '#a60' : '#2a7', marginLeft: '0.5rem' }}>●</span>
+                )}
               </span>
             </button>
           );
