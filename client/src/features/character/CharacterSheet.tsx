@@ -17,6 +17,7 @@ export default function CharacterSheet() {
   const [error, setError] = useState<string | null>(null);
   const [hitDieSize, setHitDieSize] = useState(8);
   const [className, setClassName] = useState<string>('');
+  const [subclassName, setSubclassName] = useState<string>('');
   const [raceName, setRaceName] = useState<string>('');
   const [backgroundName, setBackgroundName] = useState<string>('');
   const [spellNames, setSpellNames] = useState<Record<string, { name: string; level: number; school?: string }>>({});
@@ -50,6 +51,15 @@ export default function CharacterSheet() {
           setHitDieSize(parseHitDie(r.data?.hit_dice));
         })
         .catch(() => {});
+    } else {
+      setClassName('');
+    }
+    if (character.subclass_slug) {
+      getLibraryItem<{ name: string }>('subclasses', character.subclass_slug)
+        .then((r) => setSubclassName(r.name))
+        .catch(() => setSubclassName(''));
+    } else {
+      setSubclassName('');
     }
     if (character.race_slug) {
       getLibraryItem<{ name: string }>('races', character.race_slug).then((r) => setRaceName(r.name)).catch(() => {});
@@ -57,7 +67,7 @@ export default function CharacterSheet() {
     if (character.background_slug) {
       getLibraryItem<{ name: string }>('backgrounds', character.background_slug).then((r) => setBackgroundName(r.name)).catch(() => {});
     }
-  }, [character?.class_slug, character?.race_slug, character?.background_slug]);
+  }, [character?.class_slug, character?.subclass_slug, character?.race_slug, character?.background_slug]);
 
   useEffect(() => {
     if (!character) return;
@@ -108,16 +118,13 @@ export default function CharacterSheet() {
 
   async function applyLevelUp(abilities: Abilities, newLevel: number, newHpMax: number, newHpCurrent: number) {
     if (!character) return;
-    // First save the user-driven changes (level and abilities).
     let updated = await updateCharacter(character.id, {
       abilities,
       level: newLevel,
       hp_max: newHpMax,
       hp_current: newHpCurrent,
     });
-    // Then recompute slots/AC/etc. from the new state.
     const derived = recomputeDerived(updated, hitDieSize);
-    // Preserve the HP we just carefully calculated, but accept AC and slot changes.
     updated = await updateCharacter(character.id, {
       ac: derived.ac,
       spell_slots: derived.spell_slots,
@@ -158,6 +165,7 @@ export default function CharacterSheet() {
             Level {character.level}
             {raceName && ` · ${raceName}`}
             {className && ` · ${className}`}
+            {subclassName && ` (${subclassName})`}
             {backgroundName && ` · ${backgroundName}`}
             {desc.alignment && ` · ${desc.alignment}`}
           </div>
