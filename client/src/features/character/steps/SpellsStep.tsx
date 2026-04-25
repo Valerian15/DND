@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Character } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
-import { getCasterConfig, maxSpellLevelFor, preparedCount, type CasterConfig } from '../casters';
+import { getCasterConfig, maxSpellLevelFor, preparedCount } from '../casters';
 import { abilityModifier } from '../pointBuy';
 
 interface Props {
@@ -13,7 +13,6 @@ interface SpellFull {
   slug: string;
   name: string;
   level: number;
-  level_int?: number;
   school?: string;
   casting_time?: string;
   range?: string;
@@ -31,18 +30,26 @@ interface SpellFull {
 interface SpellListItem {
   slug: string;
   name: string;
-  level: number;
 }
 
 function spellMatchesClass(spell: SpellFull, classSlug: string): boolean {
   const slug = classSlug.toLowerCase();
-  if (Array.isArray(spell.spell_lists) && spell.spell_lists.map((s) => s.toLowerCase()).includes(slug)) {
+  if (Array.isArray(spell.spell_lists) && spell.spell_lists.map((s) => String(s).toLowerCase()).includes(slug)) {
     return true;
   }
   if (typeof spell.dnd_class === 'string') {
     return spell.dnd_class.toLowerCase().split(/[,;]/).map((s) => s.trim()).includes(slug);
   }
   return false;
+}
+
+function normalizeLevel(raw: unknown): number {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
 }
 
 export default function SpellsStep({ character, onChange }: Props) {
@@ -55,26 +62,18 @@ export default function SpellsStep({ character, onChange }: Props) {
 
   const config = getCasterConfig(character.class_slug);
 
-  // Load minimal spell list once
   useEffect(() => {
     listLibrary('spells')
-      .then(async (items) => {
-        // Need level for filtering; list endpoint returns slug + name + source only, not level.
-        // Fetch level by pulling the preloaded data from library endpoint — but that means per-spell fetch.
-        // Instead: we refetch with type assertion since server GETs basic rows. Workaround: read from getLibraryItem per shown spell lazily.
-        // For now treat all as level 0 and lazy-load details on first hover/click.
-        setAllSpells(items.map((i) => ({ slug: i.slug, name: i.name, level: -1 })));
+      .then((items) => {
+        setAllSpells(items.map((i) => ({ slug: i.slug, name: i.name })));
       })
       .finally(() => setLoading(false));
   }, []);
 
-  // To know each spell's level + class list up front, we have to hydrate all spells.
-  // 319 spells * small JSON = few hundred KB. Acceptable on first load; we cache.
   useEffect(() => {
     if (!config || allSpells.length === 0) return;
     let cancelled = false;
     (async () => {
-      // Fetch any spell we don't yet have details for
       const missing = allSpells.filter((s) => !spellDetails[s.slug]);
       const chunkSize = 25;
       for (let i = 0; i < missing.length; i += chunkSize) {
@@ -82,17 +81,31 @@ export default function SpellsStep({ character, onChange }: Props) {
         const chunk = missing.slice(i, i + chunkSize);
         const results = await Promise.all(
           chunk.map((s) =>
-            getLibraryItem<{ data: SpellFull; level: number }>('spells', s.slug).catch(() => null),
+            getLibraryItem<{ slug: string; name: string; data: any; level?: number }>('spells', s.slug)
+              .then((r) => ({
+                slug: r.slug ?? s.slug,
+                name: r.name ?? s.name,
+                row: r,
+              }))
+              .catch(() => null),
           ),
         );
         if (cancelled) return;
         setSpellDetails((prev) => {
           const next = { ...prev };
-          results.forEach((r, idx) => {
-            if (r) {
-              next[chunk[idx].slug] = { ...r.data, level: r.level };
-            }
-          });
+          for (const r of results) {
+            if (!r) continue;
+            const data = (r.row?.data ?? {}) as Record<string, unknown>;
+            const level = normalizeLevel(
+              (data as any).level_int ?? (data as any).level ?? r.row?.level,
+            );
+            next[r.slug] = {
+              ...(data as object),
+              slug: r.slug,
+              name: r.name,
+              level,
+            } as SpellFull;
+          }
           return next;
         });
       }
@@ -136,7 +149,6 @@ export default function SpellsStep({ character, onChange }: Props) {
       nextKnown.delete(slug);
       nextPrepared.delete(slug);
     } else {
-      // Check limits
       if (isCantrip) {
         if (cantripsAllowed !== null && cantripsSelected.length >= cantripsAllowed) return;
       } else {
@@ -144,7 +156,6 @@ export default function SpellsStep({ character, onChange }: Props) {
         if (spellsKnownAllowed !== null && leveledSelected.length >= spellsKnownAllowed) return;
       }
       nextKnown.add(slug);
-      // For known casters (bard/sorc/warlock/ranger), knowing == being able to cast (no prepare step)
       if (config?.model === 'known' && !isCantrip) {
         nextPrepared.add(slug);
       }
@@ -159,7 +170,7 @@ export default function SpellsStep({ character, onChange }: Props) {
   function togglePrepared(slug: string) {
     if (!knownSet.has(slug)) return;
     const spell = spellDetails[slug];
-    if (!spell || spell.level === 0) return; // cantrips don't need preparing
+    if (!spell || spell.level === 0) return;
     const nextPrepared = new Set(preparedSet);
     if (nextPrepared.has(slug)) {
       nextPrepared.delete(slug);
@@ -205,13 +216,17 @@ export default function SpellsStep({ character, onChange }: Props) {
     return <p>Loading spells…</p>;
   }
 
-  // Build visible list with filters
   const search_lc = search.trim().toLowerCase();
   const visible = classSpells
     .filter((s) => (filterLevel === 'all' ? true : s.level === filterLevel))
-    .filter((s) => (search_lc ? s.name.toLowerCase().includes(search_lc) : true))
+    .filter((s) => (search_lc ? (s.name ?? '').toLowerCase().includes(search_lc) : true))
     .filter((s) => s.level <= maxLevel)
-    .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
+    .sort((a, b) => {
+      const la = a.level ?? 0;
+      const lb = b.level ?? 0;
+      if (la !== lb) return la - lb;
+      return (a.name ?? '').localeCompare(b.name ?? '');
+    });
 
   return (
     <div>
@@ -277,7 +292,7 @@ export default function SpellsStep({ character, onChange }: Props) {
                   onClick={() => setSelectedDetail(spell)}
                   style={{ background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', flex: 1, padding: 0 }}
                 >
-                  <strong>{spell.name}</strong>
+                  <strong>{spell.name ?? spell.slug}</strong>
                   <span style={{ fontSize: '0.8rem', color: '#888', marginLeft: '0.5rem' }}>
                     {spell.level === 0 ? 'Cantrip' : `L${spell.level}`}
                     {spell.school && ` · ${spell.school}`}
@@ -324,11 +339,11 @@ export default function SpellsStep({ character, onChange }: Props) {
         {selectedDetail && (
           <div style={{ padding: '1rem', border: '1px solid #eee', borderRadius: 6, background: '#fafafa', maxHeight: 480, overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <h3 style={{ margin: 0 }}>{selectedDetail.name}</h3>
+              <h3 style={{ margin: 0 }}>{selectedDetail.name ?? selectedDetail.slug}</h3>
               <button onClick={() => setSelectedDetail(null)} style={{ cursor: 'pointer' }}>✕</button>
             </div>
             <p style={{ color: '#666', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-              {selectedDetail.level === 0 ? `${selectedDetail.school} cantrip` : `Level ${selectedDetail.level} ${selectedDetail.school ?? ''}`}
+              {selectedDetail.level === 0 ? `${selectedDetail.school ?? ''} cantrip` : `Level ${selectedDetail.level} ${selectedDetail.school ?? ''}`}
             </p>
             {selectedDetail.casting_time && <p><strong>Casting time:</strong> {selectedDetail.casting_time}</p>}
             {selectedDetail.range && <p><strong>Range:</strong> {selectedDetail.range}</p>}
