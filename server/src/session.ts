@@ -1,5 +1,6 @@
 import type { Server, Socket } from 'socket.io';
 import { verifyToken, type AuthUser } from './auth/index.js';
+import { db } from './db/index.js';
 
 interface OnlineUser {
   user_id: number;
@@ -7,9 +8,21 @@ interface OnlineUser {
   role: string;
 }
 
+interface MapRow {
+  id: number;
+  campaign_id: number;
+  name: string;
+  image_url: string;
+  grid_size: number;
+  grid_offset_x: number;
+  grid_offset_y: number;
+  created_at: number;
+}
+
 interface ServerToClientEvents {
-  'session:state': (state: { online: OnlineUser[] }) => void;
+  'session:state': (state: { online: OnlineUser[]; active_map: MapRow | null }) => void;
   'session:presence': (data: { online: OnlineUser[] }) => void;
+  'map:switched': (map: MapRow | null) => void;
 }
 
 interface ClientToServerEvents {
@@ -30,12 +43,19 @@ const presence = new Map<number, Map<string, OnlineUser>>();
 function onlineList(campaignId: number): OnlineUser[] {
   const room = presence.get(campaignId);
   if (!room) return [];
-  // Deduplicate by user_id (same user on multiple tabs counts once)
   return [...new Map([...room.values()].map((u) => [u.user_id, u])).values()];
 }
 
+function getActiveMap(campaignId: number): MapRow | null {
+  const row = db.prepare(`
+    SELECT m.* FROM maps m
+    JOIN campaigns c ON c.active_map_id = m.id
+    WHERE c.id = ?
+  `).get(campaignId) as MapRow | undefined;
+  return row ?? null;
+}
+
 export function setupSession(io: AppServer) {
-  // Validate JWT on every connection attempt
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token as string | undefined;
     if (!token) return next(new Error('Missing token'));
@@ -61,9 +81,12 @@ export function setupSession(io: AppServer) {
       });
 
       // Full state snapshot for the joining client
-      socket.emit('session:state', { online: onlineList(campaign_id) });
+      socket.emit('session:state', {
+        online: onlineList(campaign_id),
+        active_map: getActiveMap(campaign_id),
+      });
 
-      // Updated presence for everyone already in the room
+      // Updated presence for everyone in the room
       io.to(room).emit('session:presence', { online: onlineList(campaign_id) });
     });
 

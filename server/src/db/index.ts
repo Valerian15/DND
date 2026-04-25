@@ -196,7 +196,30 @@ export function initSchema() {
     -- Enforces one campaign per character at the DB level
     CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_members_character ON campaign_members(character_id);
     CREATE INDEX IF NOT EXISTS idx_campaign_members_campaign ON campaign_members(campaign_id);
+
+    -- MAPS
+
+    CREATE TABLE IF NOT EXISTS maps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      image_url TEXT NOT NULL,
+      grid_size INTEGER NOT NULL DEFAULT 50,
+      grid_offset_x INTEGER NOT NULL DEFAULT 0,
+      grid_offset_y INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_maps_campaign ON maps(campaign_id);
   `);
+
+  // Add active_map_id to campaigns if not already present (safe to run repeatedly)
+  try {
+    db.exec('ALTER TABLE campaigns ADD COLUMN active_map_id INTEGER');
+  } catch {
+    // Column already exists — fine
+  }
 
   console.log('✅ Database schema ready');
 }

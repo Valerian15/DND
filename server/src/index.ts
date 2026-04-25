@@ -10,6 +10,8 @@ import libraryRoutes from './routes/library.js';
 import characterRoutes from './routes/characters.js';
 import campaignRoutes from './routes/campaigns.js';
 import { setupSession, type AppServer } from './session.js';
+import { setIo } from './io.js';
+import mapRoutes from './routes/maps.js';
 
 initSchema();
 
@@ -31,6 +33,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/library', libraryRoutes);
 app.use('/api/characters', characterRoutes);
 app.use('/api/campaigns', campaignRoutes);
+app.use('/api/maps', mapRoutes);
 
 const httpServer = createServer(app);
 
@@ -38,6 +41,7 @@ const io = new Server(httpServer, {
   cors: { origin: '*' },
 }) as AppServer;
 
+setIo(io);
 setupSession(io);
 
 const PORT = Number(process.env.PORT) || 3001;
