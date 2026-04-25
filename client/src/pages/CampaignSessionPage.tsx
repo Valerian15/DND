@@ -54,9 +54,14 @@ export default function CampaignSessionPage() {
   const [gridOffsetY, setGridOffsetY] = useState(0);
   const [savingGrid, setSavingGrid] = useState(false);
 
-  // Map image natural size
+  // Map image natural size + zoom (local per client, not synced)
   const imgRef = useRef<HTMLImageElement>(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+  const [zoom, setZoom] = useState(1);
+
+  const ZOOM_STEP = 0.25;
+  const ZOOM_MIN = 0.25;
+  const ZOOM_MAX = 3;
 
   const { online, connected, activeMap, setActiveMap } = useSession(Number(id));
 
@@ -88,6 +93,7 @@ export default function CampaignSessionPage() {
       setActiveMapId(null);
     }
     setImgSize({ w: 0, h: 0 });
+    setZoom(1);
   }, [activeMap]);
 
   async function handleAddMap(e: React.FormEvent) {
@@ -288,21 +294,47 @@ export default function CampaignSessionPage() {
         {/* Map viewport */}
         <div style={{ flex: 1, background: '#e8e8e8', overflow: 'auto', position: 'relative' }}>
           {previewMap ? (
-            <div style={{ position: 'relative', display: 'inline-block', minWidth: '100%', minHeight: '100%' }}>
-              <img
-                ref={imgRef}
-                src={previewMap.image_url}
-                alt={previewMap.name}
-                onLoad={() => {
-                  if (imgRef.current) setImgSize({ w: imgRef.current.naturalWidth, h: imgRef.current.naturalHeight });
-                }}
-                style={{ display: 'block', maxWidth: 'none' }}
-                draggable={false}
-              />
-              {imgSize.w > 0 && (
-                <GridOverlay map={previewMap} width={imgSize.w} height={imgSize.h} />
-              )}
-            </div>
+            <>
+              {/* Zoom controls — float over bottom-left of the map area */}
+              <div style={{ position: 'sticky', bottom: 12, left: 12, zIndex: 10, display: 'inline-flex', alignItems: 'center', gap: '0.25rem', background: 'rgba(255,255,255,0.92)', border: '1px solid #ccc', borderRadius: 6, padding: '0.25rem 0.4rem', boxShadow: '0 1px 4px rgba(0,0,0,0.15)', marginLeft: 12, marginBottom: 12 }}>
+                <button
+                  onClick={() => setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2)))}
+                  disabled={zoom <= ZOOM_MIN}
+                  style={{ width: 26, height: 26, border: 'none', background: 'none', cursor: zoom <= ZOOM_MIN ? 'not-allowed' : 'pointer', fontSize: '1rem', color: zoom <= ZOOM_MIN ? '#bbb' : '#333', lineHeight: 1 }}
+                >−</button>
+                <button
+                  onClick={() => setZoom(1)}
+                  title="Reset to 100%"
+                  style={{ minWidth: 44, height: 26, border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.78rem', color: '#555', fontWeight: 500 }}
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button
+                  onClick={() => setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2)))}
+                  disabled={zoom >= ZOOM_MAX}
+                  style={{ width: 26, height: 26, border: 'none', background: 'none', cursor: zoom >= ZOOM_MAX ? 'not-allowed' : 'pointer', fontSize: '1rem', color: zoom >= ZOOM_MAX ? '#bbb' : '#333', lineHeight: 1 }}
+                >+</button>
+              </div>
+
+              {/* Scaled map — outer div sets the scrollable area size, inner div is the scaled content */}
+              <div style={{ width: imgSize.w * zoom || '100%', height: imgSize.h * zoom || '100%', position: 'relative', minWidth: imgSize.w ? undefined : '100%', minHeight: imgSize.h ? undefined : '100%' }}>
+                <div style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', position: 'absolute', top: 0, left: 0 }}>
+                  <img
+                    ref={imgRef}
+                    src={previewMap.image_url}
+                    alt={previewMap.name}
+                    onLoad={() => {
+                      if (imgRef.current) setImgSize({ w: imgRef.current.naturalWidth, h: imgRef.current.naturalHeight });
+                    }}
+                    style={{ display: 'block', maxWidth: 'none' }}
+                    draggable={false}
+                  />
+                  {imgSize.w > 0 && (
+                    <GridOverlay map={previewMap} width={imgSize.w} height={imgSize.h} />
+                  )}
+                </div>
+              </div>
+            </>
           ) : (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#aaa', userSelect: 'none' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🗺</div>
