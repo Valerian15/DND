@@ -6,6 +6,7 @@ import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import libraryRoutes from './routes/library.js';
 import characterRoutes from './routes/characters.js';
+import campaignRoutes from './routes/campaigns.js';
 
 initSchema();
 
@@ -26,6 +27,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/library', libraryRoutes);
 app.use('/api/characters', characterRoutes);
+app.use('/api/campaigns', campaignRoutes);
 
 const PORT = Number(process.env.PORT) || 3001;
 app.listen(PORT, () => {

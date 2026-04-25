@@ -167,6 +167,35 @@ export function initSchema() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_characters_owner ON characters(owner_id);
+
+    -- CAMPAIGNS
+
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dm_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      settings TEXT NOT NULL DEFAULT '{"rolled_hp":false}',
+      invite_code TEXT UNIQUE NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (dm_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_campaigns_dm ON campaigns(dm_id);
+
+    CREATE TABLE IF NOT EXISTS campaign_members (
+      campaign_id INTEGER NOT NULL,
+      character_id INTEGER NOT NULL,
+      joined_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      PRIMARY KEY (campaign_id, character_id),
+      FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+      FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
+    );
+
+    -- Enforces one campaign per character at the DB level
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_members_character ON campaign_members(character_id);
+    CREATE INDEX IF NOT EXISTS idx_campaign_members_campaign ON campaign_members(campaign_id);
   `);
 
   console.log('✅ Database schema ready');
