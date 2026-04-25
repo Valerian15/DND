@@ -1,12 +1,15 @@
 import 'dotenv/config';
+import { createServer } from 'http';
 import express from 'express';
 import cors from 'cors';
+import { Server } from 'socket.io';
 import { db, initSchema } from './db/index.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import libraryRoutes from './routes/library.js';
 import characterRoutes from './routes/characters.js';
 import campaignRoutes from './routes/campaigns.js';
+import { setupSession, type AppServer } from './session.js';
 
 initSchema();
 
@@ -29,7 +32,15 @@ app.use('/api/library', libraryRoutes);
 app.use('/api/characters', characterRoutes);
 app.use('/api/campaigns', campaignRoutes);
 
+const httpServer = createServer(app);
+
+const io = new Server(httpServer, {
+  cors: { origin: '*' },
+}) as AppServer;
+
+setupSession(io);
+
 const PORT = Number(process.env.PORT) || 3001;
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
