@@ -9,6 +9,9 @@ import CharactersPage from './pages/CharactersPage';
 import LibraryPage from './pages/LibraryPage';
 import CharacterWizard from './features/character/CharacterWizard';
 import CharacterSheet from './features/character/CharacterSheet';
+import CampaignsPage from './pages/CampaignsPage';
+import CampaignDetailPage from './pages/CampaignDetailPage';
+import CampaignSessionPage from './pages/CampaignSessionPage';
 export default function App() {
   return (
     <BrowserRouter>
@@ -22,6 +25,9 @@ export default function App() {
           <Route path="/characters/:id" element={<RequireAuth><CharacterSheet /></RequireAuth>} />
           <Route path="/characters/:id/edit" element={<RequireAuth><CharacterWizard /></RequireAuth>} />
           <Route path="/library" element={<RequireAuth><LibraryPage /></RequireAuth>} />
+          <Route path="/campaigns" element={<RequireAuth><CampaignsPage /></RequireAuth>} />
+          <Route path="/campaigns/:id" element={<RequireAuth><CampaignDetailPage /></RequireAuth>} />
+          <Route path="/campaigns/:id/session" element={<RequireAuth><CampaignSessionPage /></RequireAuth>} />
         </Routes>
       </AuthProvider>
     </BrowserRouter>

@@ -45,17 +45,20 @@ export default function HomePage() {
           <h3 style={{ marginTop: 0 }}>Library</h3>
           <p style={{ color: '#666', margin: 0 }}>Browse races, classes, spells, items, monsters and more.</p>
         </Link>
-        <div
+        <Link
+          to="/campaigns"
           style={{
             padding: '1.5rem',
-            background: '#f5f5f5',
+            background: '#fff',
             borderRadius: 8,
-            color: '#999',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+            textDecoration: 'none',
+            color: '#333',
           }}
         >
           <h3 style={{ marginTop: 0 }}>Campaigns</h3>
-          <p style={{ margin: 0 }}>Coming in Phase 3.</p>
-        </div>
+          <p style={{ color: '#666', margin: 0 }}>Create or join a campaign and play with others.</p>
+        </Link>
       </div>
     </div>
   );
