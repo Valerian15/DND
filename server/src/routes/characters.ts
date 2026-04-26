@@ -59,13 +59,18 @@ router.get('/', (req: AuthRequest, res) => {
   res.json({ characters: rows.map(hydrate) });
 });
 
-// Get a single character
+// Get a single character — owner, admin, or DM of a campaign the character is in
 router.get('/:id', (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM characters WHERE id = ?').get(id) as CharacterRow | undefined;
   if (!row) return res.status(404).json({ error: 'Character not found' });
   if (row.owner_id !== req.user!.id && req.user!.role !== 'admin') {
-    return res.status(403).json({ error: 'Not your character' });
+    const isDm = db.prepare(`
+      SELECT c.id FROM campaigns c
+      JOIN campaign_members cm ON cm.campaign_id = c.id
+      WHERE cm.character_id = ? AND c.dm_id = ?
+    `).get(id, req.user!.id);
+    if (!isDm) return res.status(403).json({ error: 'Not your character' });
   }
   res.json({ character: hydrate(row) });
 });

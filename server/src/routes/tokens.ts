@@ -186,6 +186,42 @@ router.delete('/:id', (req: AuthRequest, res) => {
   res.json({ ok: true });
 });
 
+// PATCH /api/tokens/:id/hp
+router.patch('/:id/hp', (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const hpCurrent = Number(req.body?.hp_current);
+  if (!Number.isInteger(hpCurrent) || hpCurrent < 0) return res.status(400).json({ error: 'hp_current must be a non-negative integer' });
+
+  const token = db.prepare('SELECT t.*, cnpc.category_id FROM tokens t LEFT JOIN campaign_npcs cnpc ON cnpc.id = t.campaign_npc_id WHERE t.id = ?')
+    .get(id) as TokenRow | undefined;
+  if (!token) return res.status(404).json({ error: 'Token not found' });
+
+  const campaign = getCampaignForMap(token.map_id);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+  const isDmOrAdmin = req.user!.role === 'admin' || req.user!.id === campaign.dm_id;
+  if (!isDmOrAdmin) {
+    if (token.token_type === 'pc' && token.character_id !== null) {
+      const char = db.prepare('SELECT owner_id FROM characters WHERE id = ?')
+        .get(token.character_id) as { owner_id: number } | undefined;
+      if (char?.owner_id !== req.user!.id) return res.status(403).json({ error: 'Not authorized' });
+    } else {
+      return res.status(403).json({ error: 'DM access required' });
+    }
+  }
+
+  const clamped = Math.max(0, Math.min(token.hp_max, hpCurrent));
+  db.prepare('UPDATE tokens SET hp_current = ? WHERE id = ?').run(clamped, id);
+
+  if (token.token_type === 'pc' && token.character_id !== null) {
+    db.prepare("UPDATE characters SET hp_current = ?, updated_at = strftime('%s', 'now') WHERE id = ?")
+      .run(clamped, token.character_id);
+  }
+
+  broadcastFiltered(campaign.id, 'token:hp_updated', { token_id: id, hp_current: clamped }, () => true);
+  res.json({ token_id: id, hp_current: clamped });
+});
+
 // Suppress unused export warning
 void tokenFilter;
 

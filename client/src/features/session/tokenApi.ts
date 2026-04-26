@@ -25,6 +25,13 @@ export async function deleteToken(id: number): Promise<void> {
   await apiFetch(`/tokens/${id}`, { method: 'DELETE' });
 }
 
+export async function updateTokenHp(id: number, hpCurrent: number): Promise<{ token_id: number; hp_current: number }> {
+  return apiFetch(`/tokens/${id}/hp`, {
+    method: 'PATCH',
+    body: JSON.stringify({ hp_current: hpCurrent }),
+  });
+}
+
 export async function listCampaignNpcs(campaignId: number): Promise<CampaignNpc[]> {
   const res = await apiFetch<{ npcs: CampaignNpc[] }>(`/campaign-npcs?campaign_id=${campaignId}`);
   return res.npcs;

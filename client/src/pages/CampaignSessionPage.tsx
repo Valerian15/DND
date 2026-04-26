@@ -4,7 +4,8 @@ import { useAuth } from '../features/auth/AuthContext';
 import { getCampaign } from '../features/campaign/api';
 import { useSession } from '../features/session/useSession';
 import { listMaps, createMap, deleteMap, activateMap, updateMap } from '../features/session/mapApi';
-import { listCampaignNpcs, listTokenCategories, createToken, deleteToken } from '../features/session/tokenApi';
+import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenHp } from '../features/session/tokenApi';
+import { InGameSheet } from '../features/session/InGameSheet';
 import { socket } from '../lib/socket';
 import type { Campaign } from '../features/campaign/types';
 import type { MapData, TokenData, CampaignNpc, TokenCategory } from '../features/session/types';
@@ -153,6 +154,15 @@ export default function CampaignSessionPage() {
 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [drag, setDrag] = useState<{ tokenId: number; ghostCol: number; ghostRow: number } | null>(null);
+  const [pointerDown, setPointerDown] = useState<{ token: TokenData; startX: number; startY: number } | null>(null);
+
+  // Panel: character sheet for PC tokens, NPC HP panel for NPC tokens
+  type PanelState =
+    | { type: 'character'; characterId: number; tokenId: number; canEdit: boolean }
+    | { type: 'npc'; token: TokenData };
+  const [panel, setPanel] = useState<PanelState | null>(null);
+  const [npcHp, setNpcHp] = useState(0);
+  const [npcHpSaving, setNpcHpSaving] = useState(false);
 
   const { online, connected, activeMap, setActiveMap, tokens } = useSession(Number(id));
   const isDmOrAdmin = campaign ? (campaign.dm_id === user!.id || user!.role === 'admin') : false;
@@ -255,11 +265,13 @@ export default function CampaignSessionPage() {
   }
 
   function handleTokenPointerDown(e: React.PointerEvent, token: TokenData) {
-    if (!canMoveToken(token)) return;
     e.stopPropagation();
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    setDrag({ tokenId: token.id, ghostCol: token.col, ghostRow: token.row });
+    setPointerDown({ token, startX: e.clientX, startY: e.clientY });
+    if (canMoveToken(token)) {
+      setDrag({ tokenId: token.id, ghostCol: token.col, ghostRow: token.row });
+    }
   }
 
   function handleViewportPointerMove(e: React.PointerEvent) {
@@ -269,10 +281,39 @@ export default function CampaignSessionPage() {
     setDrag((d) => d ? { ...d, ghostCol: col, ghostRow: row } : null);
   }
 
-  function handleViewportPointerUp() {
-    if (!drag) return;
-    socket.emit('token:move', { token_id: drag.tokenId, col: drag.ghostCol, row: drag.ghostRow });
+  function handleViewportPointerUp(e: React.PointerEvent) {
+    if (pointerDown) {
+      const dist = Math.hypot(e.clientX - pointerDown.startX, e.clientY - pointerDown.startY);
+      if (dist < 6) {
+        handleTokenClick(pointerDown.token);
+      } else if (drag) {
+        socket.emit('token:move', { token_id: drag.tokenId, col: drag.ghostCol, row: drag.ghostRow });
+      }
+    }
     setDrag(null);
+    setPointerDown(null);
+  }
+
+  function handleTokenClick(token: TokenData) {
+    if (token.token_type === 'pc' && token.character_id !== null) {
+      const isMyChar = campaign?.members?.some((m) => m.character_id === token.character_id && m.owner_id === user!.id);
+      if (isMyChar || isDmOrAdmin) {
+        setPanel({ type: 'character', characterId: token.character_id, tokenId: token.id, canEdit: !!isMyChar || isDmOrAdmin });
+      }
+    } else if (token.token_type === 'npc' && isDmOrAdmin) {
+      setNpcHp(token.hp_current);
+      setPanel({ type: 'npc', token });
+    }
+  }
+
+  async function handleNpcHpCommit(tokenId: number, hp: number) {
+    setNpcHpSaving(true);
+    try {
+      const result = await updateTokenHp(tokenId, hp);
+      setNpcHp(result.hp_current);
+      setPanel((p) => p?.type === 'npc' ? { ...p, token: { ...p.token, hp_current: result.hp_current } } : p);
+    } catch (e: any) { setError(e.message); }
+    finally { setNpcHpSaving(false); }
   }
 
   async function handleRemoveToken(tokenId: number) {
@@ -626,6 +667,44 @@ export default function CampaignSessionPage() {
           })()}
         </div>
       </div>
+
+      {/* In-game character sheet panel */}
+      {panel?.type === 'character' && (
+        <InGameSheet
+          characterId={panel.characterId}
+          tokenId={panel.tokenId}
+          canEditHp={panel.canEdit}
+          onClose={() => setPanel(null)}
+        />
+      )}
+
+      {/* NPC HP panel (DM only) */}
+      {panel?.type === 'npc' && (
+        <>
+          <div onClick={() => setPanel(null)} style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.2)' }} />
+          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 101, background: '#fff', borderRadius: 10, boxShadow: '0 4px 24px rgba(0,0,0,0.2)', padding: '1.5rem', width: 280, fontFamily: 'system-ui' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <strong style={{ fontSize: '1rem' }}>{panel.token.label}</strong>
+              <button onClick={() => setPanel(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.1rem', color: '#888' }}>✕</button>
+            </div>
+            <div style={{ fontSize: '0.82rem', color: '#888', marginBottom: '0.75rem' }}>{panel.token.size} · {panel.token.token_type === 'npc' ? 'NPC' : 'PC'}</div>
+            <div style={{ marginBottom: '0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#666' }}>HP</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.75rem' }}>
+              {[-10, -5, -1].map((d) => (
+                <button key={d} onClick={() => handleNpcHpCommit(panel.token.id, npcHp + d)} disabled={npcHpSaving || npcHp === 0} style={{ padding: '0.3rem 0.45rem', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem', background: '#fff' }}>{d}</button>
+              ))}
+              <span style={{ fontWeight: 700, fontSize: '1.2rem', minWidth: 32, textAlign: 'center' }}>{npcHp}</span>
+              {[+1, +5, +10].map((d) => (
+                <button key={d} onClick={() => handleNpcHpCommit(panel.token.id, npcHp + d)} disabled={npcHpSaving || npcHp >= panel.token.hp_max} style={{ padding: '0.3rem 0.45rem', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem', background: '#fff' }}>+{d}</button>
+              ))}
+            </div>
+            <div style={{ height: 8, background: '#ddd', borderRadius: 4, marginBottom: '0.4rem' }}>
+              <div style={{ height: '100%', borderRadius: 4, background: npcHp / panel.token.hp_max > 0.5 ? '#4a4' : npcHp / panel.token.hp_max > 0.25 ? '#aa4' : '#a44', width: `${Math.max(0, Math.min(100, (npcHp / panel.token.hp_max) * 100))}%`, transition: 'width 0.2s' }} />
+            </div>
+            <div style={{ fontSize: '0.78rem', color: '#888', textAlign: 'center' }}>{npcHp} / {panel.token.hp_max}</div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

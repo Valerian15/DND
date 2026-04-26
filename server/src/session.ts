@@ -28,6 +28,7 @@ interface ServerToClientEvents {
   'token:created': (token: unknown) => void;
   'token:moved': (data: { token_id: number; col: number; row: number }) => void;
   'token:deleted': (data: { token_id: number }) => void;
+  'token:hp_updated': (data: { token_id: number; hp_current: number }) => void;
 }
 
 interface ClientToServerEvents {
