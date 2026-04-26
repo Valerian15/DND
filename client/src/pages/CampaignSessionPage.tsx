@@ -5,7 +5,7 @@ import { getCampaign } from '../features/campaign/api';
 import { useSession } from '../features/session/useSession';
 import { listMaps, createMap, deleteMap, activateMap, updateMap } from '../features/session/mapApi';
 import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenHp, updateTokenConditions } from '../features/session/tokenApi';
-import { InGameSheet } from '../features/session/InGameSheet';
+import { InGameSheet, CONDITION_COLORS } from '../features/session/InGameSheet';
 import { socket } from '../lib/socket';
 import type { Campaign } from '../features/campaign/types';
 import type { MapData, TokenData, CampaignNpc, TokenCategory } from '../features/session/types';
@@ -60,6 +60,7 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, onPoint
   const { left, top, size } = tokenPixelPos({ col: displayCol, row: displayRow, size: token.size }, map);
   const hp = token.hp_max > 0 ? Math.max(0, Math.min(1, token.hp_current / token.hp_max)) : 0;
   const hpColor = hp > 0.5 ? '#4a4' : hp > 0.25 ? '#aa4' : '#a44';
+  const activeConditions = token.conditions ?? [];
 
   return (
     <div
@@ -87,6 +88,16 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, onPoint
       {token.hp_visible && token.hp_max > 0 && (
         <div style={{ position: 'absolute', top: '100%', left: '10%', right: '10%', marginTop: 4, height: 6, background: '#555', borderRadius: 3 }}>
           <div style={{ height: '100%', width: `${hp * 100}%`, background: hpColor, borderRadius: 3, transition: 'width 0.3s' }} />
+        </div>
+      )}
+      {/* Condition badges */}
+      {activeConditions.length > 0 && (
+        <div style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', marginTop: token.hp_visible && token.hp_max > 0 ? 14 : 4, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 2, pointerEvents: 'none', zIndex: 21, maxWidth: Math.max(size, 80) }}>
+          {activeConditions.map((cond) => (
+            <div key={cond} style={{ background: CONDITION_COLORS[cond] ?? '#555', color: '#fff', fontSize: 8, fontWeight: 700, padding: '1px 3px', borderRadius: 2, whiteSpace: 'nowrap', textTransform: 'capitalize' }}>
+              {cond}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -713,6 +724,31 @@ export default function CampaignSessionPage() {
               <div style={{ height: '100%', borderRadius: 4, background: npcHp / panel.token.hp_max > 0.5 ? '#4a4' : npcHp / panel.token.hp_max > 0.25 ? '#aa4' : '#a44', width: `${Math.max(0, Math.min(100, (npcHp / panel.token.hp_max) * 100))}%`, transition: 'width 0.2s' }} />
             </div>
             <div style={{ fontSize: '0.78rem', color: '#888', textAlign: 'center' }}>{npcHp} / {panel.token.hp_max}</div>
+            <div style={{ marginTop: '1rem', marginBottom: '0.4rem', fontSize: '0.8rem', fontWeight: 600, color: '#666' }}>Conditions</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+              {(['blinded', 'charmed', 'deafened', 'exhaustion', 'frightened', 'grappled',
+                'incapacitated', 'invisible', 'paralyzed', 'petrified', 'poisoned',
+                'prone', 'restrained', 'stunned', 'unconscious'] as const).map((cond) => {
+                const active = (tokens.find((t) => t.id === panel.token.id)?.conditions ?? panel.token.conditions).includes(cond);
+                return (
+                  <button key={cond} disabled={npcHpSaving}
+                    onClick={() => {
+                      const cur = tokens.find((t) => t.id === panel.token.id)?.conditions ?? panel.token.conditions;
+                      const next = active ? cur.filter((c) => c !== cond) : [...cur, cond];
+                      handleTokenConditionsChange(panel.token.id, next);
+                    }}
+                    style={{
+                      padding: '0.15rem 0.4rem', borderRadius: 4, fontSize: '0.72rem', fontWeight: active ? 700 : 400,
+                      border: `1px solid ${active ? CONDITION_COLORS[cond] : '#ddd'}`,
+                      background: active ? CONDITION_COLORS[cond] : '#f9f9f9',
+                      color: active ? '#fff' : '#888',
+                      cursor: 'pointer', textTransform: 'capitalize',
+                    }}>
+                    {cond}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </>
       )}
