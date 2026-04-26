@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ChatMessage } from '../features/session/types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../features/auth/AuthContext';
 import { getCampaign } from '../features/campaign/api';
@@ -126,6 +127,27 @@ function NpcTemplateRow({ npc }: { npc: CampaignNpc }) {
   );
 }
 
+function ChatMsgItem({ msg, myUserId }: { msg: ChatMessage; myUserId: number }) {
+  const isMe = msg.user_id === myUserId;
+  if (msg.type === 'roll' && msg.data) {
+    const { expression, dice, modifier, total } = msg.data;
+    const modStr = modifier !== 0 ? ` ${modifier > 0 ? '+' : ''}${modifier}` : '';
+    return (
+      <div style={{ background: '#f5f0e8', border: '1px solid #e4d5b8', borderRadius: 5, padding: '0.35rem 0.5rem' }}>
+        <div style={{ fontSize: '0.7rem', color: '#886', fontWeight: 600, marginBottom: 2 }}>{msg.username} rolled {expression}</div>
+        <div style={{ fontSize: '0.78rem', color: '#666' }}>[{dice.join(', ')}]{modStr}</div>
+        <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#333' }}>= {total}</div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <span style={{ fontSize: '0.72rem', fontWeight: 600, color: isMe ? '#4a8' : '#668' }}>{msg.username}: </span>
+      <span style={{ fontSize: '0.78rem', color: '#333' }}>{msg.body}</span>
+    </div>
+  );
+}
+
 export default function CampaignSessionPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -167,6 +189,20 @@ export default function CampaignSessionPage() {
   const [drag, setDrag] = useState<{ tokenId: number; ghostCol: number; ghostRow: number } | null>(null);
   const [pointerDown, setPointerDown] = useState<{ token: TokenData; startX: number; startY: number } | null>(null);
 
+  // Chat
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [hasUnread, setHasUnread] = useState(false);
+  const chatLogRef = useRef<HTMLDivElement>(null);
+  const prevMsgCount = useRef(0);
+
+  // Initiative editing
+  const [editingInitiativeId, setEditingInitiativeId] = useState<number | null>(null);
+  const [editingInitiativeValue, setEditingInitiativeValue] = useState('');
+  const [addingInitiative, setAddingInitiative] = useState(false);
+  const [addInitiativeLabel, setAddInitiativeLabel] = useState('');
+  const [addInitiativeValue, setAddInitiativeValue] = useState('');
+
   // Panel: character sheet for PC tokens, NPC HP panel for NPC tokens
   type PanelState =
     | { type: 'character'; characterId: number; tokenId: number; canEdit: boolean }
@@ -175,7 +211,7 @@ export default function CampaignSessionPage() {
   const [npcHp, setNpcHp] = useState(0);
   const [npcHpSaving, setNpcHpSaving] = useState(false);
 
-  const { online, connected, activeMap, setActiveMap, tokens } = useSession(Number(id));
+  const { online, connected, activeMap, setActiveMap, tokens, messages, initiative } = useSession(Number(id));
   const isDmOrAdmin = campaign ? (campaign.dm_id === user!.id || user!.role === 'admin') : false;
 
   useEffect(() => {
@@ -211,6 +247,34 @@ export default function CampaignSessionPage() {
     setImgSize({ w: 0, h: 0 });
     setZoom(1);
   }, [activeMap]);
+
+  // Chat auto-scroll
+  useEffect(() => {
+    if (chatLogRef.current && chatOpen) {
+      chatLogRef.current.scrollTop = chatLogRef.current.scrollHeight;
+    }
+  }, [messages, chatOpen]);
+
+  // Unread badge: only counts messages that arrive after initial history load
+  useEffect(() => {
+    if (messages.length > prevMsgCount.current && prevMsgCount.current > 0 && !chatOpen) {
+      setHasUnread(true);
+    }
+    prevMsgCount.current = messages.length;
+  }, [messages.length, chatOpen]);
+
+  function sendChat() {
+    const body = chatInput.trim();
+    if (!body) return;
+    socket.emit('chat:send', { body });
+    setChatInput('');
+  }
+
+  function commitInitiativeEdit(id: number) {
+    const val = parseInt(editingInitiativeValue, 10);
+    if (!isNaN(val)) socket.emit('initiative:set', { id, initiative: val });
+    setEditingInitiativeId(null);
+  }
 
   function canMoveToken(token: TokenData): boolean {
     if (!campaign) return false;
@@ -368,6 +432,11 @@ export default function CampaignSessionPage() {
           {isDmOrAdmin && (
             <button onClick={() => setShowLeftPanel(!showLeftPanel)} style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: showLeftPanel ? '#333' : '#fff', color: showLeftPanel ? '#fff' : '#333', fontSize: '0.85rem' }}>
               DM Bar
+            </button>
+          )}
+          {isDmOrAdmin && (
+            <button onClick={() => socket.emit('initiative:roll')} title="Roll initiative for all map tokens" style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', color: '#333', fontSize: '0.85rem' }}>
+              ⚔ Initiative
             </button>
           )}
           <span style={{ fontSize: '0.8rem', color: '#888' }}>Online:</span>
@@ -557,7 +626,67 @@ export default function CampaignSessionPage() {
         </div>
 
         {/* Right sidebar */}
-        <div style={{ width: 220, background: '#fff', borderLeft: '1px solid #ddd', display: 'flex', flexDirection: 'column', flexShrink: 0, overflowY: 'auto' }}>
+        <div style={{ width: 240, background: '#fff', borderLeft: '1px solid #ddd', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }}>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+
+          {/* Initiative tracker — shown when active, at the top */}
+          {initiative.length > 0 && (
+            <div style={{ borderBottom: '1px solid #eee' }}>
+              <div onClick={() => toggleSection('initiative')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.6rem 1rem', cursor: 'pointer', background: '#fff8e8', userSelect: 'none' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#776', textTransform: 'uppercase', letterSpacing: '0.05em' }}>⚔ Initiative</span>
+                <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{collapsedSections.has('initiative') ? '▶' : '▼'}</span>
+              </div>
+              {!collapsedSections.has('initiative') && (
+                <div style={{ padding: '0.25rem 0.5rem 0.5rem' }}>
+                  {initiative.map((entry, idx) => (
+                    <div key={entry.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0.25rem', borderBottom: '1px solid #f5f5f5' }}>
+                      <span style={{ fontSize: '0.68rem', color: '#bbb', width: 14, textAlign: 'right', flexShrink: 0 }}>{idx + 1}.</span>
+                      <span style={{ flex: 1, fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.label}</span>
+                      {isDmOrAdmin && editingInitiativeId === entry.id ? (
+                        <input type="number" value={editingInitiativeValue}
+                          onChange={(e) => setEditingInitiativeValue(e.target.value)}
+                          onBlur={() => commitInitiativeEdit(entry.id)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') commitInitiativeEdit(entry.id); if (e.key === 'Escape') setEditingInitiativeId(null); }}
+                          autoFocus style={{ width: 38, padding: '0.1rem', border: '1px solid #aaa', borderRadius: 3, fontSize: '0.8rem', textAlign: 'center' }} />
+                      ) : (
+                        <span onClick={isDmOrAdmin ? () => { setEditingInitiativeId(entry.id); setEditingInitiativeValue(String(entry.initiative)); } : undefined}
+                          style={{ fontSize: '0.85rem', fontWeight: 700, color: '#333', minWidth: 22, textAlign: 'center', cursor: isDmOrAdmin ? 'text' : 'default' }}>
+                          {entry.initiative}
+                        </span>
+                      )}
+                      {isDmOrAdmin && (
+                        <button onClick={() => socket.emit('initiative:remove', { id: entry.id })}
+                          style={{ flexShrink: 0, padding: '0.1rem 0.25rem', fontSize: '0.65rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>✕</button>
+                      )}
+                    </div>
+                  ))}
+                  {isDmOrAdmin && (
+                    addingInitiative ? (
+                      <div style={{ display: 'flex', gap: '0.25rem', padding: '0.4rem 0.25rem', alignItems: 'center' }}>
+                        <input value={addInitiativeLabel} onChange={(e) => setAddInitiativeLabel(e.target.value)}
+                          placeholder="Name" style={{ flex: 1, padding: '0.2rem', border: '1px solid #ddd', borderRadius: 3, fontSize: '0.75rem', minWidth: 0 }} />
+                        <input type="number" value={addInitiativeValue} onChange={(e) => setAddInitiativeValue(e.target.value)}
+                          placeholder="Init" style={{ width: 38, padding: '0.2rem', border: '1px solid #ddd', borderRadius: 3, fontSize: '0.75rem' }} />
+                        <button onClick={() => {
+                          const init = parseInt(addInitiativeValue, 10);
+                          if (addInitiativeLabel.trim() && !isNaN(init)) {
+                            socket.emit('initiative:add', { label: addInitiativeLabel.trim(), initiative: init });
+                            setAddInitiativeLabel(''); setAddInitiativeValue(''); setAddingInitiative(false);
+                          }
+                        }} style={{ padding: '0.2rem 0.35rem', fontSize: '0.72rem', background: '#333', color: '#fff', border: 'none', borderRadius: 3, cursor: 'pointer' }}>+</button>
+                        <button onClick={() => setAddingInitiative(false)} style={{ padding: '0.2rem 0.35rem', fontSize: '0.72rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3 }}>✕</button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', gap: '0.35rem', padding: '0.4rem 0.25rem' }}>
+                        <button onClick={() => setAddingInitiative(true)} style={{ flex: 1, padding: '0.25rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3, background: '#fff' }}>+ Add</button>
+                        <button onClick={() => socket.emit('initiative:clear')} style={{ flex: 1, padding: '0.25rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>End Combat</button>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Player Characters */}
           <div>
@@ -681,6 +810,42 @@ export default function CampaignSessionPage() {
               </div>
             );
           })()}
+
+        </div>{/* end scrollable section */}
+
+          {/* Chat mini-window — fixed at bottom of sidebar */}
+          <div style={{ flexShrink: 0, borderTop: '1px solid #ddd' }}>
+            <div
+              onClick={() => { setChatOpen((o) => !o); if (!chatOpen) setHasUnread(false); }}
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.55rem 1rem', cursor: 'pointer', background: '#fafafa', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em' }}>💬 Chat</span>
+                {hasUnread && !chatOpen && (
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#e53', display: 'inline-block' }} />
+                )}
+              </div>
+              <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{chatOpen ? '▼' : '▲'}</span>
+            </div>
+            {chatOpen && (
+              <div style={{ height: 260, display: 'flex', flexDirection: 'column', borderTop: '1px solid #eee' }}>
+                <div ref={chatLogRef} style={{ flex: 1, overflowY: 'auto', padding: '0.5rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  {messages.length === 0 && <div style={{ fontSize: '0.78rem', color: '#ccc', textAlign: 'center', marginTop: '0.5rem' }}>No messages yet.</div>}
+                  {messages.map((msg) => <ChatMsgItem key={msg.id} msg={msg} myUserId={user!.id} />)}
+                </div>
+                <div style={{ padding: '0.4rem 0.5rem', borderTop: '1px solid #eee', flexShrink: 0 }}>
+                  <input
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') sendChat(); }}
+                    placeholder="Message or /roll 1d20+5"
+                    style={{ width: '100%', padding: '0.38rem 0.5rem', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.8rem', boxSizing: 'border-box', outline: 'none' }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
         </div>
       </div>
 

@@ -272,6 +272,37 @@ export function initSchema() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_maps_campaign ON maps(campaign_id);
+
+    -- CHAT
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      username TEXT NOT NULL,
+      body TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'chat',
+      data TEXT,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_campaign ON chat_messages(campaign_id, created_at);
+
+    -- INITIATIVE
+
+    CREATE TABLE IF NOT EXISTS initiative_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      token_id INTEGER,
+      label TEXT NOT NULL,
+      initiative INTEGER NOT NULL DEFAULT 0,
+      dex_score INTEGER NOT NULL DEFAULT 10,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_initiative_campaign ON initiative_entries(campaign_id);
   `);
 
   // Add active_map_id to campaigns if not already present (safe to run repeatedly)

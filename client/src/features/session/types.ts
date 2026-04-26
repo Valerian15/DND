@@ -41,6 +41,26 @@ export interface CampaignNpc {
   created_at: number;
 }
 
+export interface ChatMessage {
+  id: number;
+  campaign_id: number;
+  user_id: number;
+  username: string;
+  body: string;
+  type: 'chat' | 'roll';
+  data?: { expression: string; dice: number[]; modifier: number; total: number };
+  created_at: number;
+}
+
+export interface InitiativeEntry {
+  id: number;
+  campaign_id: number;
+  token_id: number | null;
+  label: string;
+  initiative: number;
+  dex_score: number;
+}
+
 export interface TokenCategory {
   id: number;
   campaign_id: number;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { socket } from '../../lib/socket';
-import type { MapData, TokenData } from './types';
+import type { MapData, TokenData, ChatMessage, InitiativeEntry } from './types';
 import { listTokens } from './tokenApi';
 
 export interface OnlineUser {
@@ -14,6 +14,8 @@ export function useSession(campaignId: number) {
   const [connected, setConnected] = useState(false);
   const [activeMap, setActiveMap] = useState<MapData | null>(null);
   const [tokens, setTokens] = useState<TokenData[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [initiative, setInitiative] = useState<InitiativeEntry[]>([]);
 
   const fetchTokens = useCallback((mapId: number) => {
     listTokens(mapId).then(setTokens).catch(() => {});
@@ -29,11 +31,18 @@ export function useSession(campaignId: number) {
       setConnected(false);
     }
 
-    function onState(state: { online: OnlineUser[]; active_map: MapData | null }) {
+    function onState(state: {
+      online: OnlineUser[];
+      active_map: MapData | null;
+      chat_history?: ChatMessage[];
+      initiative?: InitiativeEntry[];
+    }) {
       setOnline(state.online);
       setActiveMap(state.active_map ?? null);
       if (state.active_map) fetchTokens(state.active_map.id);
       else setTokens([]);
+      if (state.chat_history) setMessages(state.chat_history);
+      if (state.initiative) setInitiative(state.initiative);
     }
 
     function onPresence(data: { online: OnlineUser[] }) {
@@ -72,6 +81,14 @@ export function useSession(campaignId: number) {
       );
     }
 
+    function onChatMessage(msg: ChatMessage) {
+      setMessages((prev) => [...prev, msg]);
+    }
+
+    function onInitiativeUpdated(entries: InitiativeEntry[]) {
+      setInitiative(entries);
+    }
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('session:state', onState);
@@ -82,6 +99,8 @@ export function useSession(campaignId: number) {
     socket.on('token:deleted', onTokenDeleted);
     socket.on('token:hp_updated', onTokenHpUpdated);
     socket.on('token:conditions_updated', onTokenConditionsUpdated);
+    socket.on('chat:message', onChatMessage);
+    socket.on('initiative:updated', onInitiativeUpdated);
 
     socket.connect();
 
@@ -96,9 +115,11 @@ export function useSession(campaignId: number) {
       socket.off('token:deleted', onTokenDeleted);
       socket.off('token:hp_updated', onTokenHpUpdated);
       socket.off('token:conditions_updated', onTokenConditionsUpdated);
+      socket.off('chat:message', onChatMessage);
+      socket.off('initiative:updated', onInitiativeUpdated);
       socket.disconnect();
     };
   }, [campaignId, fetchTokens]);
 
-  return { online, connected, activeMap, setActiveMap, tokens, setTokens };
+  return { online, connected, activeMap, setActiveMap, tokens, setTokens, messages, initiative };
 }
