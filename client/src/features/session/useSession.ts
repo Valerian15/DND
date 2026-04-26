@@ -66,6 +66,12 @@ export function useSession(campaignId: number) {
       );
     }
 
+    function onTokenConditionsUpdated(data: { token_id: number; conditions: string[] }) {
+      setTokens((prev) =>
+        prev.map((t) => t.id === data.token_id ? { ...t, conditions: data.conditions } : t)
+      );
+    }
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('session:state', onState);
@@ -75,6 +81,7 @@ export function useSession(campaignId: number) {
     socket.on('token:moved', onTokenMoved);
     socket.on('token:deleted', onTokenDeleted);
     socket.on('token:hp_updated', onTokenHpUpdated);
+    socket.on('token:conditions_updated', onTokenConditionsUpdated);
 
     socket.connect();
 
@@ -88,6 +95,7 @@ export function useSession(campaignId: number) {
       socket.off('token:moved', onTokenMoved);
       socket.off('token:deleted', onTokenDeleted);
       socket.off('token:hp_updated', onTokenHpUpdated);
+      socket.off('token:conditions_updated', onTokenConditionsUpdated);
       socket.disconnect();
     };
   }, [campaignId, fetchTokens]);

@@ -29,6 +29,7 @@ interface ServerToClientEvents {
   'token:moved': (data: { token_id: number; col: number; row: number }) => void;
   'token:deleted': (data: { token_id: number }) => void;
   'token:hp_updated': (data: { token_id: number; hp_current: number }) => void;
+  'token:conditions_updated': (data: { token_id: number; conditions: string[] }) => void;
 }
 
 interface ClientToServerEvents {

@@ -222,6 +222,35 @@ router.patch('/:id/hp', (req: AuthRequest, res) => {
   res.json({ token_id: id, hp_current: clamped });
 });
 
+const VALID_CONDITIONS = new Set([
+  'blinded', 'charmed', 'deafened', 'exhaustion', 'frightened', 'grappled',
+  'incapacitated', 'invisible', 'paralyzed', 'petrified', 'poisoned',
+  'prone', 'restrained', 'stunned', 'unconscious',
+]);
+
+// PATCH /api/tokens/:id/conditions  (DM/admin only)
+router.patch('/:id/conditions', (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const raw = req.body?.conditions;
+  if (!Array.isArray(raw)) return res.status(400).json({ error: 'conditions must be an array' });
+  const conditions = (raw as unknown[]).filter((c): c is string => typeof c === 'string' && VALID_CONDITIONS.has(c));
+
+  const token = db.prepare('SELECT t.*, cnpc.category_id FROM tokens t LEFT JOIN campaign_npcs cnpc ON cnpc.id = t.campaign_npc_id WHERE t.id = ?')
+    .get(id) as TokenRow | undefined;
+  if (!token) return res.status(404).json({ error: 'Token not found' });
+
+  const campaign = getCampaignForMap(token.map_id);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+  const isDmOrAdmin = req.user!.role === 'admin' || req.user!.id === campaign.dm_id;
+  if (!isDmOrAdmin) return res.status(403).json({ error: 'DM access required' });
+
+  const json = JSON.stringify(conditions);
+  db.prepare('UPDATE tokens SET conditions = ? WHERE id = ?').run(json, id);
+  broadcastFiltered(campaign.id, 'token:conditions_updated', { token_id: id, conditions }, () => true);
+  res.json({ token_id: id, conditions });
+});
+
 // Suppress unused export warning
 void tokenFilter;
 

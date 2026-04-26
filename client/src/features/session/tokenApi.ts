@@ -32,6 +32,13 @@ export async function updateTokenHp(id: number, hpCurrent: number): Promise<{ to
   });
 }
 
+export async function updateTokenConditions(id: number, conditions: string[]): Promise<{ token_id: number; conditions: string[] }> {
+  return apiFetch(`/tokens/${id}/conditions`, {
+    method: 'PATCH',
+    body: JSON.stringify({ conditions }),
+  });
+}
+
 export async function listCampaignNpcs(campaignId: number): Promise<CampaignNpc[]> {
   const res = await apiFetch<{ npcs: CampaignNpc[] }>(`/campaign-npcs?campaign_id=${campaignId}`);
   return res.npcs;

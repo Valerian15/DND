@@ -7,22 +7,42 @@ import { ABILITY_ORDER, ABILITY_NAMES } from '../character/types';
 import type { Character } from '../character/types';
 import { updateTokenHp } from './tokenApi';
 
+export const CONDITIONS = [
+  'blinded', 'charmed', 'deafened', 'exhaustion', 'frightened', 'grappled',
+  'incapacitated', 'invisible', 'paralyzed', 'petrified', 'poisoned',
+  'prone', 'restrained', 'stunned', 'unconscious',
+] as const;
+
+export type Condition = typeof CONDITIONS[number];
+
+export const CONDITION_COLORS: Record<string, string> = {
+  blinded: '#555', charmed: '#c55a8a', deafened: '#7a7a55',
+  exhaustion: '#7a5a3a', frightened: '#7a3a8a', grappled: '#7a5a2a',
+  incapacitated: '#aa2222', invisible: '#4488aa', paralyzed: '#cc5500',
+  petrified: '#5577aa', poisoned: '#228844', prone: '#997722',
+  restrained: '#884422', stunned: '#cc6600', unconscious: '#222',
+};
+
 interface Props {
   characterId: number;
   tokenId: number;
   canEditHp: boolean;
+  canEditConditions: boolean;
+  conditions: string[];
+  onConditionsChange: (conditions: string[]) => Promise<void>;
   onClose: () => void;
 }
 
 const ABILITY_SHORT: Record<string, string> = { str: 'STR', dex: 'DEX', con: 'CON', int: 'INT', wis: 'WIS', cha: 'CHA' };
 
-export function InGameSheet({ characterId, tokenId, canEditHp, onClose }: Props) {
+export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions, conditions, onConditionsChange, onClose }: Props) {
   const [character, setCharacter] = useState<Character | null>(null);
   const [loading, setLoading] = useState(true);
   const [hpCurrent, setHpCurrent] = useState(0);
   const [hpInput, setHpInput] = useState('');
   const [hpInputMode, setHpInputMode] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [condSaving, setCondSaving] = useState(false);
 
   useEffect(() => {
     getCharacter(characterId)
@@ -31,10 +51,14 @@ export function InGameSheet({ characterId, tokenId, canEditHp, onClose }: Props)
       .finally(() => setLoading(false));
   }, [characterId]);
 
+  // Keep local HP in sync when socket updates arrive via parent
+  useEffect(() => {
+    if (character) setHpCurrent(character.hp_current);
+  }, [character?.hp_current]);
+
   async function adjustHp(delta: number) {
     if (!character || saving) return;
-    const next = Math.max(0, Math.min(character.hp_max, hpCurrent + delta));
-    await commitHp(next);
+    await commitHp(Math.max(0, Math.min(character.hp_max, hpCurrent + delta)));
   }
 
   async function commitHpInput() {
@@ -49,9 +73,18 @@ export function InGameSheet({ characterId, tokenId, canEditHp, onClose }: Props)
     try {
       const result = await updateTokenHp(tokenId, next);
       setHpCurrent(result.hp_current);
-      setCharacter((c) => c ? { ...c, hp_current: result.hp_current } : c);
     } catch { /* ignore */ }
     finally { setSaving(false); }
+  }
+
+  async function toggleCondition(cond: string) {
+    if (!canEditConditions || condSaving) return;
+    const next = conditions.includes(cond)
+      ? conditions.filter((c) => c !== cond)
+      : [...conditions, cond];
+    setCondSaving(true);
+    try { await onConditionsChange(next); }
+    finally { setCondSaving(false); }
   }
 
   if (loading) return (
@@ -83,56 +116,66 @@ export function InGameSheet({ characterId, tokenId, canEditHp, onClose }: Props)
         )}
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: '1.05rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{character.name}</div>
-          <div style={{ fontSize: '0.8rem', color: '#666' }}>Level {character.level}{character.class_slug ? ` · ${character.class_slug}` : ''}{character.race_slug ? ` · ${character.race_slug}` : ''}</div>
+          <div style={{ fontSize: '0.8rem', color: '#666' }}>
+            Level {character.level}{character.class_slug ? ` · ${character.class_slug}` : ''}{character.race_slug ? ` · ${character.race_slug}` : ''}
+          </div>
         </div>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 1rem' }}>
 
-        {/* HP Section */}
+        {/* HP */}
         <Section title="Hit Points">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-            {canEditHp ? (
-              <>
-                <HpBtn label="−10" onClick={() => adjustHp(-10)} disabled={saving || hpCurrent === 0} />
-                <HpBtn label="−5" onClick={() => adjustHp(-5)} disabled={saving || hpCurrent === 0} />
-                <HpBtn label="−1" onClick={() => adjustHp(-1)} disabled={saving || hpCurrent === 0} />
-                {hpInputMode ? (
-                  <input
-                    type="number"
-                    value={hpInput}
-                    onChange={(e) => setHpInput(e.target.value)}
-                    onBlur={commitHpInput}
-                    onKeyDown={(e) => { if (e.key === 'Enter') commitHpInput(); if (e.key === 'Escape') setHpInputMode(false); }}
-                    autoFocus
-                    style={{ width: 52, textAlign: 'center', padding: '0.25rem', border: '1px solid #aaa', borderRadius: 4, fontSize: '1.1rem', fontWeight: 700 }}
-                  />
-                ) : (
-                  <div
-                    onClick={() => { setHpInput(String(hpCurrent)); setHpInputMode(true); }}
-                    style={{ minWidth: 52, textAlign: 'center', fontSize: '1.3rem', fontWeight: 700, cursor: 'text', padding: '0.1rem 0.3rem', borderRadius: 4, border: '1px solid transparent' }}
-                    title="Click to set HP directly"
-                  >
-                    {hpCurrent}
-                  </div>
-                )}
-                <HpBtn label="+1" onClick={() => adjustHp(1)} disabled={saving || hpCurrent >= character.hp_max} />
-                <HpBtn label="+5" onClick={() => adjustHp(5)} disabled={saving || hpCurrent >= character.hp_max} />
-                <HpBtn label="+10" onClick={() => adjustHp(10)} disabled={saving || hpCurrent >= character.hp_max} />
-              </>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+            {canEditHp && <HpBtn label="−10" onClick={() => adjustHp(-10)} disabled={saving || hpCurrent === 0} />}
+            {canEditHp && <HpBtn label="−5" onClick={() => adjustHp(-5)} disabled={saving || hpCurrent === 0} />}
+            {canEditHp && <HpBtn label="−1" onClick={() => adjustHp(-1)} disabled={saving || hpCurrent === 0} />}
+            {hpInputMode && canEditHp ? (
+              <input type="number" value={hpInput} onChange={(e) => setHpInput(e.target.value)}
+                onBlur={commitHpInput}
+                onKeyDown={(e) => { if (e.key === 'Enter') commitHpInput(); if (e.key === 'Escape') setHpInputMode(false); }}
+                autoFocus style={{ width: 52, textAlign: 'center', padding: '0.25rem', border: '1px solid #aaa', borderRadius: 4, fontSize: '1.1rem', fontWeight: 700 }} />
             ) : (
-              <div style={{ fontSize: '1.3rem', fontWeight: 700 }}>{hpCurrent}</div>
+              <div onClick={canEditHp ? () => { setHpInput(String(hpCurrent)); setHpInputMode(true); } : undefined}
+                style={{ minWidth: 52, textAlign: 'center', fontSize: '1.3rem', fontWeight: 700, cursor: canEditHp ? 'text' : 'default', padding: '0.1rem 0.3rem', borderRadius: 4 }}
+                title={canEditHp ? 'Click to set HP directly' : undefined}>
+                {hpCurrent}
+              </div>
             )}
             <span style={{ color: '#888', fontSize: '0.9rem' }}>/ {character.hp_max}</span>
-            {character.hp_temp > 0 && <span style={{ fontSize: '0.82rem', color: '#55a', marginLeft: '0.25rem' }}>+{character.hp_temp} temp</span>}
+            {character.hp_temp > 0 && <span style={{ fontSize: '0.82rem', color: '#55a' }}>+{character.hp_temp} temp</span>}
+            {canEditHp && <HpBtn label="+1" onClick={() => adjustHp(1)} disabled={saving || hpCurrent >= character.hp_max} />}
+            {canEditHp && <HpBtn label="+5" onClick={() => adjustHp(5)} disabled={saving || hpCurrent >= character.hp_max} />}
+            {canEditHp && <HpBtn label="+10" onClick={() => adjustHp(10)} disabled={saving || hpCurrent >= character.hp_max} />}
           </div>
-          {/* HP bar */}
           <div style={{ height: 8, background: '#ddd', borderRadius: 4 }}>
             <div style={{ height: '100%', width: `${hpPct * 100}%`, background: hpBarColor, borderRadius: 4, transition: 'width 0.3s' }} />
           </div>
         </Section>
 
-        {/* Combat stats */}
+        {/* Conditions */}
+        <Section title={`Conditions${canEditConditions ? '' : ' (view only)'}`}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+            {CONDITIONS.map((cond) => {
+              const active = conditions.includes(cond);
+              return (
+                <button key={cond} onClick={() => toggleCondition(cond)} disabled={!canEditConditions || condSaving}
+                  style={{
+                    padding: '0.2rem 0.5rem', borderRadius: 4, fontSize: '0.75rem', fontWeight: active ? 700 : 400,
+                    border: `1px solid ${active ? CONDITION_COLORS[cond] : '#ddd'}`,
+                    background: active ? CONDITION_COLORS[cond] : '#f9f9f9',
+                    color: active ? '#fff' : '#888',
+                    cursor: canEditConditions ? 'pointer' : 'default',
+                    textTransform: 'capitalize',
+                  }}>
+                  {cond}
+                </button>
+              );
+            })}
+          </div>
+        </Section>
+
+        {/* Combat */}
         <Section title="Combat">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', textAlign: 'center' }}>
             {[
@@ -149,7 +192,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, onClose }: Props)
           </div>
         </Section>
 
-        {/* Ability scores */}
+        {/* Abilities */}
         <Section title="Abilities">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '0.4rem', textAlign: 'center' }}>
             {ABILITY_ORDER.map((key) => {
@@ -166,7 +209,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, onClose }: Props)
           </div>
         </Section>
 
-        {/* Saving throws */}
+        {/* Saving Throws */}
         <Section title="Saving Throws">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.2rem 1rem' }}>
             {ABILITY_ORDER.map((key) => {
@@ -217,15 +260,8 @@ export function InGameSheet({ characterId, tokenId, canEditHp, onClose }: Props)
 function SheetOverlay({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
   return (
     <>
-      <div
-        onClick={onClose}
-        style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.2)' }}
-      />
-      <div style={{
-        position: 'fixed', top: 0, right: 0, bottom: 0, zIndex: 101,
-        width: 380, background: '#fff', boxShadow: '-4px 0 16px rgba(0,0,0,0.15)',
-        display: 'flex', flexDirection: 'column', fontFamily: 'system-ui',
-      }}>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.2)' }} />
+      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, zIndex: 101, width: 380, background: '#fff', boxShadow: '-4px 0 16px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 1rem', borderBottom: '1px solid #eee', flexShrink: 0, background: '#fafafa' }}>
           <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Character Sheet</span>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.1rem', color: '#888', lineHeight: 1 }}>✕</button>
@@ -247,11 +283,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function HpBtn({ label, onClick, disabled }: { label: string; onClick: () => void; disabled: boolean }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      style={{ padding: '0.25rem 0.4rem', fontSize: '0.8rem', border: '1px solid #ccc', borderRadius: 4, cursor: disabled ? 'not-allowed' : 'pointer', background: disabled ? '#f5f5f5' : '#fff', color: disabled ? '#bbb' : '#333', fontWeight: 600, lineHeight: 1 }}
-    >
+    <button onClick={onClick} disabled={disabled}
+      style={{ padding: '0.25rem 0.4rem', fontSize: '0.8rem', border: '1px solid #ccc', borderRadius: 4, cursor: disabled ? 'not-allowed' : 'pointer', background: disabled ? '#f5f5f5' : '#fff', color: disabled ? '#bbb' : '#333', fontWeight: 600, lineHeight: 1 }}>
       {label}
     </button>
   );

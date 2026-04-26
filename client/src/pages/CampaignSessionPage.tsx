@@ -4,7 +4,7 @@ import { useAuth } from '../features/auth/AuthContext';
 import { getCampaign } from '../features/campaign/api';
 import { useSession } from '../features/session/useSession';
 import { listMaps, createMap, deleteMap, activateMap, updateMap } from '../features/session/mapApi';
-import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenHp } from '../features/session/tokenApi';
+import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenHp, updateTokenConditions } from '../features/session/tokenApi';
 import { InGameSheet } from '../features/session/InGameSheet';
 import { socket } from '../lib/socket';
 import type { Campaign } from '../features/campaign/types';
@@ -314,6 +314,11 @@ export default function CampaignSessionPage() {
       setPanel((p) => p?.type === 'npc' ? { ...p, token: { ...p.token, hp_current: result.hp_current } } : p);
     } catch (e: any) { setError(e.message); }
     finally { setNpcHpSaving(false); }
+  }
+
+  async function handleTokenConditionsChange(tokenId: number, conditions: string[]) {
+    try { await updateTokenConditions(tokenId, conditions); }
+    catch (e: any) { setError(e.message); }
   }
 
   async function handleRemoveToken(tokenId: number) {
@@ -669,14 +674,20 @@ export default function CampaignSessionPage() {
       </div>
 
       {/* In-game character sheet panel */}
-      {panel?.type === 'character' && (
-        <InGameSheet
-          characterId={panel.characterId}
-          tokenId={panel.tokenId}
-          canEditHp={panel.canEdit}
-          onClose={() => setPanel(null)}
-        />
-      )}
+      {panel?.type === 'character' && (() => {
+        const token = tokens.find((t) => t.id === panel.tokenId);
+        return (
+          <InGameSheet
+            characterId={panel.characterId}
+            tokenId={panel.tokenId}
+            canEditHp={panel.canEdit}
+            canEditConditions={isDmOrAdmin}
+            conditions={token?.conditions ?? []}
+            onConditionsChange={(conditions) => handleTokenConditionsChange(panel.tokenId, conditions)}
+            onClose={() => setPanel(null)}
+          />
+        );
+      })()}
 
       {/* NPC HP panel (DM only) */}
       {panel?.type === 'npc' && (
