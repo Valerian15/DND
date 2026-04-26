@@ -187,11 +187,16 @@ router.post('/', (req: AuthRequest, res) => {
     'INSERT INTO campaigns (dm_id, name, description, invite_code) VALUES (?, ?, ?, ?)'
   ).run(req.user!.id, name.trim(), typeof description === 'string' ? description.trim() : '', invite_code);
 
+  const campaignId = info.lastInsertRowid as number;
+  // Seed the two default token categories every campaign starts with
+  db.prepare('INSERT INTO campaign_token_categories (campaign_id, name, is_default, sort_order) VALUES (?, ?, 1, 0)').run(campaignId, 'Player Characters');
+  db.prepare('INSERT INTO campaign_token_categories (campaign_id, name, is_default, sort_order) VALUES (?, ?, 1, 1)').run(campaignId, 'NPCs');
+
   const created = db.prepare(`
     SELECT c.*, u.username AS dm_username
     FROM campaigns c JOIN users u ON u.id = c.dm_id
     WHERE c.id = ?
-  `).get(info.lastInsertRowid) as CampaignRow & { dm_username: string };
+  `).get(campaignId) as CampaignRow & { dm_username: string };
 
   res.status(201).json({
     campaign: { ...created, settings: hydrateSettings(created.settings), members: [] },

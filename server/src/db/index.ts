@@ -197,6 +197,66 @@ export function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_members_character ON campaign_members(character_id);
     CREATE INDEX IF NOT EXISTS idx_campaign_members_campaign ON campaign_members(campaign_id);
 
+    -- TOKEN CATEGORIES (DM-defined groupings, two defaults seeded on campaign create)
+
+    CREATE TABLE IF NOT EXISTS campaign_token_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_token_categories_campaign ON campaign_token_categories(campaign_id);
+
+    -- NPC TEMPLATES (DM prepares before session)
+
+    CREATE TABLE IF NOT EXISTS campaign_npcs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      category_id INTEGER,
+      label TEXT NOT NULL,
+      portrait_url TEXT,
+      size TEXT NOT NULL DEFAULT 'medium'
+        CHECK (size IN ('tiny','small','medium','large','huge','gargantuan')),
+      hp_max INTEGER NOT NULL DEFAULT 10,
+      notes TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+      FOREIGN KEY (category_id) REFERENCES campaign_token_categories(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_campaign_npcs_campaign ON campaign_npcs(campaign_id);
+
+    -- MAP TOKENS (instances on a map)
+
+    CREATE TABLE IF NOT EXISTS tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      map_id INTEGER NOT NULL,
+      token_type TEXT NOT NULL DEFAULT 'npc' CHECK (token_type IN ('pc', 'npc')),
+      character_id INTEGER,
+      campaign_npc_id INTEGER,
+      label TEXT NOT NULL,
+      portrait_url TEXT,
+      size TEXT NOT NULL DEFAULT 'medium'
+        CHECK (size IN ('tiny','small','medium','large','huge','gargantuan')),
+      col INTEGER NOT NULL DEFAULT 0,
+      row INTEGER NOT NULL DEFAULT 0,
+      hp_current INTEGER NOT NULL DEFAULT 0,
+      hp_max INTEGER NOT NULL DEFAULT 0,
+      hp_visible INTEGER NOT NULL DEFAULT 1,
+      controlled_by TEXT NOT NULL DEFAULT '[]',
+      conditions TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (map_id) REFERENCES maps(id) ON DELETE CASCADE,
+      FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE SET NULL,
+      FOREIGN KEY (campaign_npc_id) REFERENCES campaign_npcs(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tokens_map ON tokens(map_id);
+
     -- MAPS
 
     CREATE TABLE IF NOT EXISTS maps (

@@ -12,6 +12,9 @@ import campaignRoutes from './routes/campaigns.js';
 import { setupSession, type AppServer } from './session.js';
 import { setIo } from './io.js';
 import mapRoutes from './routes/maps.js';
+import tokenRoutes from './routes/tokens.js';
+import campaignNpcRoutes from './routes/campaignNpcs.js';
+import tokenCategoryRoutes from './routes/tokenCategories.js';
 
 initSchema();
 
@@ -34,6 +37,9 @@ app.use('/api/library', libraryRoutes);
 app.use('/api/characters', characterRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/maps', mapRoutes);
+app.use('/api/tokens', tokenRoutes);
+app.use('/api/campaign-npcs', campaignNpcRoutes);
+app.use('/api/token-categories', tokenCategoryRoutes);
 
 const httpServer = createServer(app);
 
