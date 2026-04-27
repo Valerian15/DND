@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { requireAuth, type AuthRequest } from '../auth/index.js';
-import { getIo } from '../io.js';
+import { getIo, broadcastFiltered } from '../io.js';
+import { computeAndSaveFog } from '../vision.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -14,6 +15,7 @@ interface MapRow {
   grid_size: number;
   grid_offset_x: number;
   grid_offset_y: number;
+  fog_enabled: number;
   created_at: number;
 }
 
@@ -134,6 +136,37 @@ router.delete('/:id', (req: AuthRequest, res) => {
   }
 
   db.prepare('DELETE FROM maps WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
+// Toggle fog on/off for a map
+router.post('/:id/fog/toggle', (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT * FROM maps WHERE id = ?').get(id) as MapRow | undefined;
+  if (!row) return res.status(404).json({ error: 'Map not found' });
+  const campaign = getCampaignForMap(row.campaign_id);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  if (!isDmOrAdmin(req, campaign.dm_id)) return res.status(403).json({ error: 'DM access required' });
+
+  const newVal = row.fog_enabled ? 0 : 1;
+  db.prepare('UPDATE maps SET fog_enabled = ? WHERE id = ?').run(newVal, id);
+  const updated = db.prepare('SELECT * FROM maps WHERE id = ?').get(id) as MapRow;
+  broadcastFiltered(row.campaign_id, 'map:fog_toggled', { map_id: id, fog_enabled: newVal }, () => true);
+  res.json({ map: updated });
+});
+
+// Reset fog — clears all explored cells for a map
+router.post('/:id/fog/reset', (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT * FROM maps WHERE id = ?').get(id) as MapRow | undefined;
+  if (!row) return res.status(404).json({ error: 'Map not found' });
+  const campaign = getCampaignForMap(row.campaign_id);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  if (!isDmOrAdmin(req, campaign.dm_id)) return res.status(403).json({ error: 'DM access required' });
+
+  db.prepare('DELETE FROM map_fog WHERE map_id = ?').run(id);
+  const fog = computeAndSaveFog(id);
+  broadcastFiltered(row.campaign_id, 'fog:update', fog, () => true);
   res.json({ ok: true });
 });
 

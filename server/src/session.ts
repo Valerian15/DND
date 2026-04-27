@@ -3,6 +3,7 @@ import { verifyToken, type AuthUser } from './auth/index.js';
 import { db } from './db/index.js';
 import { broadcastFiltered } from './io.js';
 import { canUserSeeToken, hydrateToken, type TokenRow } from './routes/tokens.js';
+import { computeAndSaveFog } from './vision.js';
 
 interface OnlineUser {
   user_id: number;
@@ -53,12 +54,17 @@ interface InitiativeEntryRow {
   created_at: number;
 }
 
+interface WallRow { id: number; map_id: number; x1: number; y1: number; x2: number; y2: number; created_at: number }
+
 interface ServerToClientEvents {
   'session:state': (state: {
     online: OnlineUser[];
     active_map: MapRow | null;
     chat_history: ChatMessageOut[];
     initiative: InitiativeEntryRow[];
+    walls: WallRow[];
+    fog_visible: [number, number][];
+    fog_explored: [number, number][];
   }) => void;
   'session:presence': (data: { online: OnlineUser[] }) => void;
   'map:switched': (map: MapRow | null) => void;
@@ -173,11 +179,20 @@ export function setupSession(io: AppServer) {
         role: user.role,
       });
 
+      const activeMapNow = getActiveMap(campaign_id);
+      const walls = activeMapNow
+        ? db.prepare('SELECT * FROM map_walls WHERE map_id = ? ORDER BY id ASC').all(activeMapNow.id) as WallRow[]
+        : [];
+      const fog = activeMapNow ? computeAndSaveFog(activeMapNow.id) : { visible: [], explored: [] };
+
       socket.emit('session:state', {
         online: onlineList(campaign_id),
-        active_map: getActiveMap(campaign_id),
+        active_map: activeMapNow,
         chat_history: getRecentMessages(campaign_id),
         initiative: getInitiative(campaign_id),
+        walls,
+        fog_visible: fog.visible,
+        fog_explored: fog.explored,
       });
 
       io.to(room).emit('session:presence', { online: onlineList(campaign_id) });
@@ -215,6 +230,15 @@ export function setupSession(io: AppServer) {
         { token_id, col, row },
         (uid, role) => role === 'admin' || canUserSeeToken(uid, { ...token, col, row }, dmId),
       );
+
+      // Recompute fog whenever a PC moves
+      if (token.token_type === 'pc') {
+        const activeMapNow = getActiveMap(campaign_id);
+        if (activeMapNow) {
+          const fog = computeAndSaveFog(activeMapNow.id);
+          broadcastFiltered(campaign_id, 'fog:update', fog, () => true);
+        }
+      }
     });
 
     socket.on('chat:send', ({ body }) => {

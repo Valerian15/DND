@@ -1,11 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '../features/session/types';
+
+// ---- wall-editor helpers ------------------------------------------------
+
+function snapToGrid(px: number, py: number, map: MapData): { x: number; y: number } {
+  const gs = map.grid_size;
+  const ox = ((map.grid_offset_x % gs) + gs) % gs;
+  const oy = ((map.grid_offset_y % gs) + gs) % gs;
+  return { x: ox + Math.round((px - ox) / gs) * gs, y: oy + Math.round((py - oy) / gs) * gs };
+}
+
+function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1, dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-10) return Math.hypot(px - x1, py - y1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../features/auth/AuthContext';
 import { getCampaign } from '../features/campaign/api';
 import { useSession } from '../features/session/useSession';
-import { listMaps, createMap, deleteMap, activateMap, updateMap } from '../features/session/mapApi';
+import { listMaps, createMap, deleteMap, activateMap, updateMap, toggleFog, resetFog } from '../features/session/mapApi';
 import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenHp, updateTokenConditions } from '../features/session/tokenApi';
+import { createWall, deleteWall, clearWalls } from '../features/session/wallApi';
+import type { WallSegment } from '../features/session/types';
 import { InGameSheet, CONDITION_COLORS } from '../features/session/InGameSheet';
 import { socket } from '../lib/socket';
 import type { Campaign } from '../features/campaign/types';
@@ -31,16 +50,27 @@ function pxToCell(px: number, py: number, map: MapData) {
   };
 }
 
-function GridOverlay({ map, width, height }: { map: MapData; width: number; height: number }) {
-  const lines: React.ReactNode[] = [];
+function GridOverlay({ map, width, height, color, bold }: { map: MapData; width: number; height: number; color: string; bold: boolean }) {
   const { grid_size: gs, grid_offset_x: ox, grid_offset_y: oy } = map;
-  for (let x = ox % gs; x <= width; x += gs)
-    lines.push(<line key={`v${x}`} x1={x} y1={0} x2={x} y2={height} stroke="#333" strokeWidth={0.5} strokeOpacity={0.5} />);
-  for (let y = oy % gs; y <= height; y += gs)
-    lines.push(<line key={`h${y}`} x1={0} y1={y} x2={width} y2={y} stroke="#333" strokeWidth={0.5} strokeOpacity={0.5} />);
+  if (gs <= 0) return null;
+  const sw = bold ? 2.5 : 1;
+  const fgOpacity = bold ? 0.85 : 0.55;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let x = ((ox % gs) + gs) % gs; x <= width; x += gs) xs.push(x);
+  for (let y = ((oy % gs) + gs) % gs; y <= height; y += gs) ys.push(y);
   return (
     <svg style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }} width={width} height={height}>
-      {lines}
+      {/* White halo — makes lines visible on dark backgrounds */}
+      <g stroke="white" strokeWidth={sw + 2} strokeOpacity={0.35}>
+        {xs.map((x) => <line key={`vb${x}`} x1={x} y1={0} x2={x} y2={height} />)}
+        {ys.map((y) => <line key={`hb${y}`} x1={0} y1={y} x2={width} y2={y} />)}
+      </g>
+      {/* Foreground color line */}
+      <g stroke={color} strokeWidth={sw} strokeOpacity={fgOpacity}>
+        {xs.map((x) => <line key={`v${x}`} x1={x} y1={0} x2={x} y2={height} />)}
+        {ys.map((y) => <line key={`h${y}`} x1={0} y1={y} x2={width} y2={y} />)}
+      </g>
     </svg>
   );
 }
@@ -52,7 +82,7 @@ interface TokenOnMapProps {
   dragCol?: number;
   dragRow?: number;
   canMove: boolean;
-  onPointerDown: (e: React.PointerEvent) => void;
+  onPointerDown?: (e: React.PointerEvent) => void;
 }
 
 function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, onPointerDown }: TokenOnMapProps) {
@@ -189,6 +219,17 @@ export default function CampaignSessionPage() {
   const [drag, setDrag] = useState<{ tokenId: number; ghostCol: number; ghostRow: number } | null>(null);
   const [pointerDown, setPointerDown] = useState<{ token: TokenData; startX: number; startY: number } | null>(null);
 
+  // Grid style
+  const [gridColor, setGridColor] = useState('#000000');
+  const [gridBold, setGridBold] = useState(false);
+
+  // Wall editor
+  const [wallMode, setWallMode] = useState(false);
+  const [wallDrawStart, setWallDrawStart] = useState<{ x: number; y: number } | null>(null);
+  const [wallDrawEnd, setWallDrawEnd] = useState<{ x: number; y: number } | null>(null);
+  const wallDrawStartRef = useRef<{ x: number; y: number } | null>(null);
+  const fogCanvasRef = useRef<HTMLCanvasElement>(null);
+
   // Chat
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
@@ -211,8 +252,11 @@ export default function CampaignSessionPage() {
   const [npcHp, setNpcHp] = useState(0);
   const [npcHpSaving, setNpcHpSaving] = useState(false);
 
-  const { online, connected, activeMap, setActiveMap, tokens, messages, initiative } = useSession(Number(id));
+  const { online, connected, activeMap, setActiveMap, tokens, messages, initiative, walls, fogVisible, fogExplored } = useSession(Number(id));
   const isDmOrAdmin = campaign ? (campaign.dm_id === user!.id || user!.role === 'admin') : false;
+  const previewMap: MapData | null = activeMap
+    ? { ...activeMap, grid_size: gridSize, grid_offset_x: gridOffsetX, grid_offset_y: gridOffsetY }
+    : null;
 
   useEffect(() => {
     getCampaign(Number(id))
@@ -220,6 +264,7 @@ export default function CampaignSessionPage() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [id]);
+
 
   useEffect(() => {
     if (!isDmOrAdmin || !campaign) return;
@@ -241,12 +286,22 @@ export default function CampaignSessionPage() {
       setGridOffsetX(activeMap.grid_offset_x);
       setGridOffsetY(activeMap.grid_offset_y);
       setActiveMapId(activeMap.id);
+      setImgSize({ w: 0, h: 0 });
+      setZoom(1);
     } else {
       setActiveMapId(null);
+      setImgSize({ w: 0, h: 0 });
     }
-    setImgSize({ w: 0, h: 0 });
-    setZoom(1);
-  }, [activeMap]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMap?.id]);
+
+  // Catch cached images: if the img is already complete by the time the effect runs, onLoad won't fire
+  useEffect(() => {
+    const img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0) {
+      setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
+    }
+  }, [activeMap?.id]);
 
   // Chat auto-scroll
   useEffect(() => {
@@ -274,6 +329,91 @@ export default function CampaignSessionPage() {
     const val = parseInt(editingInitiativeValue, 10);
     if (!isNaN(val)) socket.emit('initiative:set', { id, initiative: val });
     setEditingInitiativeId(null);
+  }
+
+  // Fog canvas — redraws whenever fog state or image size changes
+  useEffect(() => {
+    if (isDmOrAdmin) return;
+    const canvas = fogCanvasRef.current;
+    const img = imgRef.current;
+    if (!canvas || !previewMap || !img) return;
+    const w = img.naturalWidth || imgSize.w;
+    const h = img.naturalHeight || imgSize.h;
+    if (!w || !h) return;
+
+    const fogOn = !!activeMap?.fog_enabled;
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    if (!fogOn) {
+      // Fog disabled — clear canvas so map is fully visible
+      ctx.clearRect(0, 0, w, h);
+      return;
+    }
+
+    const gs = previewMap.grid_size;
+    if (gs <= 0) return;
+    const ox = ((previewMap.grid_offset_x % gs) + gs) % gs;
+    const oy = ((previewMap.grid_offset_y % gs) + gs) % gs;
+    const visibleSet = new Set(fogVisible.map(([c, r]) => `${c},${r}`));
+    const exploredSet = new Set(fogExplored.map(([c, r]) => `${c},${r}`));
+
+    // Start fully black (unseen)
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(0,0,0,1)';
+    ctx.fillRect(0, 0, w, h);
+
+    // Currently visible: fully transparent (map shows through)
+    ctx.globalCompositeOperation = 'copy';
+    ctx.fillStyle = 'rgba(0,0,0,0)';
+    for (const [c, r] of fogVisible) {
+      ctx.fillRect(ox + c * gs, oy + r * gs, gs, gs);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }, [fogVisible, fogExplored, imgSize, previewMap, isDmOrAdmin, activeMap?.fog_enabled]);
+
+  // Wall editor pointer handlers — all three live on the same element (innerMapRef)
+  // so pointer capture works reliably without cross-element handoff.
+  function handleWallPointerDown(e: React.PointerEvent) {
+    if (!activeMap) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const snapped = snapToGrid((e.clientX - rect.left) / zoom, (e.clientY - rect.top) / zoom, activeMap);
+    wallDrawStartRef.current = snapped;
+    setWallDrawStart(snapped);
+    setWallDrawEnd(snapped);
+  }
+
+  function handleWallPointerMove(e: React.PointerEvent) {
+    if (!wallDrawStartRef.current || !activeMap) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const snapped = snapToGrid((e.clientX - rect.left) / zoom, (e.clientY - rect.top) / zoom, activeMap);
+    setWallDrawEnd(snapped);
+  }
+
+  function handleWallPointerUp(e: React.PointerEvent) {
+    const start = wallDrawStartRef.current;
+    if (!start || !activeMap) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const snap = snapToGrid((e.clientX - rect.left) / zoom, (e.clientY - rect.top) / zoom, activeMap);
+    const moved = Math.hypot(snap.x - start.x, snap.y - start.y);
+    if (moved < 2) {
+      const px = (e.clientX - rect.left) / zoom;
+      const py = (e.clientY - rect.top) / zoom;
+      const hit = walls.reduce<{ wall: WallSegment | null; dist: number }>(
+        (best, w) => { const d = distToSegment(px, py, w.x1, w.y1, w.x2, w.y2); return d < best.dist ? { wall: w, dist: d } : best; },
+        { wall: null, dist: 12 }
+      );
+      if (hit.wall) deleteWall(activeMap.id, hit.wall.id).catch((err: Error) => setError(err.message));
+    } else {
+      createWall(activeMap.id, { x1: start.x, y1: start.y, x2: snap.x, y2: snap.y })
+        .catch((err: Error) => setError(err.message));
+    }
+    wallDrawStartRef.current = null;
+    setWallDrawStart(null);
+    setWallDrawEnd(null);
   }
 
   function canMoveToken(token: TokenData): boolean {
@@ -404,10 +544,6 @@ export default function CampaignSessionPage() {
     setCollapsedSections((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   }
 
-  const previewMap: MapData | null = activeMap
-    ? { ...activeMap, grid_size: gridSize, grid_offset_x: gridOffsetX, grid_offset_y: gridOffsetY }
-    : null;
-
   if (loading) return <div style={{ padding: '2rem' }}>Loading session…</div>;
   if (error && !campaign) return <div style={{ padding: '2rem', color: 'crimson' }}>{error}</div>;
   if (!campaign) return null;
@@ -438,6 +574,54 @@ export default function CampaignSessionPage() {
             <button onClick={() => socket.emit('initiative:roll')} title="Roll initiative for all map tokens" style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', color: '#333', fontSize: '0.85rem' }}>
               ⚔ Initiative
             </button>
+          )}
+          {isDmOrAdmin && activeMap && (
+            <button
+              onClick={() => setWallMode((w) => !w)}
+              title={wallMode ? 'Exit wall editor (click wall to delete, drag to draw)' : 'Enter wall editor'}
+              style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: `1px solid ${wallMode ? '#c44' : '#ccc'}`, borderRadius: 4, background: wallMode ? '#fdecea' : '#fff', color: wallMode ? '#c44' : '#333', fontSize: '0.85rem', fontWeight: wallMode ? 700 : 400 }}
+            >
+              🧱 {wallMode ? 'Walls ON' : 'Walls'}
+            </button>
+          )}
+          {isDmOrAdmin && activeMap && walls.length > 0 && (
+            <button onClick={() => { if (confirm('Clear all walls on this map?')) clearWalls(activeMap.id).catch((e: Error) => setError(e.message)); }} style={{ padding: '0.3rem 0.6rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 4, background: '#fff', color: 'crimson', fontSize: '0.8rem' }} title="Delete all walls">
+              Clear walls
+            </button>
+          )}
+          {isDmOrAdmin && activeMap && (
+            <>
+              <button
+                onClick={() => toggleFog(activeMap.id).then((m) => setActiveMap(m)).catch((e: Error) => setError(e.message))}
+                title={activeMap.fog_enabled ? 'Fog ON — click to disable' : 'Fog OFF — click to enable'}
+                style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: `1px solid ${activeMap.fog_enabled ? '#448' : '#ccc'}`, borderRadius: 4, background: activeMap.fog_enabled ? '#eef' : '#fff', color: activeMap.fog_enabled ? '#448' : '#333', fontSize: '0.85rem', fontWeight: activeMap.fog_enabled ? 700 : 400 }}
+              >
+                🌫 {activeMap.fog_enabled ? 'Fog ON' : 'Fog OFF'}
+              </button>
+              {activeMap.fog_enabled ? (
+                <button
+                  onClick={() => { if (confirm('Reset fog? All explored cells will be cleared.')) resetFog(activeMap.id).catch((e: Error) => setError(e.message)); }}
+                  style={{ padding: '0.3rem 0.6rem', cursor: 'pointer', border: '1px solid #cce', borderRadius: 4, background: '#fff', color: '#448', fontSize: '0.8rem' }}
+                  title="Clear all explored fog"
+                >
+                  Reset fog
+                </button>
+              ) : null}
+            </>
+          )}
+          {activeMap && (
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }} title="Grid colour">
+              <label style={{ fontSize: '0.78rem', color: '#555', cursor: 'pointer' }}>
+                Grid
+                <input type="color" value={gridColor} onChange={(e) => setGridColor(e.target.value)}
+                  style={{ marginLeft: '0.3rem', width: 28, height: 22, padding: 1, border: '1px solid #ccc', borderRadius: 3, cursor: 'pointer', verticalAlign: 'middle' }} />
+              </label>
+              <button
+                onClick={() => setGridBold((b) => !b)}
+                title={gridBold ? 'Bold grid (click for thin)' : 'Thin grid (click for bold)'}
+                style={{ padding: '0.2rem 0.5rem', cursor: 'pointer', border: `1px solid ${gridBold ? '#555' : '#ccc'}`, borderRadius: 4, background: gridBold ? '#333' : '#fff', color: gridBold ? '#fff' : '#555', fontSize: '0.8rem', fontWeight: 700 }}
+              >B</button>
+            </span>
           )}
           <span style={{ fontSize: '0.8rem', color: '#888' }}>Online:</span>
           {online.map((u) => (
@@ -587,6 +771,11 @@ export default function CampaignSessionPage() {
               </div>
 
               <div style={{ width: imgSize.w * zoom || '100%', height: imgSize.h * zoom || '100%', position: 'relative', minWidth: imgSize.w ? undefined : '100%', minHeight: imgSize.h ? undefined : '100%' }}>
+                {wallMode && (
+                  <div style={{ position: 'sticky', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 30, display: 'inline-block', background: 'rgba(200,50,50,0.92)', color: '#fff', fontSize: '0.78rem', fontWeight: 600, padding: '0.3rem 0.8rem', borderRadius: 12, pointerEvents: 'none', whiteSpace: 'nowrap', marginTop: 8 }}>
+                    🧱 Wall mode — drag to draw, click a wall to delete
+                  </div>
+                )}
                 <div
                   ref={innerMapRef}
                   style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', position: 'absolute', top: 0, left: 0 }}
@@ -594,14 +783,15 @@ export default function CampaignSessionPage() {
                   onDrop={handleMapDrop}
                 >
                   <img
+                    key={previewMap.id}
                     ref={imgRef}
                     src={previewMap.image_url}
                     alt={previewMap.name}
-                    onLoad={() => { if (imgRef.current) setImgSize({ w: imgRef.current.naturalWidth, h: imgRef.current.naturalHeight }); }}
+                    onLoad={(e) => { const img = e.currentTarget; setImgSize({ w: img.naturalWidth, h: img.naturalHeight }); }}
                     style={{ display: 'block', maxWidth: 'none' }}
                     draggable={false}
                   />
-                  {imgSize.w > 0 && <GridOverlay map={previewMap} width={imgSize.w} height={imgSize.h} />}
+                  {imgSize.w > 0 && <GridOverlay map={previewMap} width={imgSize.w} height={imgSize.h} color={gridColor} bold={gridBold} />}
                   {tokens.map((token) => (
                     <TokenOnMap
                       key={token.id}
@@ -611,9 +801,38 @@ export default function CampaignSessionPage() {
                       dragCol={drag?.tokenId === token.id ? drag.ghostCol : undefined}
                       dragRow={drag?.tokenId === token.id ? drag.ghostRow : undefined}
                       canMove={canMoveToken(token)}
-                      onPointerDown={(e) => handleTokenPointerDown(e, token)}
+                      onPointerDown={wallMode ? undefined : (e) => handleTokenPointerDown(e, token)}
                     />
                   ))}
+                  {/* Fog of war canvas — players only, always mounted so effect can fill black immediately */}
+                  {!isDmOrAdmin && (
+                    <canvas
+                      ref={fogCanvasRef}
+                      style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 8 }}
+                      width={imgSize.w}
+                      height={imgSize.h}
+                    />
+                  )}
+                  {/* Wall lines SVG — DM only, pointer-events none so overlay below handles input */}
+                  {isDmOrAdmin && imgSize.w > 0 && (walls.length > 0 || (wallDrawStart && wallDrawEnd)) && (
+                    <svg style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 9 }} width={imgSize.w} height={imgSize.h}>
+                      {walls.map((w) => (
+                        <line key={w.id} x1={w.x1} y1={w.y1} x2={w.x2} y2={w.y2} stroke="#dd2222" strokeWidth={3} strokeLinecap="round" />
+                      ))}
+                      {wallDrawStart && wallDrawEnd && (
+                        <line x1={wallDrawStart.x} y1={wallDrawStart.y} x2={wallDrawEnd.x} y2={wallDrawEnd.y} stroke="#dd2222" strokeWidth={3} strokeLinecap="round" strokeDasharray="8 4" />
+                      )}
+                    </svg>
+                  )}
+                  {/* Wall drawing capture overlay — transparent div that sits on top in wall mode */}
+                  {wallMode && imgSize.w > 0 && (
+                    <div
+                      style={{ position: 'absolute', top: 0, left: 0, width: imgSize.w, height: imgSize.h, zIndex: 20, cursor: 'crosshair', touchAction: 'none' }}
+                      onPointerDown={handleWallPointerDown}
+                      onPointerMove={handleWallPointerMove}
+                      onPointerUp={handleWallPointerUp}
+                    />
+                  )}
                 </div>
               </div>
             </>

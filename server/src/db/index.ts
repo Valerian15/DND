@@ -267,6 +267,7 @@ export function initSchema() {
       grid_size INTEGER NOT NULL DEFAULT 50,
       grid_offset_x INTEGER NOT NULL DEFAULT 0,
       grid_offset_y INTEGER NOT NULL DEFAULT 0,
+      fog_enabled INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
       FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
     );
@@ -303,14 +304,40 @@ export function initSchema() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_initiative_campaign ON initiative_entries(campaign_id);
+
+    -- WALLS (fog of war)
+
+    CREATE TABLE IF NOT EXISTS map_walls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      map_id INTEGER NOT NULL,
+      x1 REAL NOT NULL,
+      y1 REAL NOT NULL,
+      x2 REAL NOT NULL,
+      y2 REAL NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (map_id) REFERENCES maps(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_map_walls_map ON map_walls(map_id);
+
+    -- FOG EXPLORATION MEMORY
+
+    CREATE TABLE IF NOT EXISTS map_fog (
+      map_id INTEGER NOT NULL,
+      col INTEGER NOT NULL,
+      row INTEGER NOT NULL,
+      PRIMARY KEY (map_id, col, row)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_map_fog_map ON map_fog(map_id);
   `);
 
   // Add active_map_id to campaigns if not already present (safe to run repeatedly)
-  try {
-    db.exec('ALTER TABLE campaigns ADD COLUMN active_map_id INTEGER');
-  } catch {
-    // Column already exists — fine
-  }
+  try { db.exec('ALTER TABLE campaigns ADD COLUMN active_map_id INTEGER'); } catch { /* exists */ }
+  // Darkvision (feet) on characters — set from race data when race is selected
+  try { db.exec('ALTER TABLE characters ADD COLUMN darkvision INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  // Fog of war toggle per map
+  try { db.exec('ALTER TABLE maps ADD COLUMN fog_enabled INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
 
   console.log('✅ Database schema ready');
 }

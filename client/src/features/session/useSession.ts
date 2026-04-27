@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { socket } from '../../lib/socket';
-import type { MapData, TokenData, ChatMessage, InitiativeEntry } from './types';
+import type { MapData, TokenData, ChatMessage, InitiativeEntry, WallSegment } from './types';
 import { listTokens } from './tokenApi';
+import { listWalls, getFog } from './wallApi';
 
 export interface OnlineUser {
   user_id: number;
@@ -16,9 +17,17 @@ export function useSession(campaignId: number) {
   const [tokens, setTokens] = useState<TokenData[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [initiative, setInitiative] = useState<InitiativeEntry[]>([]);
+  const [walls, setWalls] = useState<WallSegment[]>([]);
+  const [fogVisible, setFogVisible] = useState<[number, number][]>([]);
+  const [fogExplored, setFogExplored] = useState<[number, number][]>([]);
 
   const fetchTokens = useCallback((mapId: number) => {
     listTokens(mapId).then(setTokens).catch(() => {});
+  }, []);
+
+  const fetchWallsAndFog = useCallback((mapId: number) => {
+    listWalls(mapId).then(setWalls).catch(() => {});
+    getFog(mapId).then((f) => { setFogVisible(f.visible); setFogExplored(f.explored); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -36,6 +45,9 @@ export function useSession(campaignId: number) {
       active_map: MapData | null;
       chat_history?: ChatMessage[];
       initiative?: InitiativeEntry[];
+      walls?: WallSegment[];
+      fog_visible?: [number, number][];
+      fog_explored?: [number, number][];
     }) {
       setOnline(state.online);
       setActiveMap(state.active_map ?? null);
@@ -43,6 +55,9 @@ export function useSession(campaignId: number) {
       else setTokens([]);
       if (state.chat_history) setMessages(state.chat_history);
       if (state.initiative) setInitiative(state.initiative);
+      if (state.walls) setWalls(state.walls);
+      if (state.fog_visible) setFogVisible(state.fog_visible);
+      if (state.fog_explored) setFogExplored(state.fog_explored);
     }
 
     function onPresence(data: { online: OnlineUser[] }) {
@@ -51,8 +66,15 @@ export function useSession(campaignId: number) {
 
     function onMapSwitched(map: MapData | null) {
       setActiveMap(map);
-      if (map) fetchTokens(map.id);
-      else setTokens([]);
+      if (map) {
+        fetchTokens(map.id);
+        fetchWallsAndFog(map.id);
+      } else {
+        setTokens([]);
+        setWalls([]);
+        setFogVisible([]);
+        setFogExplored([]);
+      }
     }
 
     function onTokenCreated(token: TokenData) {
@@ -89,6 +111,27 @@ export function useSession(campaignId: number) {
       setInitiative(entries);
     }
 
+    function onWallCreated(wall: WallSegment) {
+      setWalls((prev) => [...prev, wall]);
+    }
+
+    function onWallDeleted(data: { wall_id: number }) {
+      setWalls((prev) => prev.filter((w) => w.id !== data.wall_id));
+    }
+
+    function onWallCleared() {
+      setWalls([]);
+    }
+
+    function onFogUpdate(fog: { visible: [number, number][]; explored: [number, number][] }) {
+      setFogVisible(fog.visible);
+      setFogExplored(fog.explored);
+    }
+
+    function onFogToggled(data: { map_id: number; fog_enabled: number }) {
+      setActiveMap((prev) => prev && prev.id === data.map_id ? { ...prev, fog_enabled: data.fog_enabled } : prev);
+    }
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('session:state', onState);
@@ -101,6 +144,11 @@ export function useSession(campaignId: number) {
     socket.on('token:conditions_updated', onTokenConditionsUpdated);
     socket.on('chat:message', onChatMessage);
     socket.on('initiative:updated', onInitiativeUpdated);
+    socket.on('wall:created', onWallCreated);
+    socket.on('wall:deleted', onWallDeleted);
+    socket.on('wall:cleared', onWallCleared);
+    socket.on('fog:update', onFogUpdate);
+    socket.on('map:fog_toggled', onFogToggled);
 
     socket.connect();
 
@@ -117,9 +165,20 @@ export function useSession(campaignId: number) {
       socket.off('token:conditions_updated', onTokenConditionsUpdated);
       socket.off('chat:message', onChatMessage);
       socket.off('initiative:updated', onInitiativeUpdated);
+      socket.off('wall:created', onWallCreated);
+      socket.off('wall:deleted', onWallDeleted);
+      socket.off('wall:cleared', onWallCleared);
+      socket.off('fog:update', onFogUpdate);
+      socket.off('map:fog_toggled', onFogToggled);
       socket.disconnect();
     };
-  }, [campaignId, fetchTokens]);
+  }, [campaignId, fetchTokens, fetchWallsAndFog]);
 
-  return { online, connected, activeMap, setActiveMap, tokens, setTokens, messages, initiative };
+  return {
+    online, connected,
+    activeMap, setActiveMap,
+    tokens, setTokens,
+    messages, initiative,
+    walls, fogVisible, fogExplored,
+  };
 }

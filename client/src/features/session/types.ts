@@ -6,6 +6,7 @@ export interface MapData {
   grid_size: number;
   grid_offset_x: number;
   grid_offset_y: number;
+  fog_enabled: number;
   created_at: number;
 }
 
@@ -38,6 +39,16 @@ export interface CampaignNpc {
   size: string;
   hp_max: number;
   notes: string;
+  created_at: number;
+}
+
+export interface WallSegment {
+  id: number;
+  map_id: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
   created_at: number;
 }
 

@@ -36,3 +36,12 @@ export async function activateMap(id: number): Promise<MapData> {
   const res = await apiFetch<{ map: MapData }>(`/maps/${id}/activate`, { method: 'POST' });
   return res.map;
 }
+
+export async function toggleFog(id: number): Promise<MapData> {
+  const res = await apiFetch<{ map: MapData }>(`/maps/${id}/fog/toggle`, { method: 'POST' });
+  return res.map;
+}
+
+export async function resetFog(id: number): Promise<void> {
+  await apiFetch(`/maps/${id}/fog/reset`, { method: 'POST' });
+}

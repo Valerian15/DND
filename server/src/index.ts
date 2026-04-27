@@ -15,6 +15,7 @@ import mapRoutes from './routes/maps.js';
 import tokenRoutes from './routes/tokens.js';
 import campaignNpcRoutes from './routes/campaignNpcs.js';
 import tokenCategoryRoutes from './routes/tokenCategories.js';
+import wallRoutes from './routes/walls.js';
 
 initSchema();
 
@@ -40,6 +41,7 @@ app.use('/api/maps', mapRoutes);
 app.use('/api/tokens', tokenRoutes);
 app.use('/api/campaign-npcs', campaignNpcRoutes);
 app.use('/api/token-categories', tokenCategoryRoutes);
+app.use('/api/maps', wallRoutes);
 
 const httpServer = createServer(app);
 
