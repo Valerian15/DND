@@ -19,7 +19,8 @@ export type ContentType =
   | 'items'
   | 'monsters'
   | 'feats'
-  | 'conditions';
+  | 'conditions'
+  | 'weapons';
 
 export interface ContentTypeMeta {
   type: ContentType;
@@ -33,6 +34,7 @@ export const CONTENT_TYPES: ContentTypeMeta[] = [
   { type: 'backgrounds', label: 'Backgrounds' },
   { type: 'spells', label: 'Spells' },
   { type: 'items', label: 'Items' },
+  { type: 'weapons', label: 'Weapons' },
   { type: 'monsters', label: 'Monsters' },
   { type: 'feats', label: 'Feats' },
   { type: 'conditions', label: 'Conditions' },

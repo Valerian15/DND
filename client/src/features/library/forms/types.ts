@@ -5,4 +5,4 @@ export interface FormProps {
   onChange: (next: Record<string, unknown>) => void;
 }
 
-export const TYPES_WITH_FORM = new Set<ContentType>(['backgrounds', 'subclasses', 'spells']);
+export const TYPES_WITH_FORM = new Set<ContentType>(['backgrounds', 'subclasses', 'spells', 'weapons']);

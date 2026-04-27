@@ -23,6 +23,7 @@ interface CharacterRow {
   skills: string;
   saves: string;
   inventory: string;
+  weapons: string;
   spells_known: string;
   spells_prepared: string;
   spell_slots: string;
@@ -40,6 +41,7 @@ function hydrate(row: CharacterRow) {
     skills: JSON.parse(row.skills),
     saves: JSON.parse(row.saves),
     inventory: JSON.parse(row.inventory),
+    weapons: JSON.parse(row.weapons),
     spells_known: JSON.parse(row.spells_known),
     spells_prepared: JSON.parse(row.spells_prepared),
     spell_slots: JSON.parse(row.spell_slots),
@@ -100,12 +102,14 @@ const UPDATABLE_SCALAR = new Set([
   'ac',
   'portrait_url',
   'notes',
+  'darkvision',
 ]);
 const UPDATABLE_JSON = new Set([
   'abilities',
   'skills',
   'saves',
   'inventory',
+  'weapons',
   'spells_known',
   'spells_prepared',
   'spell_slots',

@@ -10,6 +10,7 @@ import AbilitiesStep from './steps/AbilitiesStep';
 import BackgroundStep from './steps/BackgroundStep';
 import SkillsStep from './steps/SkillsStep';
 import EquipmentStep from './steps/EquipmentStep';
+import WeaponsStep from './steps/WeaponsStep';
 import SpellsStep from './steps/SpellsStep';
 import DetailsStep from './steps/DetailsStep';
 import { parseHitDie, recomputeDerived } from './rules';
@@ -22,6 +23,7 @@ const STEPS = [
   { key: 'background', label: 'Background' },
   { key: 'skills', label: 'Skills' },
   { key: 'equipment', label: 'Equipment' },
+  { key: 'weapons', label: 'Weapons' },
   { key: 'spells', label: 'Spells' },
   { key: 'details', label: 'Details' },
 ] as const;
@@ -134,6 +136,7 @@ export default function CharacterWizard() {
           {currentStep.key === 'background' && <BackgroundStep character={character} onChange={save} />}
           {currentStep.key === 'skills' && <SkillsStep character={character} onChange={save} />}
           {currentStep.key === 'equipment' && <EquipmentStep character={character} onChange={save} />}
+          {currentStep.key === 'weapons' && <WeaponsStep character={character} onChange={save} />}
           {currentStep.key === 'spells' && <SpellsStep character={character} onChange={save} />}
           {currentStep.key === 'details' && <DetailsStep character={character} onChange={save} />}
 

@@ -133,6 +133,19 @@ export function initSchema() {
       created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
     );
 
+    CREATE TABLE IF NOT EXISTS weapons (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT '',
+      weapon_type TEXT NOT NULL DEFAULT '',
+      data TEXT NOT NULL DEFAULT '{}',
+      source TEXT NOT NULL DEFAULT 'custom',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_weapons_name ON weapons(name);
+
     -- CHARACTERS
     -- Most 5e character data lives in JSON columns for flexibility.
     -- Commonly queried fields (level, hp, class, owner) are top-level.
@@ -332,12 +345,77 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_map_fog_map ON map_fog(map_id);
   `);
 
+  // Seed SRD weapons (INSERT OR IGNORE — safe to run repeatedly)
+  const seedWeapon = db.prepare(
+    `INSERT OR IGNORE INTO weapons (slug, name, category, weapon_type, data, source)
+     VALUES (?, ?, ?, ?, ?, 'srd-2014')`
+  );
+  const seedWeapons = db.transaction(() => {
+    const w = (
+      slug: string, name: string, category: string, weapon_type: string,
+      damage_dice: string, damage_type: string, properties: string[],
+      cost: string, weight: string,
+      extra: Record<string, unknown> = {}
+    ) => seedWeapon.run(
+      slug, name, category, weapon_type,
+      JSON.stringify({ damage_dice, damage_type, properties, cost, weight, ...extra })
+    );
+
+    // Simple Melee
+    w('club',          'Club',           'Simple', 'Melee', '1d4', 'bludgeoning', ['light'],                    '1 sp',  '2 lb.');
+    w('dagger',        'Dagger',         'Simple', 'Melee', '1d4', 'piercing',    ['finesse','light','thrown'],  '2 gp',  '1 lb.', { range_normal: 20, range_long: 60 });
+    w('greatclub',     'Greatclub',      'Simple', 'Melee', '1d8', 'bludgeoning', ['two-handed'],               '2 sp',  '10 lb.');
+    w('handaxe',       'Handaxe',        'Simple', 'Melee', '1d6', 'slashing',    ['light','thrown'],           '5 gp',  '2 lb.', { range_normal: 20, range_long: 60 });
+    w('javelin',       'Javelin',        'Simple', 'Melee', '1d6', 'piercing',    ['thrown'],                   '5 sp',  '2 lb.', { range_normal: 30, range_long: 120 });
+    w('light-hammer',  'Light Hammer',   'Simple', 'Melee', '1d4', 'bludgeoning', ['light','thrown'],           '2 gp',  '2 lb.', { range_normal: 20, range_long: 60 });
+    w('mace',          'Mace',           'Simple', 'Melee', '1d6', 'bludgeoning', [],                           '5 gp',  '4 lb.');
+    w('quarterstaff',  'Quarterstaff',   'Simple', 'Melee', '1d6', 'bludgeoning', ['versatile'],                '2 sp',  '4 lb.', { versatile_dice: '1d8' });
+    w('sickle',        'Sickle',         'Simple', 'Melee', '1d4', 'slashing',    ['light'],                    '1 gp',  '2 lb.');
+    w('spear',         'Spear',          'Simple', 'Melee', '1d6', 'piercing',    ['thrown','versatile'],       '1 gp',  '3 lb.', { range_normal: 20, range_long: 60, versatile_dice: '1d8' });
+
+    // Simple Ranged
+    w('crossbow-light','Light Crossbow', 'Simple', 'Ranged','1d8', 'piercing',    ['loading','two-handed','ammunition'], '25 gp', '5 lb.', { range_normal: 80, range_long: 320 });
+    w('dart',          'Dart',           'Simple', 'Ranged','1d4', 'piercing',    ['finesse','thrown'],         '5 cp',  '0.25 lb.', { range_normal: 20, range_long: 60 });
+    w('shortbow',      'Shortbow',       'Simple', 'Ranged','1d6', 'piercing',    ['two-handed','ammunition'],  '25 gp', '2 lb.', { range_normal: 80, range_long: 320 });
+    w('sling',         'Sling',          'Simple', 'Ranged','1d4', 'bludgeoning', ['ammunition'],               '1 sp',  '0 lb.', { range_normal: 30, range_long: 120 });
+
+    // Martial Melee
+    w('battleaxe',     'Battleaxe',      'Martial','Melee', '1d8', 'slashing',    ['versatile'],                '10 gp', '4 lb.', { versatile_dice: '1d10' });
+    w('flail',         'Flail',          'Martial','Melee', '1d8', 'bludgeoning', [],                           '10 gp', '2 lb.');
+    w('glaive',        'Glaive',         'Martial','Melee', '1d10','slashing',    ['heavy','reach','two-handed'],'20 gp','6 lb.');
+    w('greataxe',      'Greataxe',       'Martial','Melee', '1d12','slashing',    ['heavy','two-handed'],       '30 gp', '7 lb.');
+    w('greatsword',    'Greatsword',     'Martial','Melee', '2d6', 'slashing',    ['heavy','two-handed'],       '50 gp', '6 lb.');
+    w('halberd',       'Halberd',        'Martial','Melee', '1d10','slashing',    ['heavy','reach','two-handed'],'20 gp','6 lb.');
+    w('lance',         'Lance',          'Martial','Melee', '1d12','piercing',    ['reach'],                    '10 gp', '6 lb.');
+    w('longsword',     'Longsword',      'Martial','Melee', '1d8', 'slashing',    ['versatile'],                '15 gp', '3 lb.', { versatile_dice: '1d10' });
+    w('maul',          'Maul',           'Martial','Melee', '2d6', 'bludgeoning', ['heavy','two-handed'],       '10 gp', '10 lb.');
+    w('morningstar',   'Morningstar',    'Martial','Melee', '1d8', 'piercing',    [],                           '15 gp', '4 lb.');
+    w('pike',          'Pike',           'Martial','Melee', '1d10','piercing',    ['heavy','reach','two-handed'],'5 gp', '18 lb.');
+    w('rapier',        'Rapier',         'Martial','Melee', '1d8', 'piercing',    ['finesse'],                  '25 gp', '2 lb.');
+    w('scimitar',      'Scimitar',       'Martial','Melee', '1d6', 'slashing',    ['finesse','light'],          '25 gp', '3 lb.');
+    w('shortsword',    'Shortsword',     'Martial','Melee', '1d6', 'piercing',    ['finesse','light'],          '10 gp', '2 lb.');
+    w('trident',       'Trident',        'Martial','Melee', '1d6', 'piercing',    ['thrown','versatile'],       '5 gp',  '4 lb.', { range_normal: 20, range_long: 60, versatile_dice: '1d8' });
+    w('war-pick',      'War Pick',       'Martial','Melee', '1d8', 'piercing',    [],                           '5 gp',  '2 lb.');
+    w('warhammer',     'Warhammer',      'Martial','Melee', '1d8', 'bludgeoning', ['versatile'],                '15 gp', '2 lb.', { versatile_dice: '1d10' });
+    w('whip',          'Whip',           'Martial','Melee', '1d4', 'slashing',    ['finesse','reach'],          '2 gp',  '3 lb.');
+
+    // Martial Ranged
+    w('blowgun',       'Blowgun',        'Martial','Ranged','1',   'piercing',    ['loading','ammunition'],     '10 gp', '1 lb.', { range_normal: 25, range_long: 100 });
+    w('crossbow-hand', 'Hand Crossbow',  'Martial','Ranged','1d6', 'piercing',    ['light','loading','ammunition'],'75 gp','3 lb.', { range_normal: 30, range_long: 120 });
+    w('crossbow-heavy','Heavy Crossbow', 'Martial','Ranged','1d10','piercing',    ['heavy','loading','two-handed','ammunition'],'50 gp','18 lb.', { range_normal: 100, range_long: 400 });
+    w('longbow',       'Longbow',        'Martial','Ranged','1d8', 'piercing',    ['heavy','two-handed','ammunition'],'50 gp','2 lb.', { range_normal: 150, range_long: 600 });
+    w('net',           'Net',            'Martial','Ranged','0',   '',            ['thrown'],                   '1 gp',  '3 lb.', { range_normal: 5, range_long: 15 });
+  });
+  seedWeapons();
+
   // Add active_map_id to campaigns if not already present (safe to run repeatedly)
   try { db.exec('ALTER TABLE campaigns ADD COLUMN active_map_id INTEGER'); } catch { /* exists */ }
   // Darkvision (feet) on characters — set from race data when race is selected
   try { db.exec('ALTER TABLE characters ADD COLUMN darkvision INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
   // Fog of war toggle per map
   try { db.exec('ALTER TABLE maps ADD COLUMN fog_enabled INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  // Weapon slugs selected during character creation
+  try { db.exec("ALTER TABLE characters ADD COLUMN weapons TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
 
   console.log('✅ Database schema ready');
 }

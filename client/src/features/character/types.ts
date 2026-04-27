@@ -38,12 +38,14 @@ export interface Character {
   skills: Record<string, unknown>;
   saves: Record<string, unknown>;
   inventory: unknown[];
+  weapons: string[];
   spells_known: unknown[];
   spells_prepared: unknown[];
   spell_slots: Record<string, unknown>;
   features: unknown[];
   notes: string;
   description: Record<string, unknown>;
+  darkvision: number;
   created_at: number;
   updated_at: number;
 }

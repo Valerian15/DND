@@ -7,7 +7,22 @@ import { abilityModifier, formatModifier } from './pointBuy';
 import { initiative, parseHitDie, passivePerception, proficiencyBonus, recomputeDerived } from './rules';
 import { getCasterConfig } from './casters';
 import { SKILLS } from './skills';
+import { isWeaponProficient } from './weaponProficiency';
+import { parseSpellForAttack, scaleCantripDice } from './attackUtils';
 import LevelUpDialog from './LevelUpDialog';
+
+interface WeaponData {
+  slug: string;
+  name: string;
+  category: string;
+  weapon_type: string;
+  damage_dice: string;
+  damage_type: string;
+  properties: string[];
+  versatile_dice?: string;
+  range_normal?: number;
+  range_long?: number;
+}
 
 export default function CharacterSheet() {
   const { id } = useParams<{ id: string }>();
@@ -20,7 +35,8 @@ export default function CharacterSheet() {
   const [subclassName, setSubclassName] = useState<string>('');
   const [raceName, setRaceName] = useState<string>('');
   const [backgroundName, setBackgroundName] = useState<string>('');
-  const [spellNames, setSpellNames] = useState<Record<string, { name: string; level: number; school?: string }>>({});
+  const [spellNames, setSpellNames] = useState<Record<string, { name: string; level: number; school?: string; desc?: string }>>({});
+  const [weaponData, setWeaponData] = useState<Record<string, WeaponData>>({});
   const [hpEditing, setHpEditing] = useState(false);
   const [hpDraft, setHpDraft] = useState(0);
   const [recomputeMsg, setRecomputeMsg] = useState<string | null>(null);
@@ -80,18 +96,48 @@ export default function CharacterSheet() {
     (async () => {
       const results = await Promise.all(
         missing.map((slug) =>
-          getLibraryItem<{ name: string; level: number; school?: string }>('spells', slug)
-            .then((r) => ({ slug, name: r.name, level: r.level, school: r.school }))
+          getLibraryItem<{ name: string; level: number; school?: string; data?: { desc?: string } }>('spells', slug)
+            .then((r) => ({ slug, name: r.name, level: r.level, school: r.school, desc: r.data?.desc }))
             .catch(() => null),
         ),
       );
       setSpellNames((prev) => {
         const next = { ...prev };
-        for (const r of results) if (r) next[r.slug] = { name: r.name, level: r.level, school: r.school };
+        for (const r of results) if (r) next[r.slug] = { name: r.name, level: r.level, school: r.school, desc: r.desc };
         return next;
       });
     })();
   }, [character?.spells_known, character?.spells_prepared]);
+
+  useEffect(() => {
+    if (!character?.weapons?.length) return;
+    const missing = character.weapons.filter((s) => !weaponData[s]);
+    if (missing.length === 0) return;
+    Promise.all(
+      missing.map((slug) =>
+        getLibraryItem<{ name: string; category: string; weapon_type: string; data: Record<string, unknown> }>('weapons', slug)
+          .then((r) => ({
+            slug,
+            name: r.name,
+            category: r.category ?? '',
+            weapon_type: r.weapon_type ?? '',
+            damage_dice: String(r.data.damage_dice ?? ''),
+            damage_type: String(r.data.damage_type ?? ''),
+            properties: Array.isArray(r.data.properties) ? (r.data.properties as string[]) : [],
+            versatile_dice: r.data.versatile_dice ? String(r.data.versatile_dice) : undefined,
+            range_normal: typeof r.data.range_normal === 'number' ? r.data.range_normal : undefined,
+            range_long: typeof r.data.range_long === 'number' ? r.data.range_long : undefined,
+          }))
+          .catch(() => null),
+      ),
+    ).then((results) => {
+      setWeaponData((prev) => {
+        const next = { ...prev };
+        for (const r of results) if (r) next[r.slug] = r;
+        return next;
+      });
+    });
+  }, [character?.weapons]);
 
   async function adjustHp(newCurrent: number) {
     if (!character) return;
@@ -324,6 +370,100 @@ export default function CharacterSheet() {
             </Card>
           )}
 
+          {(() => {
+            const strMod = abilityModifier(character.abilities.str);
+            const dexMod = abilityModifier(character.abilities.dex);
+            const spellAtk = config ? prof + abilityModifier(character.abilities[config.ability]) : 0;
+            const spellDc  = config ? 8 + spellAtk : 0;
+
+            // Collect damage spells from known + prepared lists
+            const spellSlugs = Array.from(new Set([
+              ...(character.spells_known as string[]),
+              ...(character.spells_prepared as string[]),
+            ]));
+            const damageSpells = spellSlugs
+              .map((slug) => ({ slug, meta: spellNames[slug] }))
+              .filter(({ meta }) => {
+                if (!meta?.desc) return false;
+                return parseSpellForAttack(meta.desc).mode !== null;
+              });
+
+            const hasWeapons = character.weapons?.length > 0;
+            const hasSpells  = damageSpells.length > 0;
+            if (!hasWeapons && !hasSpells) return null;
+
+            return (
+              <Card>
+                <SectionTitle>Attacks</SectionTitle>
+                <div style={{ display: 'grid', gap: '0.5rem' }}>
+
+                  {/* ── Weapons ── */}
+                  {character.weapons?.map((slug) => {
+                    const w = weaponData[slug];
+                    if (!w) return <div key={slug} style={{ fontSize: '0.9rem', color: '#aaa' }}>{slug}</div>;
+
+                    const proficient = isWeaponProficient(character.class_slug, slug, w.category);
+                    const isFinesse = w.properties.includes('finesse');
+                    const isRanged = w.weapon_type === 'Ranged';
+                    const abilityMod = isRanged ? dexMod : isFinesse ? Math.max(strMod, dexMod) : strMod;
+                    const attackBonus = abilityMod + (proficient ? prof : 0);
+                    const damageMod = isFinesse ? Math.max(strMod, dexMod) : isRanged ? dexMod : strMod;
+                    const damageStr = w.damage_dice
+                      ? `${w.damage_dice}${damageMod !== 0 ? formatModifier(damageMod) : ''}`
+                      : '—';
+                    const rangeStr = w.range_normal ? `${w.range_normal}/${w.range_long ?? w.range_normal} ft` : null;
+
+                    return (
+                      <AttackRow
+                        key={slug}
+                        name={w.name}
+                        subtitle={`${w.category} ${w.weapon_type}${proficient ? '' : ' · not proficient'}`}
+                        detail={[...w.properties, ...(rangeStr ? [rangeStr] : [])].join(', ')}
+                        attackLabel={formatModifier(attackBonus)}
+                        damageLabel={damageStr}
+                        damageType={w.damage_type}
+                        extra={w.versatile_dice ? `${w.versatile_dice}${formatModifier(damageMod)} two-handed` : undefined}
+                      />
+                    );
+                  })}
+
+                  {/* ── Damage spells ── */}
+                  {damageSpells.map(({ slug, meta }) => {
+                    const parsed = parseSpellForAttack(meta!.desc!);
+                    const isCantrip = (meta!.level) === 0;
+                    const dice = isCantrip && parsed.damageDice
+                      ? scaleCantripDice(parsed.damageDice, character.level)
+                      : parsed.damageDice;
+
+                    let attackLabel: string;
+                    let subtitle: string;
+                    if (parsed.mode === 'spell_attack') {
+                      attackLabel = formatModifier(spellAtk);
+                      subtitle = `${isCantrip ? 'Cantrip' : `Level ${meta!.level} spell`} · spell attack`;
+                    } else if (parsed.mode === 'save') {
+                      attackLabel = `DC ${spellDc}`;
+                      subtitle = `${isCantrip ? 'Cantrip' : `Level ${meta!.level} spell`} · ${parsed.saveAbility} save`;
+                    } else {
+                      attackLabel = '—';
+                      subtitle = isCantrip ? 'Cantrip' : `Level ${meta!.level} spell`;
+                    }
+
+                    return (
+                      <AttackRow
+                        key={slug}
+                        name={meta!.name}
+                        subtitle={subtitle}
+                        attackLabel={attackLabel}
+                        damageLabel={dice ?? '—'}
+                        damageType={parsed.damageType ?? ''}
+                      />
+                    );
+                  })}
+                </div>
+              </Card>
+            );
+          })()}
+
           <Card>
             <SectionTitle>Inventory</SectionTitle>
             {(character.inventory as any[]).length === 0 ? (
@@ -442,6 +582,47 @@ function SpellList({
     </div>
   );
 }
+function AttackRow({ name, subtitle, detail, attackLabel, damageLabel, damageType, extra }: {
+  name: string;
+  subtitle: string;
+  detail?: string;
+  attackLabel: string;
+  damageLabel: string;
+  damageType?: string;
+  extra?: string;
+}) {
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: '1fr auto auto',
+      alignItems: 'center',
+      gap: '0.75rem',
+      padding: '0.5rem 0.75rem',
+      background: '#fafafa',
+      borderRadius: 6,
+      border: '1px solid #eee',
+    }}>
+      <div>
+        <span style={{ fontWeight: 600 }}>{name}</span>
+        <span style={{ fontSize: '0.8rem', color: '#999', marginLeft: '0.5rem' }}>{subtitle}</span>
+        {detail && <div style={{ fontSize: '0.78rem', color: '#aaa', marginTop: '0.1rem' }}>{detail}</div>}
+      </div>
+      <div style={{ textAlign: 'center', minWidth: 48 }}>
+        <div style={{ fontSize: '0.7rem', color: '#888', textTransform: 'uppercase' }}>Attack</div>
+        <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{attackLabel}</div>
+      </div>
+      <div style={{ textAlign: 'center', minWidth: 80 }}>
+        <div style={{ fontSize: '0.7rem', color: '#888', textTransform: 'uppercase' }}>Damage</div>
+        <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>
+          {damageLabel}
+          {damageType && <span style={{ fontSize: '0.75rem', fontWeight: 400, color: '#666', marginLeft: '0.25rem' }}>{damageType}</span>}
+        </div>
+        {extra && <div style={{ fontSize: '0.75rem', color: '#888' }}>{extra}</div>}
+      </div>
+    </div>
+  );
+}
+
 function btn(primary = false): React.CSSProperties {
   return {
     padding: '0.5rem 1rem',

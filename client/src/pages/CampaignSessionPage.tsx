@@ -358,20 +358,27 @@ export default function CampaignSessionPage() {
     const ox = ((previewMap.grid_offset_x % gs) + gs) % gs;
     const oy = ((previewMap.grid_offset_y % gs) + gs) % gs;
     const visibleSet = new Set(fogVisible.map(([c, r]) => `${c},${r}`));
-    const exploredSet = new Set(fogExplored.map(([c, r]) => `${c},${r}`));
 
-    // Start fully black (unseen)
+    // Step 1: fill entire canvas black (unseen areas)
     ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = 'rgba(0,0,0,1)';
+    ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, w, h);
 
-    // Currently visible: fully transparent (map shows through)
-    ctx.globalCompositeOperation = 'copy';
-    ctx.fillStyle = 'rgba(0,0,0,0)';
-    for (const [c, r] of fogVisible) {
-      ctx.fillRect(ox + c * gs, oy + r * gs, gs, gs);
+    // Step 2: punch transparent holes for every explored + visible cell
+    for (const [c, r] of fogExplored) {
+      ctx.clearRect(ox + c * gs, oy + r * gs, gs, gs);
     }
-    ctx.globalCompositeOperation = 'source-over';
+    for (const [c, r] of fogVisible) {
+      ctx.clearRect(ox + c * gs, oy + r * gs, gs, gs);
+    }
+
+    // Step 3: re-paint explored-but-not-visible cells as dark grey
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
+    for (const [c, r] of fogExplored) {
+      if (!visibleSet.has(`${c},${r}`)) {
+        ctx.fillRect(ox + c * gs, oy + r * gs, gs, gs);
+      }
+    }
   }, [fogVisible, fogExplored, imgSize, previewMap, isDmOrAdmin, activeMap?.fog_enabled]);
 
   // Wall editor pointer handlers — all three live on the same element (innerMapRef)
@@ -804,13 +811,13 @@ export default function CampaignSessionPage() {
                       onPointerDown={wallMode ? undefined : (e) => handleTokenPointerDown(e, token)}
                     />
                   ))}
-                  {/* Fog of war canvas — players only, always mounted so effect can fill black immediately */}
+                  {/* Fog of war canvas — players only */}
                   {!isDmOrAdmin && (
                     <canvas
                       ref={fogCanvasRef}
-                      style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 8 }}
                       width={imgSize.w}
                       height={imgSize.h}
+                      style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 8 }}
                     />
                   )}
                   {/* Wall lines SVG — DM only, pointer-events none so overlay below handles input */}
@@ -926,13 +933,18 @@ export default function CampaignSessionPage() {
                   const isMyChar = m.owner_id === user!.id;
                   const myToken = tokens.find((t) => t.token_type === 'pc' && t.character_id === m.character_id);
                   const draggable = isDmOrAdmin || isMyChar;
+                  const canViewSheet = isMyChar || isDmOrAdmin;
                   return (
                     <div
                       key={m.character_id}
                       draggable={draggable}
                       onDragStart={draggable ? (e) => e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'pc', characterId: m.character_id })) : undefined}
-                      style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.4rem 0.5rem', borderRadius: 6, cursor: draggable ? 'grab' : 'default', background: isMyChar ? '#f0f8ff' : 'transparent', marginBottom: '0.2rem', opacity: myToken ? 1 : 0.6 }}
-                      title={draggable ? (myToken ? 'Drag to move token' : 'Drag onto map to place') : undefined}
+                      onClick={() => {
+                        if (!m.character_id || !canViewSheet) return;
+                        setPanel({ type: 'character', characterId: m.character_id, tokenId: myToken?.id ?? 0, canEdit: (!!isMyChar || isDmOrAdmin) });
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.4rem 0.5rem', borderRadius: 6, cursor: canViewSheet ? 'pointer' : 'default', background: isMyChar ? '#f0f8ff' : 'transparent', marginBottom: '0.2rem', opacity: myToken ? 1 : 0.6 }}
+                      title={canViewSheet ? (myToken ? 'Open sheet · Drag to move' : 'Open sheet · Drag to place') : undefined}
                     >
                       <div style={{ position: 'relative', flexShrink: 0 }}>
                         {m.portrait_url ? (
@@ -1075,8 +1087,8 @@ export default function CampaignSessionPage() {
           <InGameSheet
             characterId={panel.characterId}
             tokenId={panel.tokenId}
-            canEditHp={panel.canEdit}
-            canEditConditions={isDmOrAdmin}
+            canEditHp={panel.canEdit && !!token}
+            canEditConditions={isDmOrAdmin && !!token}
             conditions={token?.conditions ?? []}
             onConditionsChange={(conditions) => handleTokenConditionsChange(panel.tokenId, conditions)}
             onClose={() => setPanel(null)}

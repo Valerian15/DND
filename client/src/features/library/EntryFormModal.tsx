@@ -4,6 +4,7 @@ import { CONTENT_TYPES, type ContentType, type LibraryDetail } from './types';
 import BackgroundForm from './forms/BackgroundForm';
 import SubclassForm from './forms/SubclassForm';
 import SpellForm from './forms/SpellForm';
+import WeaponForm from './forms/WeaponForm';
 import { TYPES_WITH_FORM } from './forms/types';
 
 interface Props {
@@ -175,6 +176,7 @@ export default function EntryFormModal({ type, mode, existing, onClose, onSaved 
             {type === 'backgrounds' && <BackgroundForm data={data} onChange={onFormDataChange} />}
             {type === 'subclasses' && <SubclassForm data={data} onChange={onFormDataChange} />}
             {type === 'spells' && <SpellForm data={data} onChange={onFormDataChange} />}
+            {type === 'weapons' && <WeaponForm data={data} onChange={onFormDataChange} />}
           </>
         )}
 

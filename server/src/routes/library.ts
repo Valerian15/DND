@@ -15,6 +15,7 @@ const ALLOWED_TYPES = [
   'monsters',
   'feats',
   'conditions',
+  'weapons',
 ] as const;
 
 type LibraryType = (typeof ALLOWED_TYPES)[number];
@@ -83,6 +84,13 @@ router.get('/:type', (req, res) => {
         `SELECT id, slug, name, class_slug, source FROM subclasses WHERE class_slug = ? ORDER BY name`,
       )
       .all(req.query.class);
+    return res.json({ items: rows, count: rows.length });
+  }
+
+  if (type === 'weapons') {
+    const rows = db
+      .prepare('SELECT id, slug, name, category, weapon_type, source FROM weapons ORDER BY category, weapon_type, name')
+      .all();
     return res.json({ items: rows, count: rows.length });
   }
 
@@ -156,6 +164,11 @@ router.post('/:type', requireAdmin, (req, res) => {
     const monsterType = optionalString(data.type);
     db.prepare('INSERT INTO monsters (slug, name, cr, type, data, source) VALUES (?, ?, ?, ?, ?, ?)')
       .run(slug, name, cr, monsterType, dataJson, source);
+  } else if (type === 'weapons') {
+    const category = optionalString(data.category) ?? '';
+    const weaponType = optionalString(data.weapon_type) ?? '';
+    db.prepare('INSERT INTO weapons (slug, name, category, weapon_type, data, source) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(slug, name, category, weaponType, dataJson, source);
   } else {
     db.prepare(`INSERT INTO ${type} (slug, name, data, source) VALUES (?, ?, ?, ?)`)
       .run(slug, name, dataJson, source);
@@ -220,6 +233,9 @@ router.patch('/:type/:slug', requireAdmin, (req, res) => {
     } else if (type === 'monsters') {
       updates.push('cr = ?', 'type = ?');
       values.push(getRequiredNumber(body.data.cr), optionalString(body.data.type));
+    } else if (type === 'weapons') {
+      updates.push('category = ?', 'weapon_type = ?');
+      values.push(optionalString(body.data.category) ?? '', optionalString(body.data.weapon_type) ?? '');
     }
   }
 
