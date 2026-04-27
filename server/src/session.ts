@@ -2,8 +2,8 @@ import type { Server, Socket } from 'socket.io';
 import { verifyToken, type AuthUser } from './auth/index.js';
 import { db } from './db/index.js';
 import { broadcastFiltered } from './io.js';
-import { canUserSeeToken, hydrateToken, type TokenRow } from './routes/tokens.js';
-import { computeAndSaveFog } from './vision.js';
+import { canUserSeeToken, hydrateToken, broadcastFogTokenChanges, type TokenRow } from './routes/tokens.js';
+import { computeAndSaveFog, getVisibleSet } from './vision.js';
 
 interface OnlineUser {
   user_id: number;
@@ -222,21 +222,52 @@ export function setupSession(io: AppServer) {
       }
       if (!canMove) return;
 
-      db.prepare('UPDATE tokens SET col = ?, row = ? WHERE id = ?').run(col, row, token_id);
+      const mapId = token.map_id;
 
-      broadcastFiltered(
-        campaign_id,
-        'token:moved',
-        { token_id, col, row },
-        (uid, role) => role === 'admin' || canUserSeeToken(uid, { ...token, col, row }, dmId),
-      );
-
-      // Recompute fog whenever a PC moves
       if (token.token_type === 'pc') {
-        const activeMapNow = getActiveMap(campaign_id);
-        if (activeMapNow) {
-          const fog = computeAndSaveFog(activeMapNow.id);
-          broadcastFiltered(campaign_id, 'fog:update', fog, () => true);
+        db.prepare('UPDATE tokens SET col = ?, row = ? WHERE id = ?').run(col, row, token_id);
+
+        // PC move: always broadcast move, then recompute fog and send appear/disappear for NPCs
+        broadcastFiltered(
+          campaign_id,
+          'token:moved',
+          { token_id, col, row },
+          (uid, role) => role === 'admin' || uid === dmId || canUserSeeToken(uid, { ...token, col, row }, dmId),
+        );
+
+        const oldVisible = getVisibleSet(mapId);
+        const fog = computeAndSaveFog(mapId);
+        const newVisible = getVisibleSet(mapId);
+        broadcastFiltered(campaign_id, 'fog:update', fog, () => true);
+        broadcastFogTokenChanges(campaign_id, mapId, oldVisible, newVisible, dmId);
+
+      } else {
+        // NPC move: send appropriate events based on old vs new visibility
+        const oldKey = `${token.col},${token.row}`;
+        const newKey = `${col},${row}`;
+        const vis = getVisibleSet(mapId);
+        const wasVisible = vis.has(oldKey);
+        const isVisible = vis.has(newKey);
+
+        db.prepare('UPDATE tokens SET col = ?, row = ? WHERE id = ?').run(col, row, token_id);
+        const movedToken = { ...token, col, row };
+
+        const playerFilter = (uid: number, role: string) => role !== 'admin' && uid !== dmId;
+
+        if (wasVisible && isVisible) {
+          // Stayed visible: send move to everyone
+          broadcastFiltered(campaign_id, 'token:moved', { token_id, col, row }, () => true);
+        } else if (!wasVisible && isVisible) {
+          // Entered visibility: players now see it for the first time
+          broadcastFiltered(campaign_id, 'token:moved', { token_id, col, row }, (uid, role) => role === 'admin' || uid === dmId);
+          broadcastFiltered(campaign_id, 'token:created', hydrateToken(movedToken), playerFilter);
+        } else if (wasVisible && !isVisible) {
+          // Left visibility: players lose sight of it
+          broadcastFiltered(campaign_id, 'token:deleted', { token_id }, playerFilter);
+          broadcastFiltered(campaign_id, 'token:moved', { token_id, col, row }, (uid, role) => role === 'admin' || uid === dmId);
+        } else {
+          // Neither old nor new cell visible: DM only
+          broadcastFiltered(campaign_id, 'token:moved', { token_id, col, row }, (uid, role) => role === 'admin' || uid === dmId);
         }
       }
     });

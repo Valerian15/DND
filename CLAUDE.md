@@ -30,12 +30,12 @@
 ## Phase status
 
 - Phase 0–1: scaffold, auth, admin panel, SRD seed, character wizard, sheet, level-up — DONE
-- Phase 2: library browser + admin content editor — DONE (last commit: "Phase 2: library browser + admin content editor")
-- **Phase 3: campaigns + basic session view — IN PROGRESS, just starting**
-- Phase 4: real-time token sync (Socket.io)
-- Phase 5: chat, dice, initiative
-- Phase 6: fog of war + full 5e vision rules
-- Phase 7: fantasy UI theme via Claude Design
+- Phase 2: library browser + admin content editor — DONE
+- Phase 3: campaigns + basic session view — DONE
+- Phase 4: real-time token sync (Socket.io) — DONE (4a–4e: map display, zoom, tokens place/move/remove, HP sync, in-game character sheet, condition badges)
+- Phase 5: chat, dice, initiative — DONE
+- Phase 6: fog of war + dynamic lighting — DONE (ray-casting visibility polygon, wall-blocked LOS, NPC tokens hidden in grey/unexplored cells)
+- **Phase 7: fantasy UI theme via Claude Design — NEXT**
 - Phase 8 (optional): Tauri desktop wrap
 
 ## Admin credentials (dev only)
@@ -123,3 +123,29 @@ All mechanical logic lives in the client and is applied before persisting:
 - [AdminPage.tsx](client/src/pages/AdminPage.tsx): admin-only user management.
 - [LibraryPage.tsx](client/src/pages/LibraryPage.tsx): browsable library for all users; admins see edit/delete/create controls.
 - [EntryFormModal.tsx](client/src/features/library/EntryFormModal.tsx) dispatches to per-type form components in `features/library/forms/`.
+
+### Campaigns & Session (Phase 3–6)
+
+**Server-side:**
+- [server/src/session.ts](server/src/session.ts): Socket.io event handlers. Handles `session:join`, `token:move`, `chat:send`, `initiative:*`. All clients join a `campaign:<id>` room on connect.
+- [server/src/io.ts](server/src/io.ts): `broadcastFiltered(campaignId, event, payload, filterFn)` — sends to a subset of sockets in a campaign room based on `(userId, role) => boolean`.
+- [server/src/routes/tokens.ts](server/src/routes/tokens.ts): REST CRUD for tokens + `canUserSeeToken` (NPC tokens are hidden from players if their cell is not in the current fog visible set) + `broadcastFogTokenChanges` (sends `token:created`/`token:deleted` to players when fog visibility changes).
+- [server/src/vision.ts](server/src/vision.ts): `computeAndSaveFog(mapId)` — ray-casting visibility polygon from each PC token, wall-blocked LOS, persists explored cells to `map_fog` table, caches current visible set in memory (`visibleSetCache`). `getVisibleSet(mapId)` returns the cached set.
+
+**Client-side:**
+- [client/src/features/session/useSession.ts](client/src/features/session/useSession.ts): single hook that owns all real-time state (tokens, fog, walls, chat, initiative, online presence). Registers all socket listeners.
+- [client/src/pages/CampaignSessionPage.tsx](client/src/pages/CampaignSessionPage.tsx): the main session UI — map canvas, token layer, fog canvas (players only), walls, HP panel, chat, initiative tracker, DM controls.
+- Fog is rendered on a `<canvas>` overlaid on the map: black (unseen) → dark grey (explored, `rgba(0,0,0,0.72)`) → transparent (currently visible). Uses `clearRect` to punch holes (not `globalCompositeOperation` which is unreliable across browsers).
+- Feature API modules: [tokenApi.ts](client/src/features/session/tokenApi.ts), [wallApi.ts](client/src/features/session/wallApi.ts), [mapApi.ts](client/src/features/session/mapApi.ts).
+
+**Key socket events:**
+| Event | Direction | Meaning |
+|---|---|---|
+| `session:join` | C→S | Join campaign room, receive `session:state` |
+| `token:move` | C→S | Move a token (auth checked server-side) |
+| `token:created/moved/deleted` | S→C | Filtered by visibility |
+| `token:hp_updated` / `token:conditions_updated` | S→C | Broadcast to all |
+| `fog:update` | S→C | New visible+explored cell arrays after any PC move |
+| `map:switched` | S→C | DM changed active map |
+| `chat:send` / `chat:message` | C→S / S→C | Chat + `/roll NdN[±M]` dice |
+| `initiative:*` | C→S / S→C | DM-only roll/set/add/remove/clear |

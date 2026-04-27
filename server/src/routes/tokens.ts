@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../db/index.js';
 import { requireAuth, type AuthRequest } from '../auth/index.js';
 import { broadcastFiltered } from '../io.js';
+import { computeAndSaveFog, getVisibleSet } from '../vision.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -41,9 +42,37 @@ export function hydrateToken(row: TokenRow): HydratedToken {
   };
 }
 
-// All campaign members see all tokens. Phase 6 will add fog-of-war visibility per token.
-export function canUserSeeToken(_userId: number, _token: TokenRow, _dmId: number): boolean {
-  return true;
+export function canUserSeeToken(userId: number, token: TokenRow, dmId: number): boolean {
+  if (userId === dmId) return true;
+  if (token.token_type === 'pc') return true;
+  return getVisibleSet(token.map_id).has(`${token.col},${token.row}`);
+}
+
+// Broadcast token appear/disappear events caused by a fog visibility change.
+// oldVisible and newVisible are Set<"col,row"> from getVisibleSet() before/after recompute.
+export function broadcastFogTokenChanges(
+  campaignId: number,
+  mapId: number,
+  oldVisible: Set<string>,
+  newVisible: Set<string>,
+  dmId: number,
+): void {
+  const npcTokens = db.prepare(
+    'SELECT t.*, cnpc.category_id FROM tokens t LEFT JOIN campaign_npcs cnpc ON cnpc.id = t.campaign_npc_id WHERE t.map_id = ? AND t.token_type = \'npc\''
+  ).all(mapId) as TokenRow[];
+
+  const playerFilter = (userId: number, role: string) => role !== 'admin' && userId !== dmId;
+
+  for (const token of npcTokens) {
+    const key = `${token.col},${token.row}`;
+    const wasVisible = oldVisible.has(key);
+    const isVisible = newVisible.has(key);
+    if (!wasVisible && isVisible) {
+      broadcastFiltered(campaignId, 'token:created', hydrateToken(token), playerFilter);
+    } else if (wasVisible && !isVisible) {
+      broadcastFiltered(campaignId, 'token:deleted', { token_id: token.id }, playerFilter);
+    }
+  }
 }
 
 interface CampaignContext { id: number; dm_id: number }
@@ -66,7 +95,7 @@ function emitToken(campaign: CampaignContext, event: string, payload: unknown, t
     campaign.id,
     event,
     payload,
-    (userId, role) => role === 'admin' || canUserSeeToken(userId, token, campaign.dm_id),
+    (userId, role) => role === 'admin' || userId === campaign.dm_id || canUserSeeToken(userId, token, campaign.dm_id),
   );
 }
 
@@ -122,6 +151,11 @@ router.post('/', (req: AuthRequest, res) => {
       db.prepare('UPDATE tokens SET col = ?, row = ? WHERE id = ?').run(colN, rowN, existing.id);
       const updated = { ...existing, col: colN, row: rowN } as TokenRow;
       emitToken(campaign, 'token:moved', { token_id: existing.id, col: colN, row: rowN }, updated);
+      const oldVisible = getVisibleSet(mapId);
+      const fog = computeAndSaveFog(mapId);
+      const newVisible = getVisibleSet(mapId);
+      broadcastFiltered(campaign.id, 'fog:update', fog, () => true);
+      broadcastFogTokenChanges(campaign.id, mapId, oldVisible, newVisible, campaign.dm_id);
       return res.json({ token: hydrateToken(updated) });
     }
 
@@ -131,6 +165,11 @@ router.post('/', (req: AuthRequest, res) => {
 
     const created = db.prepare('SELECT t.*, NULL as category_id FROM tokens t WHERE t.id = ?').get(info.lastInsertRowid) as TokenRow;
     emitToken(campaign, 'token:created', hydrateToken(created), created);
+    const oldVisible = getVisibleSet(mapId);
+    const fog = computeAndSaveFog(mapId);
+    const newVisible = getVisibleSet(mapId);
+    broadcastFiltered(campaign.id, 'fog:update', fog, () => true);
+    broadcastFogTokenChanges(campaign.id, mapId, oldVisible, newVisible, campaign.dm_id);
     return res.status(201).json({ token: hydrateToken(created) });
 
   } else if (token_type === 'npc') {

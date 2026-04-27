@@ -75,6 +75,12 @@ function buildVisibilityPolygon(
   return poly;
 }
 
+const visibleSetCache = new Map<number, Set<string>>();
+
+export function getVisibleSet(mapId: number): Set<string> {
+  return visibleSetCache.get(mapId) ?? new Set();
+}
+
 export function computeAndSaveFog(mapId: number): FogResult {
   const map = db.prepare(
     'SELECT grid_size, grid_offset_x, grid_offset_y FROM maps WHERE id = ?'
@@ -100,7 +106,8 @@ export function computeAndSaveFog(mapId: number): FogResult {
 
   for (const token of pcTokens) {
     const darkvisionCells = Math.ceil((token.darkvision ?? 0) / 5);
-    const radius = Math.max(12, darkvisionCells);
+    // Base of 6 cells (30 ft torchlight) for characters with no darkvision
+    const radius = Math.max(6, darkvisionCells);
     const maxR = radius * gs;
 
     const tcx = ox + (token.col + 0.5) * gs;
@@ -144,6 +151,8 @@ export function computeAndSaveFog(mapId: number): FogResult {
     insertAll();
   }
 
+  visibleSetCache.set(mapId, new Set(visibleSet));
+  console.log(`[fog v2] map=${mapId} walls=${walls.length} tokens=${pcTokens.length} visible=${visibleSet.size}`);
   return {
     visible: [...visibleSet].map((k) => k.split(',').map(Number) as [number, number]),
     explored: [...exploredSet].map((k) => k.split(',').map(Number) as [number, number]),
