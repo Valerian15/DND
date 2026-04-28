@@ -27,6 +27,8 @@ import { createWall, deleteWall, clearWalls } from '../features/session/wallApi'
 import { listMapFolders, createMapFolder, renameMapFolder, deleteMapFolder } from '../features/session/mapFolderApi';
 import type { WallSegment } from '../features/session/types';
 import { InGameSheet, CONDITION_COLORS } from '../features/session/InGameSheet';
+import { apiFetch } from '../lib/api';
+import { updateCharacter } from '../features/character/api';
 import { socket } from '../lib/socket';
 import type { Campaign } from '../features/campaign/types';
 import type { MapData, TokenData, CampaignNpc, TokenCategory, MapFolder } from '../features/session/types';
@@ -308,6 +310,7 @@ export default function CampaignSessionPage() {
   const [npcs, setNpcs] = useState<CampaignNpc[]>([]);
   const [categories, setCategories] = useState<TokenCategory[]>([]);
   const [folders, setFolders] = useState<MapFolder[]>([]);
+  const [pcStats, setPcStats] = useState<Record<number, { passive_perception: number; inspiration: number }>>({});
   const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
   const [newMapFolderId, setNewMapFolderId] = useState<number | null>(null);
   const [renamingFolderId, setRenamingFolderId] = useState<number | null>(null);
@@ -397,12 +400,16 @@ export default function CampaignSessionPage() {
       listCampaignNpcs(campaign.id),
       listTokenCategories(campaign.id),
       listMapFolders(campaign.id),
-    ]).then(([mapsData, npcData, catData, folderData]) => {
+      apiFetch<{ characters: Array<{ id: number; passive_perception: number; inspiration: number }> }>(`/campaigns/${campaign.id}/characters`),
+    ]).then(([mapsData, npcData, catData, folderData, charData]) => {
       setMaps(mapsData.maps);
       setActiveMapId(mapsData.active_map_id);
       setNpcs(npcData);
       setCategories(catData);
       setFolders(folderData);
+      const statsMap: Record<number, { passive_perception: number; inspiration: number }> = {};
+      for (const c of charData.characters) statsMap[c.id] = { passive_perception: c.passive_perception, inspiration: c.inspiration };
+      setPcStats(statsMap);
     }).catch(() => {});
   }, [campaign?.id, isDmOrAdmin]);
 
@@ -671,6 +678,14 @@ export default function CampaignSessionPage() {
 
   async function handleRemoveToken(tokenId: number) {
     try { await deleteToken(tokenId); } catch (e: any) { setError(e.message); }
+  }
+
+  async function handleToggleInspiration(characterId: number) {
+    const current = pcStats[characterId]?.inspiration ?? 0;
+    const next = current ? 0 : 1;
+    setPcStats((prev) => ({ ...prev, [characterId]: { ...prev[characterId], inspiration: next } }));
+    try { await updateCharacter(characterId, { inspiration: next }); }
+    catch { setPcStats((prev) => ({ ...prev, [characterId]: { ...prev[characterId], inspiration: current } })); }
   }
 
   function toggleSection(key: string) {
@@ -1157,8 +1172,20 @@ export default function CampaignSessionPage() {
                       </div>
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{ fontSize: '0.82rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.character_name}</div>
-                        <div style={{ fontSize: '0.72rem', color: '#888' }}>Lv {m.level} {m.class_slug ?? '—'}</div>
+                        <div style={{ fontSize: '0.72rem', color: '#888', display: 'flex', gap: '0.5rem' }}>
+                          <span>Lv {m.level} {m.class_slug ?? '—'}</span>
+                          {pcStats[m.character_id] && (
+                            <span title="Passive Perception">PP {pcStats[m.character_id].passive_perception}</span>
+                          )}
+                        </div>
                       </div>
+                      {isDmOrAdmin && m.character_id && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleToggleInspiration(m.character_id!); }}
+                          title={pcStats[m.character_id]?.inspiration ? 'Revoke Inspiration' : 'Grant Inspiration'}
+                          style={{ flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', padding: '0.1rem', opacity: pcStats[m.character_id]?.inspiration ? 1 : 0.3 }}
+                        >{pcStats[m.character_id]?.inspiration ? '⭐' : '☆'}</button>
+                      )}
                       {myToken && (isDmOrAdmin || isMyChar) && (
                         <button
                           onClick={(e) => { e.stopPropagation(); handleRemoveToken(myToken.id); }}
