@@ -24,11 +24,12 @@ import { useSession } from '../features/session/useSession';
 import { listMaps, createMap, deleteMap, activateMap, updateMap, toggleFog, resetFog } from '../features/session/mapApi';
 import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenHp, updateTokenConditions } from '../features/session/tokenApi';
 import { createWall, deleteWall, clearWalls } from '../features/session/wallApi';
+import { listMapFolders, createMapFolder, renameMapFolder, deleteMapFolder } from '../features/session/mapFolderApi';
 import type { WallSegment } from '../features/session/types';
 import { InGameSheet, CONDITION_COLORS } from '../features/session/InGameSheet';
 import { socket } from '../lib/socket';
 import type { Campaign } from '../features/campaign/types';
-import type { MapData, TokenData, CampaignNpc, TokenCategory } from '../features/session/types';
+import type { MapData, TokenData, CampaignNpc, TokenCategory, MapFolder } from '../features/session/types';
 
 const SIZE_CELLS: Record<string, number> = { tiny: 0.5, small: 1, medium: 1, large: 2, huge: 3, gargantuan: 4 };
 
@@ -157,15 +158,130 @@ function NpcTemplateRow({ npc }: { npc: CampaignNpc }) {
   );
 }
 
+interface MapRowProps {
+  map: MapData; activeMapId: number | null; folders: MapFolder[];
+  onActivate: (id: number) => void; onDelete: (id: number) => void;
+  onMove: (folderId: number | null) => void;
+}
+function MapRow({ map, activeMapId, folders, onActivate, onDelete, onMove }: MapRowProps) {
+  return (
+    <div style={{ padding: '0.5rem 0.6rem', borderRadius: 5, marginBottom: '0.3rem', background: activeMapId === map.id ? '#e8f0fe' : '#fff', border: `1px solid ${activeMapId === map.id ? '#4a6' : '#e0e0e0'}` }}>
+      <div style={{ fontWeight: 500, fontSize: '0.85rem', marginBottom: '0.3rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{map.name}</div>
+      <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
+        {activeMapId !== map.id ? (
+          <button onClick={() => onActivate(map.id)} style={{ flex: 1, padding: '0.25rem', fontSize: '0.72rem', cursor: 'pointer', background: '#333', color: '#fff', border: 'none', borderRadius: 3 }}>Show</button>
+        ) : (
+          <span style={{ flex: 1, padding: '0.25rem', fontSize: '0.72rem', textAlign: 'center', color: '#4a6', fontWeight: 500 }}>Active</span>
+        )}
+        {folders.length > 0 && (
+          <select value={map.folder_id ?? ''} onChange={(e) => onMove(e.target.value ? Number(e.target.value) : null)}
+            style={{ fontSize: '0.7rem', padding: '0.2rem', border: '1px solid #ddd', borderRadius: 3, maxWidth: 80 }}>
+            <option value="">No folder</option>
+            {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+          </select>
+        )}
+        <button onClick={() => onDelete(map.id)} style={{ padding: '0.25rem 0.4rem', fontSize: '0.72rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>✕</button>
+      </div>
+    </div>
+  );
+}
+
+interface FolderTreeProps {
+  folders: MapFolder[]; maps: MapData[]; activeMapId: number | null; parentId: number | null;
+  expandedFolders: Set<number>; renamingFolderId: number | null; renamingFolderName: string;
+  campaignId: number;
+  onToggleExpand: (id: number) => void;
+  onStartRename: (f: MapFolder) => void;
+  onRename: (fid: number, name: string) => void;
+  onCancelRename: () => void;
+  onSetRenamingName: (name: string) => void;
+  onAddSubfolder: (parentId: number) => void;
+  onDeleteFolder: (fid: number, parentId: number | null) => void;
+  onActivateMap: (id: number) => void;
+  onDeleteMap: (id: number) => void;
+  onMoveMap: (mapId: number, folderId: number | null) => void;
+  depth?: number;
+}
+function FolderTree({ folders, maps, activeMapId, parentId, expandedFolders, renamingFolderId, renamingFolderName, campaignId, onToggleExpand, onStartRename, onRename, onCancelRename, onSetRenamingName, onAddSubfolder, onDeleteFolder, onActivateMap, onDeleteMap, onMoveMap, depth = 0 }: FolderTreeProps) {
+  const children = folders.filter((f) => f.parent_id === parentId);
+  if (children.length === 0) return null;
+  return (
+    <>
+      {children.map((folder) => {
+        const isExpanded = expandedFolders.has(folder.id);
+        const folderMaps = maps.filter((m) => m.folder_id === folder.id);
+        const isRenaming = renamingFolderId === folder.id;
+        return (
+          <div key={folder.id} style={{ marginLeft: depth * 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.25rem 0.4rem', borderRadius: 4, marginBottom: 2, background: '#f5f5f5', border: '1px solid #e8e8e8' }}>
+              <button onClick={() => onToggleExpand(folder.id)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.7rem', color: '#666', padding: '0 2px', lineHeight: 1 }}>{isExpanded ? '▾' : '▸'}</button>
+              {isRenaming ? (
+                <input autoFocus value={renamingFolderName} onChange={(e) => onSetRenamingName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') onRename(folder.id, renamingFolderName);
+                    if (e.key === 'Escape') onCancelRename();
+                  }}
+                  style={{ flex: 1, fontSize: '0.8rem', padding: '0.1rem 0.3rem', border: '1px solid #aac', borderRadius: 3 }} />
+              ) : (
+                <span style={{ flex: 1, fontSize: '0.8rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }} onDoubleClick={() => onStartRename(folder)}>
+                  📁 {folder.name}
+                </span>
+              )}
+              <button onClick={() => onAddSubfolder(folder.id)} title="Add subfolder" style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.68rem', color: '#888', padding: '0 2px' }}>+</button>
+              <button onClick={() => onStartRename(folder)} title="Rename" style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.68rem', color: '#888', padding: '0 2px' }}>✎</button>
+              <button onClick={() => onDeleteFolder(folder.id, folder.parent_id)} title="Delete folder" style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.68rem', color: '#c44', padding: '0 2px' }}>✕</button>
+            </div>
+            {isExpanded && (
+              <div style={{ marginLeft: 12, marginBottom: 2 }}>
+                <FolderTree folders={folders} maps={maps} activeMapId={activeMapId} parentId={folder.id}
+                  expandedFolders={expandedFolders} renamingFolderId={renamingFolderId} renamingFolderName={renamingFolderName}
+                  campaignId={campaignId} onToggleExpand={onToggleExpand} onStartRename={onStartRename}
+                  onRename={onRename} onCancelRename={onCancelRename} onSetRenamingName={onSetRenamingName}
+                  onAddSubfolder={onAddSubfolder} onDeleteFolder={onDeleteFolder}
+                  onActivateMap={onActivateMap} onDeleteMap={onDeleteMap} onMoveMap={onMoveMap} depth={0} />
+                {folderMaps.map((m) => (
+                  <MapRow key={m.id} map={m} activeMapId={activeMapId} folders={folders}
+                    onActivate={onActivateMap} onDelete={onDeleteMap}
+                    onMove={(folderId) => onMoveMap(m.id, folderId)} />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 function ChatMsgItem({ msg, myUserId }: { msg: ChatMessage; myUserId: number }) {
   const isMe = msg.user_id === myUserId;
   if (msg.type === 'roll' && msg.data) {
-    const { expression, dice, modifier, total } = msg.data;
+    const { expression, dice, modifier, total, label, rollMode } = msg.data;
     const modStr = modifier !== 0 ? ` ${modifier > 0 ? '+' : ''}${modifier}` : '';
+    const isAdvDis = rollMode && dice.length === 3;
+    const chosen = isAdvDis ? dice[2] : null;
+    let diceDisplay: React.ReactNode;
+    if (isAdvDis) {
+      diceDisplay = (
+        <span>[
+          {[dice[0], dice[1]].map((d, i) => (
+            <span key={i} style={{ fontWeight: d === chosen ? 700 : 400, color: d === chosen ? '#333' : '#aaa', textDecoration: d !== chosen ? 'line-through' : undefined }}>
+              {i > 0 ? ', ' : ''}{d}
+            </span>
+          ))}
+        ]</span>
+      );
+    } else {
+      diceDisplay = <span>[{dice.join(', ')}]</span>;
+    }
     return (
       <div style={{ background: '#f5f0e8', border: '1px solid #e4d5b8', borderRadius: 5, padding: '0.35rem 0.5rem' }}>
-        <div style={{ fontSize: '0.7rem', color: '#886', fontWeight: 600, marginBottom: 2 }}>{msg.username} rolled {expression}</div>
-        <div style={{ fontSize: '0.78rem', color: '#666' }}>[{dice.join(', ')}]{modStr}</div>
+        <div style={{ fontSize: '0.7rem', color: '#886', fontWeight: 600, marginBottom: 2 }}>
+          {msg.username}{label ? <span style={{ color: '#a86' }}> — {label}</span> : <span> rolled {expression}</span>}
+          {rollMode && <span style={{ marginLeft: 4, fontSize: '0.65rem', color: rollMode === 'advantage' ? '#2a6' : '#a24', fontWeight: 700 }}>{rollMode === 'advantage' ? 'ADV' : 'DIS'}</span>}
+        </div>
+        {label && <div style={{ fontSize: '0.7rem', color: '#999', marginBottom: 2 }}>{expression}</div>}
+        <div style={{ fontSize: '0.78rem', color: '#666' }}>{diceDisplay}{modStr}</div>
         <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#333' }}>= {total}</div>
       </div>
     );
@@ -191,6 +307,13 @@ export default function CampaignSessionPage() {
   const [activeMapId, setActiveMapId] = useState<number | null>(null);
   const [npcs, setNpcs] = useState<CampaignNpc[]>([]);
   const [categories, setCategories] = useState<TokenCategory[]>([]);
+  const [folders, setFolders] = useState<MapFolder[]>([]);
+  const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
+  const [newMapFolderId, setNewMapFolderId] = useState<number | null>(null);
+  const [renamingFolderId, setRenamingFolderId] = useState<number | null>(null);
+  const [renamingFolderName, setRenamingFolderName] = useState('');
+  const [newFolderParentId, setNewFolderParentId] = useState<number | null | undefined>(undefined);
+  const [newFolderName, setNewFolderName] = useState('');
 
   const [showLeftPanel, setShowLeftPanel] = useState(false);
   const [leftTab, setLeftTab] = useState<'maps' | 'templates'>('maps');
@@ -234,6 +357,7 @@ export default function CampaignSessionPage() {
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [hasUnread, setHasUnread] = useState(false);
+  const [diceLogOpen, setDiceLogOpen] = useState(true);
   const chatLogRef = useRef<HTMLDivElement>(null);
   const prevMsgCount = useRef(0);
 
@@ -272,11 +396,13 @@ export default function CampaignSessionPage() {
       listMaps(campaign.id),
       listCampaignNpcs(campaign.id),
       listTokenCategories(campaign.id),
-    ]).then(([mapsData, npcData, catData]) => {
+      listMapFolders(campaign.id),
+    ]).then(([mapsData, npcData, catData, folderData]) => {
       setMaps(mapsData.maps);
       setActiveMapId(mapsData.active_map_id);
       setNpcs(npcData);
       setCategories(catData);
+      setFolders(folderData);
     }).catch(() => {});
   }, [campaign?.id, isDmOrAdmin]);
 
@@ -434,9 +560,9 @@ export default function CampaignSessionPage() {
     e.preventDefault();
     setSavingMap(true);
     try {
-      const m = await createMap({ campaign_id: Number(id), name: newMapName.trim(), image_url: newMapUrl.trim(), grid_size: newMapGridSize });
+      const m = await createMap({ campaign_id: Number(id), name: newMapName.trim(), image_url: newMapUrl.trim(), grid_size: newMapGridSize, folder_id: newMapFolderId });
       setMaps((prev) => [...prev, m]);
-      setNewMapName(''); setNewMapUrl(''); setNewMapGridSize(50); setAddingMap(false);
+      setNewMapName(''); setNewMapUrl(''); setNewMapGridSize(50); setNewMapFolderId(null); setAddingMap(false);
     } catch (e: any) { setError(e.message); }
     finally { setSavingMap(false); }
   }
@@ -572,50 +698,6 @@ export default function CampaignSessionPage() {
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
-          {isDmOrAdmin && (
-            <button onClick={() => setShowLeftPanel(!showLeftPanel)} style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: showLeftPanel ? '#333' : '#fff', color: showLeftPanel ? '#fff' : '#333', fontSize: '0.85rem' }}>
-              DM Bar
-            </button>
-          )}
-          {isDmOrAdmin && (
-            <button onClick={() => socket.emit('initiative:roll')} title="Roll initiative for all map tokens" style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', color: '#333', fontSize: '0.85rem' }}>
-              ⚔ Initiative
-            </button>
-          )}
-          {isDmOrAdmin && activeMap && (
-            <button
-              onClick={() => setWallMode((w) => !w)}
-              title={wallMode ? 'Exit wall editor (click wall to delete, drag to draw)' : 'Enter wall editor'}
-              style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: `1px solid ${wallMode ? '#c44' : '#ccc'}`, borderRadius: 4, background: wallMode ? '#fdecea' : '#fff', color: wallMode ? '#c44' : '#333', fontSize: '0.85rem', fontWeight: wallMode ? 700 : 400 }}
-            >
-              🧱 {wallMode ? 'Walls ON' : 'Walls'}
-            </button>
-          )}
-          {isDmOrAdmin && activeMap && walls.length > 0 && (
-            <button onClick={() => { if (confirm('Clear all walls on this map?')) clearWalls(activeMap.id).catch((e: Error) => setError(e.message)); }} style={{ padding: '0.3rem 0.6rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 4, background: '#fff', color: 'crimson', fontSize: '0.8rem' }} title="Delete all walls">
-              Clear walls
-            </button>
-          )}
-          {isDmOrAdmin && activeMap && (
-            <>
-              <button
-                onClick={() => toggleFog(activeMap.id).then((m) => setActiveMap(m)).catch((e: Error) => setError(e.message))}
-                title={activeMap.fog_enabled ? 'Fog ON — click to disable' : 'Fog OFF — click to enable'}
-                style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: `1px solid ${activeMap.fog_enabled ? '#448' : '#ccc'}`, borderRadius: 4, background: activeMap.fog_enabled ? '#eef' : '#fff', color: activeMap.fog_enabled ? '#448' : '#333', fontSize: '0.85rem', fontWeight: activeMap.fog_enabled ? 700 : 400 }}
-              >
-                🌫 {activeMap.fog_enabled ? 'Fog ON' : 'Fog OFF'}
-              </button>
-              {activeMap.fog_enabled ? (
-                <button
-                  onClick={() => { if (confirm('Reset fog? All explored cells will be cleared.')) resetFog(activeMap.id).catch((e: Error) => setError(e.message)); }}
-                  style={{ padding: '0.3rem 0.6rem', cursor: 'pointer', border: '1px solid #cce', borderRadius: 4, background: '#fff', color: '#448', fontSize: '0.8rem' }}
-                  title="Clear all explored fog"
-                >
-                  Reset fog
-                </button>
-              ) : null}
-            </>
-          )}
           {activeMap && (
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }} title="Grid colour">
               <label style={{ fontSize: '0.78rem', color: '#555', cursor: 'pointer' }}>
@@ -650,9 +732,51 @@ export default function CampaignSessionPage() {
       {/* Main area */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
-        {/* DM Bar */}
-        {isDmOrAdmin && showLeftPanel && (
+        {/* DM Bar — always rendered for DM/admin, collapsible via arrow on bar */}
+        {isDmOrAdmin && (
+          <div style={{ display: 'flex', flexShrink: 0 }}>
+            {/* Collapse arrow strip */}
+            <button onClick={() => setShowLeftPanel((p) => !p)} title={showLeftPanel ? 'Collapse DM bar' : 'Expand DM bar'}
+              style={{ width: 20, background: '#f0f0f0', border: 'none', borderRight: '1px solid #ddd', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', color: '#888', flexShrink: 0, padding: 0 }}>
+              {showLeftPanel ? '◀' : '▶'}
+            </button>
+
+          {showLeftPanel && (
           <div style={{ width: 260, background: '#fafafa', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }}>
+
+            {/* Tools section */}
+            <div style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #ddd', display: 'flex', flexWrap: 'wrap', gap: '0.35rem', flexShrink: 0 }}>
+              <button onClick={() => socket.emit('initiative:roll')} title="Roll initiative for all map tokens"
+                style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', color: '#333', fontSize: '0.78rem' }}>
+                ⚔ Initiative
+              </button>
+              {activeMap && (
+                <button onClick={() => setWallMode((w) => !w)}
+                  title={wallMode ? 'Exit wall editor' : 'Enter wall editor'}
+                  style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: `1px solid ${wallMode ? '#c44' : '#ccc'}`, borderRadius: 4, background: wallMode ? '#fdecea' : '#fff', color: wallMode ? '#c44' : '#333', fontSize: '0.78rem', fontWeight: wallMode ? 700 : 400 }}>
+                  🧱 {wallMode ? 'Walls ON' : 'Walls'}
+                </button>
+              )}
+              {activeMap && walls.length > 0 && (
+                <button onClick={() => { if (confirm('Clear all walls on this map?')) clearWalls(activeMap.id).catch((e: Error) => setError(e.message)); }}
+                  style={{ padding: '0.25rem 0.5rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 4, background: '#fff', color: 'crimson', fontSize: '0.75rem' }} title="Delete all walls">
+                  Clear walls
+                </button>
+              )}
+              {activeMap && (
+                <button onClick={() => toggleFog(activeMap.id).then((m) => setActiveMap(m)).catch((e: Error) => setError(e.message))}
+                  title={activeMap.fog_enabled ? 'Fog ON — click to disable' : 'Fog OFF — click to enable'}
+                  style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: `1px solid ${activeMap.fog_enabled ? '#448' : '#ccc'}`, borderRadius: 4, background: activeMap.fog_enabled ? '#eef' : '#fff', color: activeMap.fog_enabled ? '#448' : '#333', fontSize: '0.78rem', fontWeight: activeMap.fog_enabled ? 700 : 400 }}>
+                  🌫 {activeMap.fog_enabled ? 'Fog ON' : 'Fog'}
+                </button>
+              )}
+              {activeMap?.fog_enabled && (
+                <button onClick={() => { if (confirm('Reset fog? All explored cells will be cleared.')) resetFog(activeMap.id).catch((e: Error) => setError(e.message)); }}
+                  style={{ padding: '0.25rem 0.5rem', cursor: 'pointer', border: '1px solid #cce', borderRadius: 4, background: '#fff', color: '#448', fontSize: '0.75rem' }} title="Clear all explored fog">
+                  Reset fog
+                </button>
+              )}
+            </div>
 
             <div style={{ display: 'flex', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
               {(['maps', 'templates'] as const).map((tab) => (
@@ -678,6 +802,15 @@ export default function CampaignSessionPage() {
                       <label>Grid size (px):</label>
                       <input type="number" value={newMapGridSize} onChange={(e) => setNewMapGridSize(Number(e.target.value))} min={10} max={200} style={{ width: 60, padding: '0.3rem', border: '1px solid #ccc', borderRadius: 4 }} />
                     </div>
+                    {folders.length > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}>
+                        <label>Folder:</label>
+                        <select value={newMapFolderId ?? ''} onChange={(e) => setNewMapFolderId(e.target.value ? Number(e.target.value) : null)} style={{ flex: 1, padding: '0.3rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.8rem' }}>
+                          <option value="">No folder</option>
+                          {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                        </select>
+                      </div>
+                    )}
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
                       <button type="submit" disabled={savingMap} style={{ flex: 1, padding: '0.4rem', background: '#333', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.85rem' }}>{savingMap ? 'Saving…' : 'Add map'}</button>
                       <button type="button" onClick={() => setAddingMap(false)} style={{ padding: '0.4rem 0.75rem', cursor: 'pointer', fontSize: '0.85rem' }}>✕</button>
@@ -686,20 +819,86 @@ export default function CampaignSessionPage() {
                 )}
 
                 <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem' }}>
-                  {maps.length === 0 && <div style={{ fontSize: '0.85rem', color: '#aaa', padding: '0.5rem' }}>No maps yet.</div>}
-                  {maps.map((m) => (
-                    <div key={m.id} style={{ padding: '0.6rem 0.75rem', borderRadius: 6, marginBottom: '0.4rem', background: activeMapId === m.id ? '#e8f0fe' : '#fff', border: `1px solid ${activeMapId === m.id ? '#4a6' : '#e0e0e0'}` }}>
-                      <div style={{ fontWeight: 500, fontSize: '0.9rem', marginBottom: '0.35rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>
-                      <div style={{ display: 'flex', gap: '0.4rem' }}>
-                        {activeMapId !== m.id ? (
-                          <button onClick={() => handleActivateMap(m.id)} style={{ flex: 1, padding: '0.3rem', fontSize: '0.75rem', cursor: 'pointer', background: '#333', color: '#fff', border: 'none', borderRadius: 4 }}>Show</button>
-                        ) : (
-                          <span style={{ flex: 1, padding: '0.3rem', fontSize: '0.75rem', textAlign: 'center', color: '#4a6', fontWeight: 500 }}>Active</span>
-                        )}
-                        <button onClick={() => handleDeleteMap(m.id)} style={{ padding: '0.3rem 0.5rem', fontSize: '0.75rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 4, color: 'crimson', background: '#fff' }}>✕</button>
-                      </div>
+                  {/* New folder row */}
+                  {newFolderParentId !== undefined && (
+                    <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.4rem', padding: '0.3rem 0.5rem', background: '#f0f4ff', borderRadius: 4, border: '1px solid #ccd' }}>
+                      <input autoFocus value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && newFolderName.trim()) {
+                            createMapFolder(campaign!.id, newFolderName.trim(), newFolderParentId).then((f) => {
+                              setFolders((prev) => [...prev, f]);
+                              setExpandedFolders((prev) => { const n = new Set(prev); if (f.parent_id) n.add(f.parent_id); return n; });
+                            }).catch(() => {});
+                            setNewFolderParentId(undefined); setNewFolderName('');
+                          }
+                          if (e.key === 'Escape') { setNewFolderParentId(undefined); setNewFolderName(''); }
+                        }}
+                        placeholder={newFolderParentId ? 'Subfolder name…' : 'Folder name…'}
+                        style={{ flex: 1, padding: '0.25rem', border: '1px solid #aac', borderRadius: 3, fontSize: '0.82rem' }} />
+                      <button onClick={() => { setNewFolderParentId(undefined); setNewFolderName(''); }} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#aaa', fontSize: '0.9rem' }}>✕</button>
                     </div>
-                  ))}
+                  )}
+
+                  {/* New folder button */}
+                  {newFolderParentId === undefined && (
+                    <button onClick={() => { setNewFolderParentId(null); setNewFolderName(''); }}
+                      style={{ width: '100%', marginBottom: '0.4rem', padding: '0.25rem', fontSize: '0.75rem', border: '1px dashed #ccc', borderRadius: 4, background: '#fafafa', color: '#888', cursor: 'pointer', textAlign: 'left' }}>
+                      + New folder
+                    </button>
+                  )}
+
+                  {/* Folder tree then unassigned maps */}
+                  <FolderTree
+                    folders={folders} maps={maps} activeMapId={activeMapId} parentId={null}
+                    expandedFolders={expandedFolders} renamingFolderId={renamingFolderId}
+                    renamingFolderName={renamingFolderName}
+                    campaignId={campaign!.id}
+                    onToggleExpand={(id) => setExpandedFolders((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; })}
+                    onStartRename={(f) => { setRenamingFolderId(f.id); setRenamingFolderName(f.name); }}
+                    onRename={(fid, name) => {
+                      renameMapFolder(campaign!.id, fid, name)
+                        .then((f) => setFolders((prev) => prev.map((x) => x.id === fid ? f : x)))
+                        .catch(() => {});
+                      setRenamingFolderId(null);
+                    }}
+                    onCancelRename={() => setRenamingFolderId(null)}
+                    onSetRenamingName={setRenamingFolderName}
+                    onAddSubfolder={(parentId) => { setNewFolderParentId(parentId); setNewFolderName(''); }}
+                    onDeleteFolder={(fid, parentId) => {
+                      const hasMaps = maps.some((m) => m.folder_id === fid);
+                      const hasChildren = folders.some((f) => f.parent_id === fid);
+                      if (hasMaps || hasChildren) {
+                        const del = confirm('Delete maps inside this folder too?\nOK = delete maps, Cancel = move maps to parent');
+                        deleteMapFolder(campaign!.id, fid, del).then(() => {
+                          setFolders((prev) => prev.filter((f) => f.id !== fid && f.parent_id !== fid));
+                          if (del) setMaps((prev) => prev.filter((m) => m.folder_id !== fid));
+                          else setMaps((prev) => prev.map((m) => m.folder_id === fid ? { ...m, folder_id: parentId } : m));
+                        }).catch(() => {});
+                      } else {
+                        deleteMapFolder(campaign!.id, fid, false).then(() => setFolders((prev) => prev.filter((f) => f.id !== fid))).catch(() => {});
+                      }
+                    }}
+                    onActivateMap={handleActivateMap}
+                    onDeleteMap={handleDeleteMap}
+                    onMoveMap={(mapId, folderId) => {
+                      updateMap(mapId, { folder_id: folderId }).then((m) => setMaps((prev) => prev.map((x) => x.id === mapId ? m : x))).catch(() => {});
+                    }}
+                  />
+
+                  {/* Unassigned maps */}
+                  {maps.filter((m) => !m.folder_id).length > 0 && (
+                    <div>
+                      {folders.length > 0 && <div style={{ fontSize: '0.68rem', color: '#bbb', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.4rem 0 0.25rem 0.25rem' }}>Unassigned</div>}
+                      {maps.filter((m) => !m.folder_id).map((m) => (
+                        <MapRow key={m.id} map={m} activeMapId={activeMapId} folders={folders}
+                          onActivate={handleActivateMap} onDelete={handleDeleteMap}
+                          onMove={(folderId) => {
+                            updateMap(m.id, { folder_id: folderId }).then((upd) => setMaps((prev) => prev.map((x) => x.id === m.id ? upd : x))).catch(() => {});
+                          }} />
+                      ))}
+                    </div>
+                  )}
+                  {maps.length === 0 && folders.length === 0 && <div style={{ fontSize: '0.85rem', color: '#aaa', padding: '0.5rem' }}>No maps yet.</div>}
                 </div>
 
                 {activeMap && (
@@ -760,6 +959,8 @@ export default function CampaignSessionPage() {
                 )}
               </div>
             )}
+          </div>
+          )}
           </div>
         )}
 
@@ -1061,8 +1262,8 @@ export default function CampaignSessionPage() {
             {chatOpen && (
               <div style={{ height: 260, display: 'flex', flexDirection: 'column', borderTop: '1px solid #eee' }}>
                 <div ref={chatLogRef} style={{ flex: 1, overflowY: 'auto', padding: '0.5rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                  {messages.length === 0 && <div style={{ fontSize: '0.78rem', color: '#ccc', textAlign: 'center', marginTop: '0.5rem' }}>No messages yet.</div>}
-                  {messages.map((msg) => <ChatMsgItem key={msg.id} msg={msg} myUserId={user!.id} />)}
+                  {messages.filter(m => m.type === 'chat').length === 0 && <div style={{ fontSize: '0.78rem', color: '#ccc', textAlign: 'center', marginTop: '0.5rem' }}>No messages yet.</div>}
+                  {messages.filter(m => m.type === 'chat').map((msg) => <ChatMsgItem key={msg.id} msg={msg} myUserId={user!.id} />)}
                 </div>
                 <div style={{ padding: '0.4rem 0.5rem', borderTop: '1px solid #eee', flexShrink: 0 }}>
                   <input
@@ -1079,6 +1280,42 @@ export default function CampaignSessionPage() {
 
         </div>
       </div>
+
+      {/* Floating Dice Log — always visible, bottom-left */}
+      {(() => {
+        const rolls = messages.filter((m) => m.type === 'roll');
+        if (rolls.length === 0) return null;
+        const recent = rolls.slice(-8);
+        return (
+          <div style={{ position: 'fixed', bottom: 12, right: 252, zIndex: 50, width: 230, fontFamily: 'system-ui', pointerEvents: 'auto' }}>
+            <div
+              onClick={() => setDiceLogOpen((o) => !o)}
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0.75rem', background: '#2a2a2a', color: '#fff', borderRadius: diceLogOpen ? '6px 6px 0 0' : 6, cursor: 'pointer', userSelect: 'none' }}
+            >
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.04em' }}>🎲 Dice Log</span>
+              <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{diceLogOpen ? '▼' : '▲'}</span>
+            </div>
+            {diceLogOpen && (
+              <div style={{ background: 'rgba(30,30,30,0.95)', borderRadius: '0 0 6px 6px', overflow: 'hidden', border: '1px solid #444', borderTop: 'none' }}>
+                {recent.map((msg) => {
+                  const { label, expression, total, dice, modifier } = msg.data!;
+                  const modStr = modifier !== 0 ? ` ${modifier > 0 ? '+' : ''}${modifier}` : '';
+                  return (
+                    <div key={msg.id} style={{ padding: '0.35rem 0.6rem', borderBottom: '1px solid #333' }}>
+                      <div style={{ fontSize: '0.68rem', color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span style={{ color: '#7ac' }}>{msg.username}</span>
+                        {label ? <span style={{ color: '#ca8' }}> — {label}</span> : <span style={{ color: '#888' }}> · {expression}</span>}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: '#777' }}>[{dice.join(', ')}]{modStr}</div>
+                      <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#eee' }}>= {total}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* In-game character sheet panel */}
       {panel?.type === 'character' && (() => {
