@@ -25,6 +25,8 @@ import { listMaps, createMap, deleteMap, activateMap, updateMap, toggleFog, rese
 import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenHp, updateTokenConditions } from '../features/session/tokenApi';
 import { createWall, deleteWall, clearWalls } from '../features/session/wallApi';
 import { listMapFolders, createMapFolder, renameMapFolder, deleteMapFolder } from '../features/session/mapFolderApi';
+import { listNotes, createNote, updateNote, deleteNote } from '../features/session/campaignNotesApi';
+import type { CampaignNote } from '../features/session/campaignNotesApi';
 import type { WallSegment } from '../features/session/types';
 import { InGameSheet, CONDITION_COLORS } from '../features/session/InGameSheet';
 import { apiFetch } from '../lib/api';
@@ -311,6 +313,11 @@ export default function CampaignSessionPage() {
   const [categories, setCategories] = useState<TokenCategory[]>([]);
   const [folders, setFolders] = useState<MapFolder[]>([]);
   const [pcStats, setPcStats] = useState<Record<number, { passive_perception: number; inspiration: number }>>({});
+  const [notes, setNotes] = useState<CampaignNote[]>([]);
+  const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
+  const [noteTitle, setNoteTitle] = useState('');
+  const [noteBody, setNoteBody] = useState('');
+  const [noteSaving, setNoteSaving] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
   const [newMapFolderId, setNewMapFolderId] = useState<number | null>(null);
   const [renamingFolderId, setRenamingFolderId] = useState<number | null>(null);
@@ -319,7 +326,7 @@ export default function CampaignSessionPage() {
   const [newFolderName, setNewFolderName] = useState('');
 
   const [showLeftPanel, setShowLeftPanel] = useState(false);
-  const [leftTab, setLeftTab] = useState<'maps' | 'templates'>('maps');
+  const [leftTab, setLeftTab] = useState<'maps' | 'templates' | 'notes'>('maps');
 
   const [addingMap, setAddingMap] = useState(false);
   const [newMapName, setNewMapName] = useState('');
@@ -401,7 +408,8 @@ export default function CampaignSessionPage() {
       listTokenCategories(campaign.id),
       listMapFolders(campaign.id),
       apiFetch<{ characters: Array<{ id: number; passive_perception: number; inspiration: number }> }>(`/campaigns/${campaign.id}/characters`),
-    ]).then(([mapsData, npcData, catData, folderData, charData]) => {
+      listNotes(campaign.id),
+    ]).then(([mapsData, npcData, catData, folderData, charData, notesData]) => {
       setMaps(mapsData.maps);
       setActiveMapId(mapsData.active_map_id);
       setNpcs(npcData);
@@ -410,6 +418,7 @@ export default function CampaignSessionPage() {
       const statsMap: Record<number, { passive_perception: number; inspiration: number }> = {};
       for (const c of charData.characters) statsMap[c.id] = { passive_perception: c.passive_perception, inspiration: c.inspiration };
       setPcStats(statsMap);
+      setNotes(notesData);
     }).catch(() => {});
   }, [campaign?.id, isDmOrAdmin]);
 
@@ -794,9 +803,9 @@ export default function CampaignSessionPage() {
             </div>
 
             <div style={{ display: 'flex', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
-              {(['maps', 'templates'] as const).map((tab) => (
-                <button key={tab} onClick={() => setLeftTab(tab)} style={{ flex: 1, padding: '0.6rem', border: 'none', borderBottom: leftTab === tab ? '2px solid #333' : '2px solid transparent', background: 'none', cursor: 'pointer', fontSize: '0.85rem', fontWeight: leftTab === tab ? 600 : 400, color: leftTab === tab ? '#333' : '#888' }}>
-                  {tab === 'maps' ? 'Maps' : 'Templates'}
+              {(['maps', 'templates', 'notes'] as const).map((tab) => (
+                <button key={tab} onClick={() => setLeftTab(tab)} style={{ flex: 1, padding: '0.6rem', border: 'none', borderBottom: leftTab === tab ? '2px solid #333' : '2px solid transparent', background: 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: leftTab === tab ? 600 : 400, color: leftTab === tab ? '#333' : '#888' }}>
+                  {tab === 'maps' ? 'Maps' : tab === 'templates' ? 'NPCs' : 'Notes'}
                 </button>
               ))}
             </div>
@@ -971,6 +980,69 @@ export default function CampaignSessionPage() {
                       </div>
                     )}
                   </>
+                )}
+              </div>
+            )}
+
+            {leftTab === 'notes' && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                {editingNoteId === null ? (
+                  <>
+                    <div style={{ padding: '0.5rem', borderBottom: '1px solid #eee', flexShrink: 0 }}>
+                      <button onClick={async () => {
+                        if (!campaign) return;
+                        const n = await createNote(campaign.id);
+                        setNotes((prev) => [n, ...prev]);
+                        setEditingNoteId(n.id);
+                        setNoteTitle(n.title);
+                        setNoteBody(n.body);
+                      }} style={{ width: '100%', padding: '0.4rem', fontSize: '0.82rem', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', background: '#fff', fontWeight: 600 }}>
+                        + New Note
+                      </button>
+                    </div>
+                    <div style={{ flex: 1, overflowY: 'auto' }}>
+                      {notes.length === 0 && <div style={{ padding: '1rem', fontSize: '0.85rem', color: '#aaa' }}>No notes yet.</div>}
+                      {notes.map((note) => (
+                        <div key={note.id} style={{ padding: '0.6rem 0.75rem', borderBottom: '1px solid #eee', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}
+                          onClick={() => { setEditingNoteId(note.id); setNoteTitle(note.title); setNoteBody(note.body); }}>
+                          <div>
+                            <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#333' }}>{note.title || 'Untitled'}</div>
+                            <div style={{ fontSize: '0.72rem', color: '#aaa', marginTop: 2 }}>
+                              {note.body ? note.body.slice(0, 60) + (note.body.length > 60 ? '…' : '') : 'Empty'}
+                            </div>
+                          </div>
+                          <button onClick={(e) => { e.stopPropagation(); if (!campaign) return; deleteNote(campaign.id, note.id).then(() => setNotes((prev) => prev.filter((n) => n.id !== note.id))); }}
+                            style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff', cursor: 'pointer', marginLeft: '0.5rem' }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '0.5rem', gap: '0.4rem' }}>
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexShrink: 0 }}>
+                      <button onClick={() => setEditingNoteId(null)} style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', border: '1px solid #ddd', borderRadius: 3, cursor: 'pointer', background: '#fff', color: '#666' }}>← Back</button>
+                      <input value={noteTitle} onChange={(e) => setNoteTitle(e.target.value)}
+                        onBlur={async () => {
+                          if (!campaign || editingNoteId === null) return;
+                          setNoteSaving(true);
+                          const updated = await updateNote(campaign.id, editingNoteId, { title: noteTitle }).catch(() => null);
+                          if (updated) setNotes((prev) => prev.map((n) => n.id === editingNoteId ? updated : n));
+                          setNoteSaving(false);
+                        }}
+                        style={{ flex: 1, padding: '0.3rem 0.5rem', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.85rem', fontWeight: 600 }} placeholder="Note title" />
+                      {noteSaving && <span style={{ fontSize: '0.7rem', color: '#aaa' }}>saving…</span>}
+                    </div>
+                    <textarea value={noteBody} onChange={(e) => setNoteBody(e.target.value)}
+                      onBlur={async () => {
+                        if (!campaign || editingNoteId === null) return;
+                        setNoteSaving(true);
+                        const updated = await updateNote(campaign.id, editingNoteId, { body: noteBody }).catch(() => null);
+                        if (updated) setNotes((prev) => prev.map((n) => n.id === editingNoteId ? updated : n));
+                        setNoteSaving(false);
+                      }}
+                      style={{ flex: 1, padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.83rem', resize: 'none', fontFamily: 'system-ui', lineHeight: 1.5 }}
+                      placeholder="Write your session notes here…" />
+                  </div>
                 )}
               </div>
             )}
