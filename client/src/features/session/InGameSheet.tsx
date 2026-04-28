@@ -184,37 +184,68 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   // Detect concentration removal — send chat notification naming the spell
   useEffect(() => {
     if (concentratingOn && !conditions.includes('concentration')) {
-      socket.emit('chat:send', { body: `${character?.name ?? 'Character'} lost concentration on ${concentratingOn}.` });
+      socket.emit('chat:send', { body: `/action ${character?.name ?? 'Character'} lost concentration on ${concentratingOn}.` });
       setConcentratingOn(null);
     }
   }, [conditions]);
 
   async function adjustHp(delta: number) {
     if (!character || saving) return;
-    await commitHp(Math.max(0, Math.min(character.hp_max, hpCurrent + delta)));
+    const damage = delta < 0 ? Math.abs(delta) : 0;
+    await commitHp(Math.max(0, Math.min(character.hp_max, hpCurrent + delta)), damage);
   }
 
   async function commitHpInput() {
     if (!character) return;
     const val = parseInt(hpInput, 10);
-    if (!isNaN(val)) await commitHp(Math.max(0, Math.min(character.hp_max, val)));
+    if (!isNaN(val)) {
+      const next = Math.max(0, Math.min(character.hp_max, val));
+      const damage = val < hpCurrent ? hpCurrent - val : 0;
+      await commitHp(next, damage);
+    }
     setHpInputMode(false);
   }
 
-  async function commitHp(next: number) {
+  async function commitHp(next: number, damage = 0) {
     setSaving(true);
     try {
       const result = await updateTokenHp(tokenId, next);
-      setHpCurrent(result.hp_current);
+      const resolved = result.hp_current;
+      setHpCurrent(resolved);
+
+      if (conditions.includes('concentration')) {
+        if (resolved === 0) {
+          // Unconscious — concentration ends, no save
+          socket.emit('chat:send', { body: `/action ${character!.name} dropped to 0 HP — concentration on ${concentratingOn ?? 'their spell'} ends.` });
+          try { await onConditionsChange(conditions.filter((c) => c !== 'concentration')); } catch { /* ignore */ }
+        } else if (damage > 0) {
+          // Con save: DC = max(10, half damage)
+          const conModLocal = abilityModifier(character!.abilities.con);
+          const dc = Math.max(10, Math.floor(damage / 2));
+          const roll = Math.floor(Math.random() * 20) + 1;
+          const total = roll + conModLocal;
+          if (total < dc) {
+            socket.emit('chat:send', { body: `/action ${character!.name} failed concentration save (rolled ${total} vs DC ${dc}) — ${concentratingOn ?? 'spell'} ends.` });
+            try { await onConditionsChange(conditions.filter((c) => c !== 'concentration')); } catch { /* ignore */ }
+          } else {
+            socket.emit('chat:send', { body: `/action ${character!.name} maintained concentration (rolled ${total} vs DC ${dc}).` });
+          }
+        }
+      }
     } catch { /* ignore */ }
     finally { setSaving(false); }
   }
 
   async function toggleCondition(cond: string) {
     if (!canEditConditions || condSaving) return;
-    const next = conditions.includes(cond)
+    let next = conditions.includes(cond)
       ? conditions.filter((c) => c !== cond)
       : [...conditions, cond];
+    // Adding incapacitated while concentrating → also strip concentration
+    if (cond === 'incapacitated' && !conditions.includes('incapacitated') && next.includes('concentration')) {
+      socket.emit('chat:send', { body: `/action ${character?.name} became incapacitated — concentration on ${concentratingOn ?? 'their spell'} ends.` });
+      next = next.filter((c) => c !== 'concentration');
+    }
     setCondSaving(true);
     try { await onConditionsChange(next); }
     finally { setCondSaving(false); }
@@ -276,7 +307,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     const nextUsed = hitDiceUsed + 1;
     setHpCurrent(nextHp);
     setHitDiceUsed(nextUsed);
-    socket.emit('chat:send', { body: `${character.name} uses a Hit Die: rolls ${roll}${conMod !== 0 ? formatModifier(conMod) : ''} = +${heal} HP.` });
+    socket.emit('chat:send', { body: `/action ${character.name} uses a Hit Die: rolls ${roll}${conMod !== 0 ? formatModifier(conMod) : ''} = +${heal} HP.` });
     try {
       await updateCharacter(character.id, { hp_current: nextHp, hit_dice_used: nextUsed });
       if (tokenId > 0) await updateTokenHp(tokenId, nextHp);
@@ -325,7 +356,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
       label = `Death Save — ${roll}, failure`;
       await handleDeathSave('failure', 1);
     }
-    socket.emit('chat:send', { body: `${character.name}: ${label}` });
+    socket.emit('chat:send', { body: `/action ${character.name}: ${label}` });
   }
 
   async function resetDeathSaves() {
@@ -347,7 +378,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     const prev = localResources;
     const next = localResources.map((r) => r.reset === 'short' ? { ...r, current: r.max } : r);
     setLocalResources(next);
-    socket.emit('chat:send', { body: `${character.name} takes a short rest.` });
+    socket.emit('chat:send', { body: `/action ${character.name} takes a short rest.` });
     try { await updateCharacter(character.id, { resources: next }); }
     catch { setLocalResources(prev); }
   }
@@ -364,7 +395,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     setLocalResources(nextResources);
     setDeathSavesSuccess(0);
     setDeathSavesFailure(0);
-    socket.emit('chat:send', { body: `${character.name} takes a long rest. HP and resources restored.` });
+    socket.emit('chat:send', { body: `/action ${character.name} takes a long rest. HP and resources restored.` });
     try {
       await updateCharacter(character.id, {
         hp_current: nextHp, spell_slots_used: nextSlotsUsed,
@@ -952,20 +983,29 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                     } else {
                       if (finalDice) rollInChat(`${meta!.name}${lvlSuffix} — Damage`, finalDice);
                     }
-                    if (meta?.concentration && !conditions.includes('concentration')) {
-                      setConcentratingOn(meta.name);
-                      try { await onConditionsChange([...conditions, 'concentration']); }
-                      catch { /* ignore */ }
+                    if (meta?.concentration) {
+                      if (conditions.includes('concentration') && _concentratingOn) {
+                        socket.emit('chat:send', { body: `/action ${character.name} drops concentration on ${_concentratingOn}, now concentrating on ${meta.name}.` });
+                        setConcentratingOn(meta.name);
+                      } else if (!conditions.includes('concentration')) {
+                        setConcentratingOn(meta.name);
+                        try { await onConditionsChange([...conditions, 'concentration']); } catch { /* ignore */ }
+                      }
                     }
                     setUpcastPicker(null);
                   };
 
                   const castNonAttack = async (castLevel: number) => {
                     const lvlSuffix = castLevel > level ? ` (${slotLabel(castLevel)})` : '';
-                    socket.emit('chat:send', { body: `${character.name} casts ${meta!.name}${lvlSuffix}.` });
-                    if (meta?.concentration && !conditions.includes('concentration')) {
-                      setConcentratingOn(meta.name);
-                      try { await onConditionsChange([...conditions, 'concentration']); } catch { /* ignore */ }
+                    socket.emit('chat:send', { body: `/action ${character.name} casts ${meta!.name}${lvlSuffix}.` });
+                    if (meta?.concentration) {
+                      if (conditions.includes('concentration') && _concentratingOn) {
+                        socket.emit('chat:send', { body: `/action ${character.name} drops concentration on ${_concentratingOn}, now concentrating on ${meta.name}.` });
+                        setConcentratingOn(meta.name);
+                      } else if (!conditions.includes('concentration')) {
+                        setConcentratingOn(meta.name);
+                        try { await onConditionsChange([...conditions, 'concentration']); } catch { /* ignore */ }
+                      }
                     }
                     setUpcastPicker(null);
                   };
@@ -989,7 +1029,7 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                             if (!meta) return;
                             const lvlText = level === 0 ? 'Cantrip' : `Level ${level}`;
                             const desc = meta.desc?.split('\n')[0].slice(0, 300) ?? '';
-                            socket.emit('chat:send', { body: `📖 ${meta.name} (${lvlText})${desc ? ': ' + desc : ''}` });
+                            socket.emit('chat:send', { body: `/action 📖 ${meta.name} (${lvlText})${desc ? ': ' + desc : ''}` });
                           }}
                           title={meta ? 'Click to share spell description in chat' : undefined}
                           style={{ fontSize: '0.85rem', fontWeight: (isPrepared || isCantrip) ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '0.5rem', cursor: meta ? 'pointer' : 'default', textDecoration: meta ? 'underline dotted' : 'none', textUnderlineOffset: 3 }}>
