@@ -267,7 +267,7 @@ const VALID_CONDITIONS = new Set([
   'prone', 'restrained', 'stunned', 'unconscious',
 ]);
 
-// PATCH /api/tokens/:id/conditions  (DM/admin only)
+// PATCH /api/tokens/:id/conditions  (DM/admin or token's PC owner)
 router.patch('/:id/conditions', (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   const raw = req.body?.conditions;
@@ -282,7 +282,14 @@ router.patch('/:id/conditions', (req: AuthRequest, res) => {
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
   const isDmOrAdmin = req.user!.role === 'admin' || req.user!.id === campaign.dm_id;
-  if (!isDmOrAdmin) return res.status(403).json({ error: 'DM access required' });
+  if (!isDmOrAdmin) {
+    const controlled = JSON.parse(token.controlled_by) as number[];
+    const ownsChar = token.token_type === 'pc' && token.character_id !== null &&
+      !!db.prepare('SELECT id FROM characters WHERE id = ? AND owner_id = ?').get(token.character_id, req.user!.id);
+    if (!controlled.includes(req.user!.id) && !ownsChar) {
+      return res.status(403).json({ error: 'DM access required' });
+    }
+  }
 
   const json = JSON.stringify(conditions);
   db.prepare('UPDATE tokens SET conditions = ? WHERE id = ?').run(json, id);

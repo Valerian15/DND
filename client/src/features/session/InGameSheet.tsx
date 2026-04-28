@@ -67,6 +67,23 @@ interface Props {
 
 const ABILITY_SHORT: Record<string, string> = { str: 'STR', dex: 'DEX', con: 'CON', int: 'INT', wis: 'WIS', cha: 'CHA' };
 
+function slotLabel(n: number): string {
+  return ['1st', '2nd', '3rd'][n - 1] ?? `${n}th`;
+}
+
+function buildCastDice(baseDice: string, hl: string | undefined, baseLevel: number, castLevel: number): string {
+  if (!hl || castLevel <= baseLevel) return baseDice;
+  const extra = castLevel - baseLevel;
+  const m = hl.match(/(\d+)d(\d+)\s+(?:for each|per)\s+(?:slot\s+)?level\s+above/i);
+  const bonus = m ? { n: parseInt(m[1]), die: parseInt(m[2]) } : null;
+  if (!bonus) return baseDice;
+  const baseM = baseDice.match(/^(\d+)d(\d+)(.*)/);
+  if (baseM && bonus.die === parseInt(baseM[2])) {
+    return `${parseInt(baseM[1]) + bonus.n * extra}d${bonus.die}${baseM[3]}`;
+  }
+  return baseDice;
+}
+
 export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions, conditions, onConditionsChange, onClose }: Props) {
   const [character, setCharacter] = useState<Character | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,7 +97,6 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const [page, setPage] = useState<'main' | 'spells'>('main');
   const [preparedSlugs, setPreparedSlugs] = useState<string[]>([]);
   const [preparingSaving, setPreparingSaving] = useState(false);
-  const [upcastPicker, setUpcastPicker] = useState<string | null>(null);
   const [rollMode, setRollMode] = useState<'advantage' | 'normal' | 'disadvantage'>('normal');
   const [concentratingOn, setConcentratingOn] = useState<string | null>(null);
   const [slotsUsed, setSlotsUsed] = useState<Record<string, number>>({});
@@ -236,27 +252,6 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     setRollMode('normal');
   }
 
-  function parseUpcastBonus(hl: string): { n: number; die: number } | null {
-    const m = hl.match(/(\d+)d(\d+)\s+(?:for each|per)\s+(?:slot\s+)?level\s+above/i);
-    return m ? { n: parseInt(m[1]), die: parseInt(m[2]) } : null;
-  }
-
-  function buildCastDice(baseDice: string, hl: string | undefined, baseLevel: number, castLevel: number): string {
-    if (!hl || castLevel <= baseLevel) return baseDice;
-    const extra = castLevel - baseLevel;
-    const bonus = parseUpcastBonus(hl);
-    if (!bonus) return baseDice;
-    const baseM = baseDice.match(/^(\d+)d(\d+)(.*)/);
-    if (baseM && bonus.die === parseInt(baseM[2])) {
-      return `${parseInt(baseM[1]) + bonus.n * extra}d${bonus.die}${baseM[3]}`;
-    }
-    return baseDice;
-  }
-
-  function slotLabel(n: number): string {
-    return ['1st', '2nd', '3rd'][n - 1] ?? `${n}th`;
-  }
-
   async function handleSlotClick(lvl: string, filled: boolean, max: number) {
     if (!character) return;
     const used = slotsUsed[lvl] ?? 0;
@@ -347,18 +342,10 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     : 0;
   const preparedNonCantrips = preparedSlugs.filter((s) => (spellMeta[s]?.level ?? 0) > 0).length;
 
-  // Attacks section data
   const strMod = abilityModifier(character.abilities.str);
   const dexMod = abilityModifier(character.abilities.dex);
   const spellAtk = config ? prof + configAbilityMod : 0;
   const spellDc  = config ? 8 + spellAtk : 0;
-  const spellSlugs = Array.from(new Set([
-    ...(character.spells_known as string[]),
-    ...(character.spells_prepared as string[]),
-  ]));
-  const damageSpells = spellSlugs
-    .map((slug) => ({ slug, meta: spellMeta[slug] }))
-    .filter(({ meta }) => meta?.desc && parseSpellForAttack(meta.desc).mode !== null);
   const hasWeapons = character.weapons?.length > 0;
 
   const hitDie = HIT_DIE_BY_CLASS[character.class_slug ?? ''] ?? 8;
@@ -474,8 +461,8 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             </div>
           </Section>
 
-          {/* Attacks */}
-          {(hasWeapons || damageSpells.length > 0) && (
+          {/* Attacks — weapons only */}
+          {hasWeapons && (
             <Section title="Attacks">
               <div style={{ display: 'grid', gap: '0.35rem' }}>
                 {character.weapons?.map((slug) => {
@@ -502,82 +489,6 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                         rollInChat(`${w.name} — Attack`, atkExpr);
                         if (dmgExpr) setTimeout(() => rollInChat(`${w.name} — Damage`, dmgExpr), 80);
                       }} />
-                  );
-                })}
-
-                {damageSpells.map(({ slug, meta }) => {
-                  const parsed = parseSpellForAttack(meta!.desc!);
-                  const isCantrip = meta!.level === 0;
-                  const spellBaseLevel = meta!.level;
-                  const baseDice = isCantrip && parsed.damageDice
-                    ? scaleCantripDice(parsed.damageDice, character.level)
-                    : parsed.damageDice;
-
-                  const slots = character.spell_slots;
-                  const availableLevels = isCantrip ? [] : Object.entries(slots)
-                    .filter(([l, c]) => Number(l) >= spellBaseLevel && (c - (slotsUsed[l] ?? 0)) > 0)
-                    .map(([l]) => Number(l))
-                    .sort((a, b) => a - b);
-                  const canUpcast = availableLevels.length > 1;
-                  const showPicker = upcastPicker === slug;
-
-                  let attackLabel: string;
-                  let tag: string;
-                  if (parsed.mode === 'spell_attack') {
-                    attackLabel = formatModifier(spellAtk);
-                    tag = isCantrip ? 'Cantrip · spell atk' : `L${spellBaseLevel} spell · spell atk`;
-                  } else if (parsed.mode === 'save') {
-                    attackLabel = `DC ${spellDc}`;
-                    tag = `${isCantrip ? 'Cantrip' : `L${spellBaseLevel} spell`} · ${parsed.saveAbility} save`;
-                  } else {
-                    attackLabel = '—';
-                    tag = isCantrip ? 'Cantrip' : `L${spellBaseLevel} spell`;
-                  }
-
-                  const performRoll = async (castLevel: number) => {
-                    const finalDice = baseDice ? buildCastDice(baseDice, meta!.higher_level, spellBaseLevel, castLevel) : null;
-                    const lvlSuffix = castLevel > spellBaseLevel ? ` (${slotLabel(castLevel)})` : '';
-                    if (parsed.mode === 'spell_attack') {
-                      rollInChat(`${meta!.name}${lvlSuffix} — Spell Attack`, `1d20${formatModifier(spellAtk)}`);
-                      if (finalDice) setTimeout(() => rollInChat(`${meta!.name}${lvlSuffix} — Damage`, finalDice), 80);
-                    } else if (parsed.mode === 'save') {
-                      if (finalDice) rollInChat(`${meta!.name}${lvlSuffix} — Damage (DC ${spellDc} ${parsed.saveAbility})`, finalDice);
-                    } else {
-                      if (finalDice) rollInChat(`${meta!.name}${lvlSuffix} — Damage`, finalDice);
-                    }
-                    // Concentration: auto-add condition when casting a concentration spell
-                    if (meta?.concentration && !conditions.includes('concentration')) {
-                      setConcentratingOn(meta.name);
-                      try { await onConditionsChange([...conditions, 'concentration']); }
-                      catch { /* ignore */ }
-                    }
-                    setUpcastPicker(null);
-                  };
-
-                  return (
-                    <div key={slug}>
-                      <InGameAttackRow name={meta!.name} tag={tag}
-                        attackLabel={attackLabel} damageLabel={baseDice ?? '—'} damageType={parsed.damageType ?? ''}
-                        onRoll={() => {
-                          if (isCantrip || !canUpcast) {
-                            performRoll(availableLevels[0] ?? spellBaseLevel);
-                          } else {
-                            setUpcastPicker(showPicker ? null : slug);
-                          }
-                        }} />
-                      {showPicker && (
-                        <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', alignItems: 'center', padding: '0.3rem 0.5rem', background: '#f0f4ff', borderRadius: 4, border: '1px solid #ccd', marginTop: 2 }}>
-                          <span style={{ fontSize: '0.7rem', color: '#558', fontWeight: 600 }}>Cast at:</span>
-                          {availableLevels.map((lvl) => (
-                            <button key={lvl} onClick={() => performRoll(lvl)}
-                              style={{ padding: '0.2rem 0.45rem', fontSize: '0.75rem', borderRadius: 3, border: '1px solid #aac', background: lvl > spellBaseLevel ? '#e8eeff' : '#fff', cursor: 'pointer', fontWeight: 600, color: '#336' }}>
-                              {slotLabel(lvl)}{lvl > spellBaseLevel ? ' ↑' : ''}
-                            </button>
-                          ))}
-                          <button onClick={() => setUpcastPicker(null)} style={{ marginLeft: 'auto', padding: '0.15rem 0.35rem', fontSize: '0.7rem', border: '1px solid #ddd', borderRadius: 3, cursor: 'pointer', color: '#999', background: '#fff' }}>✕</button>
-                        </div>
-                      )}
-                    </div>
                   );
                 })}
               </div>
@@ -773,6 +684,14 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
           maxPrepared={maxPreparedSpells}
           onToggle={togglePrepared}
           saving={preparingSaving}
+          spellAtk={spellAtk}
+          spellDc={spellDc}
+          slotsUsed={slotsUsed}
+          conditions={conditions}
+          onConditionsChange={onConditionsChange}
+          concentratingOn={concentratingOn}
+          setConcentratingOn={setConcentratingOn}
+          rollInChat={rollInChat}
         />
       )}
     </SheetOverlay>
@@ -804,9 +723,18 @@ interface SpellsPageProps {
   maxPrepared: number;
   onToggle: (slug: string) => void;
   saving: boolean;
+  spellAtk: number;
+  spellDc: number;
+  slotsUsed: Record<string, number>;
+  conditions: string[];
+  onConditionsChange: (c: string[]) => Promise<void>;
+  concentratingOn: string | null;
+  setConcentratingOn: (s: string | null) => void;
+  rollInChat: (label: string, expr: string) => void;
 }
 
-function SpellsPageContent({ character, config, spellMeta, preparedSlugs, preparedNonCantrips, maxPrepared, onToggle, saving }: SpellsPageProps) {
+function SpellsPageContent({ character, config, spellMeta, preparedSlugs, preparedNonCantrips, maxPrepared, onToggle, saving, spellAtk, spellDc, slotsUsed, conditions, onConditionsChange, concentratingOn: _concentratingOn, setConcentratingOn, rollInChat }: SpellsPageProps) {
+  const [upcastPicker, setUpcastPicker] = useState<string | null>(null);
   const knownSlugs = character.spells_known as string[];
   const isPreparedModel = config.model !== 'known';
   const atLimit = preparedNonCantrips >= maxPrepared;
@@ -873,38 +801,90 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                   const isPrepared = preparedSlugs.includes(slug);
                   const cannotAdd = !isPrepared && !isCantrip && atLimit;
 
+                  const canRoll = isPrepared || isCantrip;
+                  const parsed = meta?.desc ? parseSpellForAttack(meta.desc) : null;
+                  const hasAttackData = canRoll && parsed && parsed.mode !== null;
+                  const baseDice = (isCantrip && parsed?.damageDice)
+                    ? scaleCantripDice(parsed.damageDice, character.level)
+                    : parsed?.damageDice;
+                  const availableLevels = isCantrip ? [] : Object.entries(character.spell_slots)
+                    .filter(([l, c]) => Number(l) >= level && (c - (slotsUsed[l] ?? 0)) > 0)
+                    .map(([l]) => Number(l)).sort((a, b) => a - b);
+                  const canUpcast = availableLevels.length > 1;
+                  const showPicker = upcastPicker === slug;
+
+                  const performSpellRoll = async (castLevel: number) => {
+                    const finalDice = baseDice ? buildCastDice(baseDice, meta!.higher_level, level, castLevel) : null;
+                    const lvlSuffix = castLevel > level ? ` (${slotLabel(castLevel)})` : '';
+                    if (parsed!.mode === 'spell_attack') {
+                      rollInChat(`${meta!.name}${lvlSuffix} — Spell Attack`, `1d20${formatModifier(spellAtk)}`);
+                      if (finalDice) setTimeout(() => rollInChat(`${meta!.name}${lvlSuffix} — Damage`, finalDice), 80);
+                    } else if (parsed!.mode === 'save') {
+                      if (finalDice) rollInChat(`${meta!.name}${lvlSuffix} — Damage (DC ${spellDc} ${parsed!.saveAbility})`, finalDice);
+                    } else {
+                      if (finalDice) rollInChat(`${meta!.name}${lvlSuffix} — Damage`, finalDice);
+                    }
+                    if (meta?.concentration && !conditions.includes('concentration')) {
+                      setConcentratingOn(meta.name);
+                      try { await onConditionsChange([...conditions, 'concentration']); }
+                      catch { /* ignore */ }
+                    }
+                    setUpcastPicker(null);
+                  };
+
+                  const atkLabel = parsed?.mode === 'spell_attack' ? formatModifier(spellAtk)
+                    : parsed?.mode === 'save' ? `DC ${spellDc}` : '—';
+                  const atkTag = parsed?.mode === 'spell_attack' ? 'spell atk'
+                    : parsed?.mode === 'save' ? `${parsed.saveAbility} save` : '';
+
                   return (
-                    <div key={slug} style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '0.3rem 0.5rem',
-                      background: (isPrepared || isCantrip) ? '#f0f5ff' : '#f9f9f9',
-                      borderRadius: 4,
-                      border: `1px solid ${(isPrepared || isCantrip) ? '#c8d8f0' : '#eee'}`,
-                    }}>
-                      <span style={{ fontSize: '0.85rem', fontWeight: (isPrepared || isCantrip) ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '0.5rem' }}>
-                        {meta?.name ?? slug}
-                      </span>
-                      {isCantrip ? (
-                        <span style={{ fontSize: '0.7rem', color: '#7788bb', fontStyle: 'italic', flexShrink: 0 }}>always</span>
-                      ) : isPreparedModel ? (
-                        <button
-                          onClick={() => onToggle(slug)}
-                          disabled={saving || cannotAdd}
-                          style={{
-                            padding: '0.15rem 0.4rem',
-                            fontSize: '0.75rem',
-                            borderRadius: 3,
-                            flexShrink: 0,
+                    <div key={slug} style={{ borderRadius: 4, overflow: 'hidden', border: `1px solid ${(isPrepared || isCantrip) ? '#c8d8f0' : '#eee'}` }}>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '0.3rem 0.5rem',
+                        background: (isPrepared || isCantrip) ? '#f0f5ff' : '#f9f9f9',
+                      }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: (isPrepared || isCantrip) ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '0.5rem' }}>
+                          {meta?.name ?? slug}
+                          {meta?.concentration && <span style={{ fontSize: '0.65rem', color: '#886', fontStyle: 'italic', marginLeft: '0.3rem' }}>conc.</span>}
+                        </span>
+                        {isCantrip ? (
+                          <span style={{ fontSize: '0.7rem', color: '#7788bb', fontStyle: 'italic', flexShrink: 0 }}>always</span>
+                        ) : isPreparedModel ? (
+                          <button onClick={() => onToggle(slug)} disabled={saving || cannotAdd} style={{
+                            padding: '0.15rem 0.4rem', fontSize: '0.75rem', borderRadius: 3, flexShrink: 0,
                             border: isPrepared ? '1px solid #4488cc' : '1px solid #ccc',
                             background: isPrepared ? '#ddeeff' : cannotAdd ? '#f5f5f5' : '#fff',
                             color: isPrepared ? '#2266aa' : cannotAdd ? '#bbb' : '#555',
-                            cursor: saving || cannotAdd ? 'not-allowed' : 'pointer',
-                            fontWeight: isPrepared ? 700 : 400,
-                          }}
-                        >
-                          {isPrepared ? '✓ Prep' : 'Prepare'}
-                        </button>
-                      ) : null}
+                            cursor: saving || cannotAdd ? 'not-allowed' : 'pointer', fontWeight: isPrepared ? 700 : 400,
+                          }}>{isPrepared ? '✓ Prep' : 'Prepare'}</button>
+                        ) : null}
+                      </div>
+                      {hasAttackData && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.25rem 0.5rem', background: '#e8eef8', borderTop: '1px solid #cdd8ee' }}>
+                          <span style={{ fontSize: '0.68rem', color: '#668', flexShrink: 0 }}>{atkTag}</span>
+                          <span style={{ fontWeight: 700, fontSize: '0.82rem', marginLeft: 'auto' }}>{atkLabel}</span>
+                          <span style={{ fontSize: '0.68rem', color: '#888' }}>→</span>
+                          <span style={{ fontWeight: 600, fontSize: '0.82rem' }}>
+                            {baseDice ?? '—'}{parsed?.damageType ? <span style={{ fontSize: '0.65rem', color: '#888', marginLeft: '0.2rem' }}>{parsed.damageType}</span> : null}
+                          </span>
+                          <button onClick={() => {
+                            if (isCantrip || !canUpcast) performSpellRoll(availableLevels[0] ?? level);
+                            else setUpcastPicker(showPicker ? null : slug);
+                          }} style={{ padding: '0.18rem 0.35rem', fontSize: '0.8rem', border: '1px solid #aac', borderRadius: 4, background: '#fff', cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>🎲</button>
+                        </div>
+                      )}
+                      {showPicker && (
+                        <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', alignItems: 'center', padding: '0.3rem 0.5rem', background: '#f0f4ff', borderTop: '1px solid #ccd' }}>
+                          <span style={{ fontSize: '0.7rem', color: '#558', fontWeight: 600 }}>Cast at:</span>
+                          {availableLevels.map((lvl) => (
+                            <button key={lvl} onClick={() => performSpellRoll(lvl)} style={{ padding: '0.2rem 0.45rem', fontSize: '0.75rem', borderRadius: 3, border: '1px solid #aac', background: lvl > level ? '#e8eeff' : '#fff', cursor: 'pointer', fontWeight: 600, color: '#336' }}>
+                              {slotLabel(lvl)}{lvl > level ? ' ↑' : ''}
+                            </button>
+                          ))}
+                          <button onClick={() => setUpcastPicker(null)} style={{ marginLeft: 'auto', padding: '0.15rem 0.35rem', fontSize: '0.7rem', border: '1px solid #ddd', borderRadius: 3, cursor: 'pointer', color: '#999', background: '#fff' }}>✕</button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

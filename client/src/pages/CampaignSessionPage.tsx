@@ -1287,7 +1287,7 @@ export default function CampaignSessionPage() {
         if (rolls.length === 0) return null;
         const recent = rolls.slice(-8);
         return (
-          <div style={{ position: 'fixed', bottom: 12, right: 252, zIndex: 50, width: 230, fontFamily: 'system-ui', pointerEvents: 'auto' }}>
+          <div style={{ position: 'fixed', bottom: 12, right: panel?.type === 'character' ? 388 : 252, zIndex: 50, width: 230, fontFamily: 'system-ui', pointerEvents: 'auto', transition: 'right 0.25s' }}>
             <div
               onClick={() => setDiceLogOpen((o) => !o)}
               style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0.75rem', background: '#2a2a2a', color: '#fff', borderRadius: diceLogOpen ? '6px 6px 0 0' : 6, cursor: 'pointer', userSelect: 'none' }}
