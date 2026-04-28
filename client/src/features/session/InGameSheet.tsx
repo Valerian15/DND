@@ -960,6 +960,18 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                     setUpcastPicker(null);
                   };
 
+                  const castNonAttack = async (castLevel: number) => {
+                    const lvlSuffix = castLevel > level ? ` (${slotLabel(castLevel)})` : '';
+                    socket.emit('chat:send', { body: `${character.name} casts ${meta!.name}${lvlSuffix}.` });
+                    if (meta?.concentration && !conditions.includes('concentration')) {
+                      setConcentratingOn(meta.name);
+                      try { await onConditionsChange([...conditions, 'concentration']); } catch { /* ignore */ }
+                    }
+                    setUpcastPicker(null);
+                  };
+
+                  const performCastAtLevel = hasAttackData ? performSpellRoll : castNonAttack;
+
                   const atkLabel = parsed?.mode === 'spell_attack' ? formatModifier(spellAtk)
                     : parsed?.mode === 'save' ? `DC ${spellDc}` : '—';
                   const atkTag = parsed?.mode === 'spell_attack' ? 'spell atk'
@@ -972,7 +984,15 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                         padding: '0.3rem 0.5rem',
                         background: (isPrepared || isCantrip) ? '#f0f5ff' : '#f9f9f9',
                       }}>
-                        <span style={{ fontSize: '0.85rem', fontWeight: (isPrepared || isCantrip) ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '0.5rem' }}>
+                        <span
+                          onClick={() => {
+                            if (!meta) return;
+                            const lvlText = level === 0 ? 'Cantrip' : `Level ${level}`;
+                            const desc = meta.desc?.split('\n')[0].slice(0, 300) ?? '';
+                            socket.emit('chat:send', { body: `📖 ${meta.name} (${lvlText})${desc ? ': ' + desc : ''}` });
+                          }}
+                          title={meta ? 'Click to share spell description in chat' : undefined}
+                          style={{ fontSize: '0.85rem', fontWeight: (isPrepared || isCantrip) ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '0.5rem', cursor: meta ? 'pointer' : 'default', textDecoration: meta ? 'underline dotted' : 'none', textUnderlineOffset: 3 }}>
                           {meta?.name ?? slug}
                           {meta?.concentration && <span style={{ fontSize: '0.65rem', color: '#886', fontStyle: 'italic', marginLeft: '0.3rem' }}>conc.</span>}
                         </span>
@@ -997,16 +1017,29 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                             {baseDice ?? '—'}{parsed?.damageType ? <span style={{ fontSize: '0.65rem', color: '#888', marginLeft: '0.2rem' }}>{parsed.damageType}</span> : null}
                           </span>
                           <button onClick={() => {
-                            if (isCantrip || !canUpcast) performSpellRoll(availableLevels[0] ?? level);
+                            if (isCantrip || !canUpcast) performCastAtLevel(availableLevels[0] ?? level);
                             else setUpcastPicker(showPicker ? null : slug);
                           }} style={{ padding: '0.18rem 0.35rem', fontSize: '0.8rem', border: '1px solid #aac', borderRadius: 4, background: '#fff', cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>🎲</button>
+                        </div>
+                      )}
+                      {canRoll && !hasAttackData && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.25rem 0.5rem', background: '#f0f5f0', borderTop: '1px solid #d0e4d0' }}>
+                          <span style={{ fontSize: '0.68rem', color: '#558', flexShrink: 0 }}>
+                            {meta?.concentration ? 'concentration' : isCantrip ? 'cantrip' : 'utility'}
+                          </span>
+                          <button onClick={() => {
+                            if (isCantrip || !canUpcast) castNonAttack(availableLevels[0] ?? level);
+                            else setUpcastPicker(showPicker ? null : slug);
+                          }} style={{ marginLeft: 'auto', padding: '0.18rem 0.5rem', fontSize: '0.78rem', border: '1px solid #8ab88a', borderRadius: 4, background: '#e8f5e8', cursor: 'pointer', lineHeight: 1, flexShrink: 0, fontWeight: 600, color: '#336633' }}>
+                            Cast
+                          </button>
                         </div>
                       )}
                       {showPicker && (
                         <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', alignItems: 'center', padding: '0.3rem 0.5rem', background: '#f0f4ff', borderTop: '1px solid #ccd' }}>
                           <span style={{ fontSize: '0.7rem', color: '#558', fontWeight: 600 }}>Cast at:</span>
                           {availableLevels.map((lvl) => (
-                            <button key={lvl} onClick={() => performSpellRoll(lvl)} style={{ padding: '0.2rem 0.45rem', fontSize: '0.75rem', borderRadius: 3, border: '1px solid #aac', background: lvl > level ? '#e8eeff' : '#fff', cursor: 'pointer', fontWeight: 600, color: '#336' }}>
+                            <button key={lvl} onClick={() => performCastAtLevel(lvl)} style={{ padding: '0.2rem 0.45rem', fontSize: '0.75rem', borderRadius: 3, border: '1px solid #aac', background: lvl > level ? '#e8eeff' : '#fff', cursor: 'pointer', fontWeight: 600, color: '#336' }}>
                               {slotLabel(lvl)}{lvl > level ? ' ↑' : ''}
                             </button>
                           ))}
