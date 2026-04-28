@@ -1,0 +1,15 @@
+node_modules
+dist
+build
+*.log
+.DS_Store
+.vscode
+server/data
+server/uploads
+.env
+.env.*
+pnpm-lock.yaml
+client/public
+*.db
+*.db-shm
+*.db-wal

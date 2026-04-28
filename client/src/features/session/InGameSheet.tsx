@@ -241,9 +241,10 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     let next = conditions.includes(cond)
       ? conditions.filter((c) => c !== cond)
       : [...conditions, cond];
-    // Adding incapacitated while concentrating → also strip concentration
-    if (cond === 'incapacitated' && !conditions.includes('incapacitated') && next.includes('concentration')) {
-      socket.emit('chat:send', { body: `/action ${character?.name} became incapacitated — concentration on ${concentratingOn ?? 'their spell'} ends.` });
+    // Conditions that impose Incapacitated → break concentration
+    const BREAKS_CONCENTRATION = new Set(['incapacitated', 'paralyzed', 'petrified', 'stunned', 'unconscious']);
+    if (BREAKS_CONCENTRATION.has(cond) && !conditions.includes(cond) && next.includes('concentration')) {
+      socket.emit('chat:send', { body: `/action ${character?.name} became ${cond} — concentration on ${concentratingOn ?? 'their spell'} ends.` });
       next = next.filter((c) => c !== 'concentration');
     }
     setCondSaving(true);

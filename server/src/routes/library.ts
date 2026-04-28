@@ -94,6 +94,19 @@ router.get('/:type', (req, res) => {
     return res.json({ items: rows, count: rows.length });
   }
 
+  if (type === 'monsters') {
+    const rows = db.prepare(`
+      SELECT slug, name, cr,
+        type AS monster_type,
+        CAST(COALESCE(json_extract(data, '$.hit_points'), 0) AS INTEGER) AS hp_max,
+        CAST(COALESCE(json_extract(data, '$.armor_class'), 0) AS INTEGER) AS ac,
+        json_extract(data, '$.size') AS size,
+        source
+      FROM monsters ORDER BY name
+    `).all();
+    return res.json({ items: rows, count: rows.length });
+  }
+
   const rows = db.prepare(`SELECT id, slug, name, source FROM ${type} ORDER BY name`).all();
   res.json({ items: rows, count: rows.length });
 });

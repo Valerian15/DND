@@ -22,7 +22,7 @@ import { useAuth } from '../features/auth/AuthContext';
 import { getCampaign } from '../features/campaign/api';
 import { useSession } from '../features/session/useSession';
 import { listMaps, createMap, deleteMap, activateMap, updateMap, toggleFog, resetFog } from '../features/session/mapApi';
-import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenHp, updateTokenConditions } from '../features/session/tokenApi';
+import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenConditions } from '../features/session/tokenApi';
 import { createWall, deleteWall, clearWalls } from '../features/session/wallApi';
 import { listMapFolders, createMapFolder, renameMapFolder, deleteMapFolder } from '../features/session/mapFolderApi';
 import { listNotes, createNote, updateNote, deleteNote } from '../features/session/campaignNotesApi';
@@ -140,26 +140,35 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, onPoint
   );
 }
 
-function NpcTemplateRow({ npc }: { npc: CampaignNpc }) {
-  return (
-    <div
-      draggable
-      onDragStart={(e) => e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'npc', campaignNpcId: npc.id }))}
-      style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.5rem 0.75rem', cursor: 'grab', borderBottom: '1px solid #f0f0f0', background: '#fff' }}
-    >
-      {npc.portrait_url ? (
-        <img src={npc.portrait_url} alt={npc.label} style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
-      ) : (
-        <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#a44', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}>
-          {npc.label[0]?.toUpperCase()}
-        </div>
-      )}
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: '0.85rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{npc.label}</div>
-        <div style={{ fontSize: '0.72rem', color: '#888' }}>{npc.size} · {npc.hp_max} HP</div>
-      </div>
-    </div>
-  );
+interface MonsterListItem {
+  slug: string;
+  name: string;
+  cr: number | null;
+  monster_type: string | null;
+  hp_max: number;
+  ac: number | null;
+  size: string | null;
+  source: string;
+  isNpc?: boolean;
+  npcId?: number;
+}
+
+interface EncounterEntry {
+  uid: string;
+  name: string;
+  hp_current: number;
+  hp_max: number;
+  ac: number | null;
+  cr: number | null;
+  monster_type: string | null;
+}
+
+function crLabel(cr: number | null): string {
+  if (cr === null) return '';
+  if (cr === 0.125) return 'CR ⅛';
+  if (cr === 0.25) return 'CR ¼';
+  if (cr === 0.5) return 'CR ½';
+  return `CR ${cr}`;
 }
 
 interface MapRowProps {
@@ -326,7 +335,7 @@ export default function CampaignSessionPage() {
   const [newFolderName, setNewFolderName] = useState('');
 
   const [showLeftPanel, setShowLeftPanel] = useState(false);
-  const [leftTab, setLeftTab] = useState<'maps' | 'templates' | 'notes'>('maps');
+  const [leftTab, setLeftTab] = useState<'maps' | 'monsters' | 'notes'>('maps');
 
   const [addingMap, setAddingMap] = useState(false);
   const [newMapName, setNewMapName] = useState('');
@@ -379,13 +388,13 @@ export default function CampaignSessionPage() {
   const [addInitiativeValue, setAddInitiativeValue] = useState('');
   const [initiativeConditionPicker, setInitiativeConditionPicker] = useState<number | null>(null);
 
-  // Panel: character sheet for PC tokens, NPC HP panel for NPC tokens
-  type PanelState =
-    | { type: 'character'; characterId: number; tokenId: number; canEdit: boolean }
-    | { type: 'npc'; token: TokenData };
+  type PanelState = { type: 'character'; characterId: number; tokenId: number; canEdit: boolean };
   const [panel, setPanel] = useState<PanelState | null>(null);
-  const [npcHp, setNpcHp] = useState(0);
-  const [npcHpSaving, setNpcHpSaving] = useState(false);
+
+  // Monster/encounter tracker
+  const [monsterSearch, setMonsterSearch] = useState('');
+  const [monsterLibrary, setMonsterLibrary] = useState<MonsterListItem[]>([]);
+  const [encounterEntries, setEncounterEntries] = useState<EncounterEntry[]>([]);
 
   const { online, connected, activeMap, setActiveMap, tokens, messages, initiative, walls, fogVisible, fogExplored } = useSession(Number(id));
   const isDmOrAdmin = campaign ? (campaign.dm_id === user!.id || user!.role === 'admin') : false;
@@ -422,6 +431,13 @@ export default function CampaignSessionPage() {
       setNotes(notesData);
     }).catch(() => {});
   }, [campaign?.id, isDmOrAdmin]);
+
+  useEffect(() => {
+    if (leftTab !== 'monsters' || monsterLibrary.length > 0) return;
+    apiFetch<{ items: MonsterListItem[] }>('/library/monsters')
+      .then((r) => setMonsterLibrary(r.items))
+      .catch(() => {});
+  }, [leftTab]);
 
   useEffect(() => {
     if (activeMap) {
@@ -665,20 +681,7 @@ export default function CampaignSessionPage() {
       if (isMyChar || isDmOrAdmin) {
         setPanel({ type: 'character', characterId: token.character_id, tokenId: token.id, canEdit: !!isMyChar || isDmOrAdmin });
       }
-    } else if (token.token_type === 'npc' && isDmOrAdmin) {
-      setNpcHp(token.hp_current);
-      setPanel({ type: 'npc', token });
     }
-  }
-
-  async function handleNpcHpCommit(tokenId: number, hp: number) {
-    setNpcHpSaving(true);
-    try {
-      const result = await updateTokenHp(tokenId, hp);
-      setNpcHp(result.hp_current);
-      setPanel((p) => p?.type === 'npc' ? { ...p, token: { ...p.token, hp_current: result.hp_current } } : p);
-    } catch (e: any) { setError(e.message); }
-    finally { setNpcHpSaving(false); }
   }
 
   async function handleTokenConditionsChange(tokenId: number, conditions: string[]) {
@@ -804,9 +807,9 @@ export default function CampaignSessionPage() {
             </div>
 
             <div style={{ display: 'flex', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
-              {(['maps', 'templates', 'notes'] as const).map((tab) => (
+              {(['maps', 'monsters', 'notes'] as const).map((tab) => (
                 <button key={tab} onClick={() => setLeftTab(tab)} style={{ flex: 1, padding: '0.6rem', border: 'none', borderBottom: leftTab === tab ? '2px solid #333' : '2px solid transparent', background: 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: leftTab === tab ? 600 : 400, color: leftTab === tab ? '#333' : '#888' }}>
-                  {tab === 'maps' ? 'Maps' : tab === 'templates' ? 'NPCs' : 'Notes'}
+                  {tab === 'maps' ? 'Maps' : tab === 'monsters' ? 'Monsters' : 'Notes'}
                 </button>
               ))}
             </div>
@@ -957,33 +960,107 @@ export default function CampaignSessionPage() {
             )}
 
             {/* Templates tab */}
-            {leftTab === 'templates' && (
-              <div style={{ flex: 1, overflowY: 'auto' }}>
-                {npcs.length === 0 ? (
-                  <div style={{ padding: '1rem', fontSize: '0.85rem', color: '#aaa' }}>No NPC templates. Add them on the campaign detail page.</div>
-                ) : (
-                  <>
-                    <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.72rem', color: '#888', borderBottom: '1px solid #eee' }}>Drag an NPC onto the map to place it.</div>
-                    {npcCategories.map((cat) => {
-                      const catNpcs = npcs.filter((n) => n.category_id === cat.id);
-                      if (catNpcs.length === 0) return null;
-                      return (
-                        <div key={cat.id}>
-                          <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.72rem', fontWeight: 600, color: '#666', textTransform: 'uppercase', letterSpacing: '0.04em', background: '#f0f0f0' }}>{cat.name}</div>
-                          {catNpcs.map((npc) => <NpcTemplateRow key={npc.id} npc={npc} />)}
-                        </div>
-                      );
-                    })}
-                    {npcs.filter((n) => n.category_id === null).length > 0 && (
-                      <div>
-                        <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.72rem', fontWeight: 600, color: '#666', textTransform: 'uppercase', letterSpacing: '0.04em', background: '#f0f0f0' }}>Uncategorized</div>
-                        {npcs.filter((n) => n.category_id === null).map((npc) => <NpcTemplateRow key={npc.id} npc={npc} />)}
+            {leftTab === 'monsters' && (() => {
+              const searchLower = monsterSearch.toLowerCase();
+              const libraryResults = monsterSearch.length < 1 ? [] : monsterLibrary.filter((m) => m.name.toLowerCase().includes(searchLower));
+              const npcResults: MonsterListItem[] = monsterSearch.length < 1 ? [] : npcs
+                .filter((n) => n.label.toLowerCase().includes(searchLower))
+                .map((n) => ({ slug: `npc-${n.id}`, name: n.label, cr: null, monster_type: 'NPC', hp_max: n.hp_max, ac: null, size: n.size, source: 'campaign', isNpc: true, npcId: n.id }));
+              const allResults = [...libraryResults, ...npcResults];
+
+              const addToEncounter = (item: MonsterListItem) => {
+                const sameCount = encounterEntries.filter((e) => e.name === item.name || e.name.startsWith(item.name + ' ')).length;
+                const name = sameCount > 0 ? `${item.name} ${sameCount + 1}` : item.name;
+                setEncounterEntries((prev) => [...prev, {
+                  uid: `${item.slug}-${Date.now()}`,
+                  name, hp_current: item.hp_max, hp_max: item.hp_max,
+                  ac: item.ac, cr: item.cr, monster_type: item.monster_type,
+                }]);
+              };
+
+              const adjustHp = (uid: string, delta: number) => {
+                setEncounterEntries((prev) => prev.map((e) =>
+                  e.uid === uid ? { ...e, hp_current: Math.max(0, Math.min(e.hp_max, e.hp_current + delta)) } : e
+                ));
+              };
+
+              return (
+                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                  {/* Encounter tracker */}
+                  {encounterEntries.length > 0 && (
+                    <div style={{ borderBottom: '1px solid #e0e0e0', background: '#fafafa' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.45rem 0.75rem', borderBottom: '1px solid #eee' }}>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em' }}>⚔ Encounter ({encounterEntries.length})</span>
+                        <button onClick={() => setEncounterEntries([])} style={{ fontSize: '0.68rem', color: '#a44', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Clear all</button>
                       </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
+                      {encounterEntries.map((entry) => {
+                        const pct = entry.hp_max > 0 ? entry.hp_current / entry.hp_max : 0;
+                        const barColor = pct > 0.5 ? '#4a4' : pct > 0.25 ? '#aa4' : '#a44';
+                        return (
+                          <div key={entry.uid} style={{ padding: '0.45rem 0.75rem', borderBottom: '1px solid #eee' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                              <span style={{ fontSize: '0.82rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '0.5rem' }}>{entry.name}</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
+                                {entry.ac !== null && <span style={{ fontSize: '0.65rem', color: '#888' }}>AC {entry.ac}</span>}
+                                {entry.cr !== null && <span style={{ fontSize: '0.65rem', color: '#888' }}>{crLabel(entry.cr)}</span>}
+                                <button onClick={() => setEncounterEntries((p) => p.filter((e) => e.uid !== entry.uid))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#bbb', fontSize: '0.85rem', lineHeight: 1, padding: 0 }}>✕</button>
+                              </div>
+                            </div>
+                            <div style={{ height: 6, background: '#e8e8e8', borderRadius: 3, marginBottom: '0.3rem' }}>
+                              <div style={{ height: '100%', width: `${pct * 100}%`, background: barColor, borderRadius: 3, transition: 'width 0.2s' }} />
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+                              {[-10, -5, -1].map((d) => (
+                                <button key={d} onClick={() => adjustHp(entry.uid, d)} disabled={entry.hp_current === 0}
+                                  style={{ padding: '0.15rem 0.3rem', fontSize: '0.72rem', border: '1px solid #ddd', borderRadius: 3, cursor: entry.hp_current === 0 ? 'not-allowed' : 'pointer', background: '#fff', color: entry.hp_current === 0 ? '#ccc' : '#555', fontWeight: 600 }}>{d}</button>
+                              ))}
+                              <span style={{ fontSize: '0.78rem', fontWeight: 700, minWidth: 44, textAlign: 'center', color: entry.hp_current === 0 ? '#a44' : '#333' }}>{entry.hp_current}/{entry.hp_max}</span>
+                              {[1, 5, 10].map((d) => (
+                                <button key={d} onClick={() => adjustHp(entry.uid, d)} disabled={entry.hp_current >= entry.hp_max}
+                                  style={{ padding: '0.15rem 0.3rem', fontSize: '0.72rem', border: '1px solid #ddd', borderRadius: 3, cursor: entry.hp_current >= entry.hp_max ? 'not-allowed' : 'pointer', background: '#fff', color: entry.hp_current >= entry.hp_max ? '#ccc' : '#555', fontWeight: 600 }}>+{d}</button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Search */}
+                  <div style={{ padding: '0.6rem 0.75rem', borderBottom: '1px solid #eee', flexShrink: 0 }}>
+                    <input
+                      value={monsterSearch}
+                      onChange={(e) => setMonsterSearch(e.target.value)}
+                      placeholder="Search monsters & NPCs…"
+                      style={{ width: '100%', padding: '0.35rem 0.5rem', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.82rem', boxSizing: 'border-box' }}
+                    />
+                  </div>
+
+                  {monsterSearch.length < 1 ? (
+                    <div style={{ padding: '1rem 0.75rem', fontSize: '0.8rem', color: '#bbb', textAlign: 'center' }}>
+                      Type to search {monsterLibrary.length > 0 ? `${monsterLibrary.length} monsters` : 'monsters'} + campaign NPCs
+                    </div>
+                  ) : allResults.length === 0 ? (
+                    <div style={{ padding: '1rem 0.75rem', fontSize: '0.8rem', color: '#bbb', textAlign: 'center' }}>No results</div>
+                  ) : (
+                    <div style={{ flex: 1, overflowY: 'auto' }}>
+                      {allResults.map((item) => (
+                        <div key={item.slug} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0.75rem', borderBottom: '1px solid #f0f0f0' }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: '0.83rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
+                            <div style={{ fontSize: '0.68rem', color: '#888' }}>
+                              {[item.size, item.monster_type, crLabel(item.cr), `${item.hp_max} HP`].filter(Boolean).join(' · ')}
+                              {item.ac ? ` · AC ${item.ac}` : ''}
+                            </div>
+                          </div>
+                          <button onClick={() => addToEncounter(item)} style={{ padding: '0.2rem 0.45rem', fontSize: '0.8rem', border: '1px solid #4a8', borderRadius: 4, background: '#e8f5e8', color: '#336633', cursor: 'pointer', fontWeight: 700, flexShrink: 0 }}>+</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {leftTab === 'notes' && (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -1482,58 +1559,6 @@ export default function CampaignSessionPage() {
         );
       })()}
 
-      {/* NPC HP panel (DM only) */}
-      {panel?.type === 'npc' && (
-        <>
-          <div onClick={() => setPanel(null)} style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.2)' }} />
-          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 101, background: '#fff', borderRadius: 10, boxShadow: '0 4px 24px rgba(0,0,0,0.2)', padding: '1.5rem', width: 280, fontFamily: 'system-ui' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <strong style={{ fontSize: '1rem' }}>{panel.token.label}</strong>
-              <button onClick={() => setPanel(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.1rem', color: '#888' }}>✕</button>
-            </div>
-            <div style={{ fontSize: '0.82rem', color: '#888', marginBottom: '0.75rem' }}>{panel.token.size} · {panel.token.token_type === 'npc' ? 'NPC' : 'PC'}</div>
-            <div style={{ marginBottom: '0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#666' }}>HP</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.75rem' }}>
-              {[-10, -5, -1].map((d) => (
-                <button key={d} onClick={() => handleNpcHpCommit(panel.token.id, npcHp + d)} disabled={npcHpSaving || npcHp === 0} style={{ padding: '0.3rem 0.45rem', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem', background: '#fff' }}>{d}</button>
-              ))}
-              <span style={{ fontWeight: 700, fontSize: '1.2rem', minWidth: 32, textAlign: 'center' }}>{npcHp}</span>
-              {[+1, +5, +10].map((d) => (
-                <button key={d} onClick={() => handleNpcHpCommit(panel.token.id, npcHp + d)} disabled={npcHpSaving || npcHp >= panel.token.hp_max} style={{ padding: '0.3rem 0.45rem', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem', background: '#fff' }}>+{d}</button>
-              ))}
-            </div>
-            <div style={{ height: 8, background: '#ddd', borderRadius: 4, marginBottom: '0.4rem' }}>
-              <div style={{ height: '100%', borderRadius: 4, background: npcHp / panel.token.hp_max > 0.5 ? '#4a4' : npcHp / panel.token.hp_max > 0.25 ? '#aa4' : '#a44', width: `${Math.max(0, Math.min(100, (npcHp / panel.token.hp_max) * 100))}%`, transition: 'width 0.2s' }} />
-            </div>
-            <div style={{ fontSize: '0.78rem', color: '#888', textAlign: 'center' }}>{npcHp} / {panel.token.hp_max}</div>
-            <div style={{ marginTop: '1rem', marginBottom: '0.4rem', fontSize: '0.8rem', fontWeight: 600, color: '#666' }}>Conditions</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
-              {(['blinded', 'charmed', 'deafened', 'exhaustion', 'frightened', 'grappled',
-                'incapacitated', 'invisible', 'paralyzed', 'petrified', 'poisoned',
-                'prone', 'restrained', 'stunned', 'unconscious'] as const).map((cond) => {
-                const active = (tokens.find((t) => t.id === panel.token.id)?.conditions ?? panel.token.conditions).includes(cond);
-                return (
-                  <button key={cond} disabled={npcHpSaving}
-                    onClick={() => {
-                      const cur = tokens.find((t) => t.id === panel.token.id)?.conditions ?? panel.token.conditions;
-                      const next = active ? cur.filter((c) => c !== cond) : [...cur, cond];
-                      handleTokenConditionsChange(panel.token.id, next);
-                    }}
-                    style={{
-                      padding: '0.15rem 0.4rem', borderRadius: 4, fontSize: '0.72rem', fontWeight: active ? 700 : 400,
-                      border: `1px solid ${active ? CONDITION_COLORS[cond] : '#ddd'}`,
-                      background: active ? CONDITION_COLORS[cond] : '#f9f9f9',
-                      color: active ? '#fff' : '#888',
-                      cursor: 'pointer', textTransform: 'capitalize',
-                    }}>
-                    {cond}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </>
-      )}
     </div>
   );
 }
