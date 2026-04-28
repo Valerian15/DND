@@ -102,6 +102,9 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const [slotsUsed, setSlotsUsed] = useState<Record<string, number>>({});
   const [hitDiceUsed, setHitDiceUsed] = useState(0);
   const [localResources, setLocalResources] = useState<ClassResource[]>([]);
+  const [deathSavesSuccess, setDeathSavesSuccess] = useState(0);
+  const [deathSavesFailure, setDeathSavesFailure] = useState(0);
+  const [inspiration, setInspiration] = useState(0);
 
   useEffect(() => {
     getCharacter(characterId)
@@ -112,6 +115,9 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
         setSlotsUsed(c.spell_slots_used ?? {});
         setHitDiceUsed(c.hit_dice_used ?? 0);
         setLocalResources(c.resources ?? []);
+        setDeathSavesSuccess(c.death_saves_success ?? 0);
+        setDeathSavesFailure(c.death_saves_failure ?? 0);
+        setInspiration(c.inspiration ?? 0);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -288,6 +294,33 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     catch { setLocalResources(prev); }
   }
 
+  async function handleDeathSave(type: 'success' | 'failure') {
+    if (!character || hpCurrent > 0) return;
+    if (type === 'success') {
+      const next = Math.min(3, deathSavesSuccess + 1);
+      setDeathSavesSuccess(next);
+      try { await updateCharacter(character.id, { death_saves_success: next }); } catch { /* ignore */ }
+    } else {
+      const next = Math.min(3, deathSavesFailure + 1);
+      setDeathSavesFailure(next);
+      try { await updateCharacter(character.id, { death_saves_failure: next }); } catch { /* ignore */ }
+    }
+  }
+
+  async function resetDeathSaves() {
+    if (!character) return;
+    setDeathSavesSuccess(0);
+    setDeathSavesFailure(0);
+    try { await updateCharacter(character.id, { death_saves_success: 0, death_saves_failure: 0 }); } catch { /* ignore */ }
+  }
+
+  async function toggleInspiration() {
+    if (!character) return;
+    const next = inspiration ? 0 : 1;
+    setInspiration(next);
+    try { await updateCharacter(character.id, { inspiration: next }); } catch { setInspiration(inspiration); }
+  }
+
   async function handleShortRest() {
     if (!character) return;
     const prev = localResources;
@@ -308,11 +341,14 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     setSlotsUsed(nextSlotsUsed);
     setHitDiceUsed(nextHDUsed);
     setLocalResources(nextResources);
+    setDeathSavesSuccess(0);
+    setDeathSavesFailure(0);
     socket.emit('chat:send', { body: `${character.name} takes a long rest. HP and resources restored.` });
     try {
       await updateCharacter(character.id, {
         hp_current: nextHp, spell_slots_used: nextSlotsUsed,
         hit_dice_used: nextHDUsed, resources: nextResources,
+        death_saves_success: 0, death_saves_failure: 0,
       });
       if (tokenId > 0) await updateTokenHp(tokenId, nextHp);
     } catch { /* ignore */ }
@@ -420,6 +456,64 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             <div style={{ height: 8, background: '#ddd', borderRadius: 4 }}>
               <div style={{ height: '100%', width: `${hpPct * 100}%`, background: hpBarColor, borderRadius: 4, transition: 'width 0.3s' }} />
             </div>
+
+            {/* Inspiration */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+              <button onClick={toggleInspiration} style={{
+                display: 'flex', alignItems: 'center', gap: '0.3rem',
+                padding: '0.2rem 0.6rem', fontSize: '0.78rem', borderRadius: 4,
+                border: `1px solid ${inspiration ? '#c8a800' : '#ddd'}`,
+                background: inspiration ? '#fff8d0' : '#f9f9f9',
+                color: inspiration ? '#8a6c00' : '#aaa',
+                cursor: 'pointer', fontWeight: inspiration ? 700 : 400,
+              }}>
+                <span style={{ fontSize: '0.9rem' }}>{inspiration ? '⭐' : '☆'}</span> Inspiration
+              </button>
+            </div>
+
+            {/* Death Saves — only when at 0 HP */}
+            {hpCurrent === 0 && (
+              <div style={{ marginTop: '0.75rem', padding: '0.6rem 0.75rem', background: '#fdf0f0', borderRadius: 6, border: '1px solid #f0c0c0' }}>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#a44', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
+                  {deathSavesSuccess >= 3 ? '✓ Stabilized' : deathSavesFailure >= 3 ? '✗ Dead' : 'Death Saves'}
+                </div>
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.65rem', color: '#4a8', fontWeight: 600, marginBottom: '0.25rem' }}>Successes</div>
+                    <div style={{ display: 'flex', gap: '0.3rem' }}>
+                      {[0, 1, 2].map((i) => (
+                        <button key={i} onClick={() => handleDeathSave('success')}
+                          disabled={deathSavesSuccess >= 3 || deathSavesFailure >= 3}
+                          style={{
+                            width: 22, height: 22, borderRadius: '50%', border: '2px solid',
+                            borderColor: i < deathSavesSuccess ? '#4a8' : '#ccc',
+                            background: i < deathSavesSuccess ? '#4a8' : 'transparent',
+                            cursor: deathSavesSuccess >= 3 || deathSavesFailure >= 3 ? 'default' : 'pointer', padding: 0,
+                          }} />
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.65rem', color: '#a44', fontWeight: 600, marginBottom: '0.25rem' }}>Failures</div>
+                    <div style={{ display: 'flex', gap: '0.3rem' }}>
+                      {[0, 1, 2].map((i) => (
+                        <button key={i} onClick={() => handleDeathSave('failure')}
+                          disabled={deathSavesSuccess >= 3 || deathSavesFailure >= 3}
+                          style={{
+                            width: 22, height: 22, borderRadius: '50%', border: '2px solid',
+                            borderColor: i < deathSavesFailure ? '#a44' : '#ccc',
+                            background: i < deathSavesFailure ? '#a44' : 'transparent',
+                            cursor: deathSavesSuccess >= 3 || deathSavesFailure >= 3 ? 'default' : 'pointer', padding: 0,
+                          }} />
+                      ))}
+                    </div>
+                  </div>
+                  {(deathSavesSuccess > 0 || deathSavesFailure > 0) && (
+                    <button onClick={resetDeathSaves} style={{ marginLeft: 'auto', alignSelf: 'flex-end', fontSize: '0.68rem', padding: '0.15rem 0.4rem', border: '1px solid #ddd', borderRadius: 3, cursor: 'pointer', color: '#aaa', background: '#fff' }}>Reset</button>
+                  )}
+                </div>
+              </div>
+            )}
           </Section>
 
           {/* Conditions */}

@@ -56,6 +56,9 @@ export interface Character {
   notes: string;
   description: Record<string, unknown>;
   darkvision: number;
+  death_saves_success: number;
+  death_saves_failure: number;
+  inspiration: number;
   created_at: number;
   updated_at: number;
 }
