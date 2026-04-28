@@ -40,7 +40,7 @@ interface ChatMessageOut {
   username: string;
   body: string;
   type: 'chat' | 'roll';
-  data?: { expression: string; dice: number[]; modifier: number; total: number };
+  data?: { expression: string; dice: number[]; modifier: number; total: number; label?: string; rollMode?: 'advantage' | 'disadvantage' };
   created_at: number;
 }
 
@@ -80,7 +80,7 @@ interface ServerToClientEvents {
 interface ClientToServerEvents {
   'session:join': (data: { campaign_id: number }) => void;
   'token:move': (data: { token_id: number; col: number; row: number }) => void;
-  'chat:send': (data: { body: string }) => void;
+  'chat:send': (data: { body: string; label?: string }) => void;
   'initiative:roll': () => void;
   'initiative:set': (data: { id: number; initiative: number }) => void;
   'initiative:remove': (data: { id: number }) => void;
@@ -138,15 +138,31 @@ function getInitiative(campaignId: number): InitiativeEntryRow[] {
   ).all(campaignId) as InitiativeEntryRow[];
 }
 
-function rollDice(expression: string): { dice: number[]; modifier: number; total: number } | null {
-  const match = expression.match(/^(\d+)d(\d+)([+-]\d+)?$/i);
+function rollDice(expression: string): { dice: number[]; modifier: number; total: number; rollMode?: 'advantage' | 'disadvantage' } | null {
+  const match = expression.match(/^(\d+)d(\d+)(adv|dis)?([+-]\d+)?$/i);
   if (!match) return null;
   const count = Math.min(Math.max(1, parseInt(match[1])), 20);
   const sides = Math.min(Math.max(2, parseInt(match[2])), 1000);
-  const modifier = match[3] ? parseInt(match[3]) : 0;
-  const dice = Array.from({ length: count }, () => Math.floor(Math.random() * sides) + 1);
-  const total = dice.reduce((a, b) => a + b, 0) + modifier;
-  return { dice, modifier, total };
+  const mode = match[3]?.toLowerCase() as 'adv' | 'dis' | undefined;
+  const modifier = match[4] ? parseInt(match[4]) : 0;
+
+  let dice: number[];
+  let rollMode: 'advantage' | 'disadvantage' | undefined;
+
+  if (mode && count === 1 && sides === 20) {
+    // Roll 2d20, pick high (advantage) or low (disadvantage)
+    const a = Math.floor(Math.random() * 20) + 1;
+    const b = Math.floor(Math.random() * 20) + 1;
+    rollMode = mode === 'adv' ? 'advantage' : 'disadvantage';
+    const chosen = rollMode === 'advantage' ? Math.max(a, b) : Math.min(a, b);
+    dice = [a, b, chosen]; // [roll1, roll2, chosen] — client displays both, uses chosen for total
+  } else {
+    dice = Array.from({ length: count }, () => Math.floor(Math.random() * sides) + 1);
+  }
+
+  const used = mode && count === 1 && sides === 20 ? dice[2] : dice.reduce((a, b) => a + b, 0);
+  const total = used + modifier;
+  return { dice, modifier, total, ...(rollMode ? { rollMode } : {}) };
 }
 
 function isDmOrAdmin(user: AuthUser, campaignId: number): boolean {
@@ -272,7 +288,7 @@ export function setupSession(io: AppServer) {
       }
     });
 
-    socket.on('chat:send', ({ body }) => {
+    socket.on('chat:send', ({ body, label }) => {
       const campaign_id = socket.data.campaign_id;
       if (campaign_id == null || !body) return;
       const text = String(body).trim().slice(0, 1000);
@@ -281,13 +297,14 @@ export function setupSession(io: AppServer) {
       let type = 'chat';
       let data: string | null = null;
 
-      const rollMatch = text.match(/^\/roll\s+(\d+d\d+([+-]\d+)?)$/i);
+      const rollMatch = text.match(/^\/roll\s+(\d+d\d+(?:adv|dis)?([+-]\d+)?)$/i);
       if (rollMatch) {
         const expression = rollMatch[1];
         const result = rollDice(expression);
         if (result) {
           type = 'roll';
-          data = JSON.stringify({ expression, ...result });
+          const safeLabel = label ? String(label).trim().slice(0, 100) : undefined;
+          data = JSON.stringify({ expression, ...result, ...(safeLabel ? { label: safeLabel } : {}) });
         }
       }
 

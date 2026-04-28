@@ -343,6 +343,18 @@ export function initSchema() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_map_fog_map ON map_fog(map_id);
+
+    -- MAP FOLDERS (nested folder tree for DM map organisation)
+
+    CREATE TABLE IF NOT EXISTS map_folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      parent_id INTEGER,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_map_folders_campaign ON map_folders(campaign_id);
   `);
 
   // Seed SRD weapons (INSERT OR IGNORE — safe to run repeatedly)
@@ -416,6 +428,14 @@ export function initSchema() {
   try { db.exec('ALTER TABLE maps ADD COLUMN fog_enabled INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
   // Weapon slugs selected during character creation
   try { db.exec("ALTER TABLE characters ADD COLUMN weapons TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  // Spell slot usage tracking (separate from max slots)
+  try { db.exec("ALTER TABLE characters ADD COLUMN spell_slots_used TEXT NOT NULL DEFAULT '{}'"); } catch { /* exists */ }
+  // Hit dice used (total = level, recover half on long rest)
+  try { db.exec('ALTER TABLE characters ADD COLUMN hit_dice_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  // Class resource tracker array [{name, current, max, reset}]
+  try { db.exec("ALTER TABLE characters ADD COLUMN resources TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  // Map folder assignment
+  try { db.exec('ALTER TABLE maps ADD COLUMN folder_id INTEGER'); } catch { /* exists */ }
 
   console.log('✅ Database schema ready');
 }

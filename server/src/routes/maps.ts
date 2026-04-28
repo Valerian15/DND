@@ -16,6 +16,7 @@ interface MapRow {
   grid_offset_x: number;
   grid_offset_y: number;
   fog_enabled: number;
+  folder_id: number | null;
   created_at: number;
 }
 
@@ -49,7 +50,7 @@ router.get('/', (req: AuthRequest, res) => {
 
 // Create a map
 router.post('/', (req: AuthRequest, res) => {
-  const { campaign_id, name, image_url, grid_size, grid_offset_x, grid_offset_y } = req.body ?? {};
+  const { campaign_id, name, image_url, grid_size, grid_offset_x, grid_offset_y, folder_id } = req.body ?? {};
 
   const campaignId = Number(campaign_id);
   if (!campaignId) return res.status(400).json({ error: 'campaign_id required' });
@@ -65,8 +66,11 @@ router.post('/', (req: AuthRequest, res) => {
     return res.status(400).json({ error: 'image_url required' });
   }
 
+  const folderId = folder_id != null && Number.isInteger(Number(folder_id)) && Number(folder_id) > 0
+    ? Number(folder_id) : null;
+
   const info = db.prepare(
-    'INSERT INTO maps (campaign_id, name, image_url, grid_size, grid_offset_x, grid_offset_y) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO maps (campaign_id, name, image_url, grid_size, grid_offset_x, grid_offset_y, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(
     campaignId,
     name.trim(),
@@ -74,6 +78,7 @@ router.post('/', (req: AuthRequest, res) => {
     Number.isInteger(Number(grid_size)) && Number(grid_size) > 0 ? Number(grid_size) : 50,
     Number.isInteger(Number(grid_offset_x)) ? Number(grid_offset_x) : 0,
     Number.isInteger(Number(grid_offset_y)) ? Number(grid_offset_y) : 0,
+    folderId,
   );
 
   const row = db.prepare('SELECT * FROM maps WHERE id = ?').get(info.lastInsertRowid) as MapRow;
@@ -90,9 +95,9 @@ router.patch('/:id', (req: AuthRequest, res) => {
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   if (!isDmOrAdmin(req, campaign.dm_id)) return res.status(403).json({ error: 'DM access required' });
 
-  const { name, image_url, grid_size, grid_offset_x, grid_offset_y } = req.body ?? {};
+  const { name, image_url, grid_size, grid_offset_x, grid_offset_y, folder_id } = req.body ?? {};
   const sets: string[] = [];
-  const values: (string | number)[] = [];
+  const values: (string | number | null)[] = [];
 
   if (typeof name === 'string' && name.trim().length > 0) {
     sets.push('name = ?'); values.push(name.trim());
@@ -108,6 +113,11 @@ router.patch('/:id', (req: AuthRequest, res) => {
   }
   if (Number.isInteger(Number(grid_offset_y))) {
     sets.push('grid_offset_y = ?'); values.push(Number(grid_offset_y));
+  }
+  if ('folder_id' in (req.body ?? {})) {
+    const fid = folder_id != null && Number.isInteger(Number(folder_id)) && Number(folder_id) > 0
+      ? Number(folder_id) : null;
+    sets.push('folder_id = ?'); values.push(fid);
   }
 
   if (sets.length === 0) return res.status(400).json({ error: 'No valid fields to update' });
