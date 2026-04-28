@@ -20,6 +20,13 @@ export const ABILITY_NAMES: Record<AbilityKey, string> = {
   cha: 'Charisma',
 };
 
+export interface ClassResource {
+  name: string;
+  current: number;
+  max: number;
+  reset: 'long' | 'short';
+}
+
 export interface Character {
   id: number;
   owner_id: number;
@@ -41,7 +48,10 @@ export interface Character {
   weapons: string[];
   spells_known: unknown[];
   spells_prepared: unknown[];
-  spell_slots: Record<string, unknown>;
+  spell_slots: Record<string, number>;
+  spell_slots_used: Record<string, number>;
+  hit_dice_used: number;
+  resources: ClassResource[];
   features: unknown[];
   notes: string;
   description: Record<string, unknown>;

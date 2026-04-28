@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Character, LibraryItem } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
+import { defaultResourcesForClass } from '../classResources';
 
 interface Props {
   character: Character;
@@ -59,6 +60,7 @@ export default function ClassStep({ character, onChange }: Props) {
       subclass_slug: null,
       skills: {},
       inventory,
+      resources: defaultResourcesForClass(slug, character.level),
     });
   }
 
