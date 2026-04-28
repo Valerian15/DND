@@ -22,6 +22,7 @@ interface RaceData {
   vision?: string;
   traits?: string;
   subraces?: any[];
+  darkvision?: number;
 }
 
 export default function RaceStep({ character, onChange }: Props) {
@@ -48,8 +49,13 @@ export default function RaceStep({ character, onChange }: Props) {
       .finally(() => setLoadingDetail(false));
   }, [character.race_slug]);
 
-  function selectRace(slug: string) {
-    onChange({ race_slug: slug });
+  async function selectRace(slug: string) {
+    try {
+      const r = await getLibraryItem<RaceData>('races', slug);
+      onChange({ race_slug: slug, darkvision: r.darkvision ?? 0 });
+    } catch {
+      onChange({ race_slug: slug });
+    }
   }
 
   if (loadingList) return <p>Loading races…</p>;

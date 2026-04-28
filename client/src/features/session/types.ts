@@ -7,6 +7,7 @@ export interface MapData {
   grid_offset_x: number;
   grid_offset_y: number;
   fog_enabled: number;
+  folder_id: number | null;
   created_at: number;
 }
 
@@ -59,7 +60,7 @@ export interface ChatMessage {
   username: string;
   body: string;
   type: 'chat' | 'roll';
-  data?: { expression: string; dice: number[]; modifier: number; total: number };
+  data?: { expression: string; dice: number[]; modifier: number; total: number; label?: string; rollMode?: 'advantage' | 'disadvantage' };
   created_at: number;
 }
 
@@ -78,5 +79,13 @@ export interface TokenCategory {
   name: string;
   is_default: number;
   sort_order: number;
+  created_at: number;
+}
+
+export interface MapFolder {
+  id: number;
+  campaign_id: number;
+  name: string;
+  parent_id: number | null;
   created_at: number;
 }

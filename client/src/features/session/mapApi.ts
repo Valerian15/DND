@@ -12,6 +12,7 @@ export async function createMap(data: {
   grid_size?: number;
   grid_offset_x?: number;
   grid_offset_y?: number;
+  folder_id?: number | null;
 }): Promise<MapData> {
   const res = await apiFetch<{ map: MapData }>('/maps', {
     method: 'POST',
