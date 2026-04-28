@@ -377,6 +377,7 @@ export default function CampaignSessionPage() {
   const [addingInitiative, setAddingInitiative] = useState(false);
   const [addInitiativeLabel, setAddInitiativeLabel] = useState('');
   const [addInitiativeValue, setAddInitiativeValue] = useState('');
+  const [initiativeConditionPicker, setInitiativeConditionPicker] = useState<number | null>(null);
 
   // Panel: character sheet for PC tokens, NPC HP panel for NPC tokens
   type PanelState =
@@ -1152,28 +1153,69 @@ export default function CampaignSessionPage() {
               </div>
               {!collapsedSections.has('initiative') && (
                 <div style={{ padding: '0.25rem 0.5rem 0.5rem' }}>
-                  {initiative.map((entry, idx) => (
-                    <div key={entry.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0.25rem', borderBottom: '1px solid #f5f5f5' }}>
-                      <span style={{ fontSize: '0.68rem', color: '#bbb', width: 14, textAlign: 'right', flexShrink: 0 }}>{idx + 1}.</span>
-                      <span style={{ flex: 1, fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.label}</span>
-                      {isDmOrAdmin && editingInitiativeId === entry.id ? (
-                        <input type="number" value={editingInitiativeValue}
-                          onChange={(e) => setEditingInitiativeValue(e.target.value)}
-                          onBlur={() => commitInitiativeEdit(entry.id)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') commitInitiativeEdit(entry.id); if (e.key === 'Escape') setEditingInitiativeId(null); }}
-                          autoFocus style={{ width: 38, padding: '0.1rem', border: '1px solid #aaa', borderRadius: 3, fontSize: '0.8rem', textAlign: 'center' }} />
-                      ) : (
-                        <span onClick={isDmOrAdmin ? () => { setEditingInitiativeId(entry.id); setEditingInitiativeValue(String(entry.initiative)); } : undefined}
-                          style={{ fontSize: '0.85rem', fontWeight: 700, color: '#333', minWidth: 22, textAlign: 'center', cursor: isDmOrAdmin ? 'text' : 'default' }}>
-                          {entry.initiative}
-                        </span>
-                      )}
-                      {isDmOrAdmin && (
-                        <button onClick={() => socket.emit('initiative:remove', { id: entry.id })}
-                          style={{ flexShrink: 0, padding: '0.1rem 0.25rem', fontSize: '0.65rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>✕</button>
-                      )}
-                    </div>
-                  ))}
+                  {initiative.map((entry, idx) => {
+                    const entryToken = entry.token_id ? tokens.find((t) => t.id === entry.token_id) : null;
+                    const entryConditions = entryToken?.conditions ?? [];
+                    const showPicker = initiativeConditionPicker === entry.id;
+                    return (
+                      <div key={entry.id} style={{ borderBottom: '1px solid #f5f5f5' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0.25rem' }}>
+                          <span style={{ fontSize: '0.68rem', color: '#bbb', width: 14, textAlign: 'right', flexShrink: 0 }}>{idx + 1}.</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.label}</div>
+                            {entryConditions.length > 0 && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.15rem', marginTop: '0.15rem' }}>
+                                {entryConditions.map((cond) => (
+                                  <span key={cond} style={{ fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: 3, background: CONDITION_COLORS[cond] ?? '#888', color: '#fff', fontWeight: 600, textTransform: 'capitalize' }}>{cond}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          {isDmOrAdmin && editingInitiativeId === entry.id ? (
+                            <input type="number" value={editingInitiativeValue}
+                              onChange={(e) => setEditingInitiativeValue(e.target.value)}
+                              onBlur={() => commitInitiativeEdit(entry.id)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') commitInitiativeEdit(entry.id); if (e.key === 'Escape') setEditingInitiativeId(null); }}
+                              autoFocus style={{ width: 38, padding: '0.1rem', border: '1px solid #aaa', borderRadius: 3, fontSize: '0.8rem', textAlign: 'center' }} />
+                          ) : (
+                            <span onClick={isDmOrAdmin ? () => { setEditingInitiativeId(entry.id); setEditingInitiativeValue(String(entry.initiative)); } : undefined}
+                              style={{ fontSize: '0.85rem', fontWeight: 700, color: '#333', minWidth: 22, textAlign: 'center', cursor: isDmOrAdmin ? 'text' : 'default' }}>
+                              {entry.initiative}
+                            </span>
+                          )}
+                          {isDmOrAdmin && entryToken && (
+                            <button onClick={() => setInitiativeConditionPicker(showPicker ? null : entry.id)}
+                              title="Conditions" style={{ flexShrink: 0, padding: '0.1rem 0.25rem', fontSize: '0.65rem', cursor: 'pointer', border: `1px solid ${showPicker ? '#aac' : '#ddd'}`, borderRadius: 3, background: showPicker ? '#eef' : '#fff', color: '#668' }}>
+                              ±
+                            </button>
+                          )}
+                          {isDmOrAdmin && (
+                            <button onClick={() => socket.emit('initiative:remove', { id: entry.id })}
+                              style={{ flexShrink: 0, padding: '0.1rem 0.25rem', fontSize: '0.65rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>✕</button>
+                          )}
+                        </div>
+                        {showPicker && entryToken && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.2rem', padding: '0.3rem 0.5rem', background: '#f5f5ff', borderTop: '1px solid #eee' }}>
+                            {(Object.keys(CONDITION_COLORS) as string[]).map((cond) => {
+                              const active = entryConditions.includes(cond);
+                              return (
+                                <button key={cond} onClick={() => {
+                                  const next = active ? entryConditions.filter((c) => c !== cond) : [...entryConditions, cond];
+                                  handleTokenConditionsChange(entryToken.id, next);
+                                }} style={{
+                                  padding: '0.15rem 0.35rem', fontSize: '0.65rem', borderRadius: 3, cursor: 'pointer',
+                                  border: `1px solid ${active ? CONDITION_COLORS[cond] : '#ddd'}`,
+                                  background: active ? CONDITION_COLORS[cond] : '#fff',
+                                  color: active ? '#fff' : '#888', fontWeight: active ? 700 : 400,
+                                  textTransform: 'capitalize',
+                                }}>{cond}</button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                   {isDmOrAdmin && (
                     addingInitiative ? (
                       <div style={{ display: 'flex', gap: '0.25rem', padding: '0.4rem 0.25rem', alignItems: 'center' }}>
