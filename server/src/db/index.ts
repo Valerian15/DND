@@ -355,6 +355,19 @@ export function initSchema() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_map_folders_campaign ON map_folders(campaign_id);
+
+    -- CAMPAIGN NOTES (DM scratchpad per campaign)
+
+    CREATE TABLE IF NOT EXISTS campaign_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT 'Note',
+      body TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_campaign_notes_campaign ON campaign_notes(campaign_id);
   `);
 
   // Seed SRD weapons (INSERT OR IGNORE — safe to run repeatedly)
@@ -436,6 +449,11 @@ export function initSchema() {
   try { db.exec("ALTER TABLE characters ADD COLUMN resources TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
   // Map folder assignment
   try { db.exec('ALTER TABLE maps ADD COLUMN folder_id INTEGER'); } catch { /* exists */ }
+  // Death save tracking (resets when HP > 0)
+  try { db.exec('ALTER TABLE characters ADD COLUMN death_saves_success INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  try { db.exec('ALTER TABLE characters ADD COLUMN death_saves_failure INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  // Inspiration (boolean 0/1, granted by DM)
+  try { db.exec('ALTER TABLE characters ADD COLUMN inspiration INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
 
   console.log('✅ Database schema ready');
 }

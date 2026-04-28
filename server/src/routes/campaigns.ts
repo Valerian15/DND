@@ -259,6 +259,45 @@ router.delete('/:id', (req: AuthRequest, res) => {
   res.json({ ok: true });
 });
 
+// GET /:id/characters — DM-only: passive perception + inspiration for all PC characters in campaign
+router.get('/:id/characters', (req: AuthRequest, res) => {
+  const campaignId = Number(req.params.id);
+  const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(campaignId) as CampaignRow | undefined;
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  if (!isDmOrAdmin(req, campaign)) return res.status(403).json({ error: 'DM access required' });
+
+  const rows = db.prepare(`
+    SELECT c.id, c.name, c.level, c.class_slug, c.race_slug, c.portrait_url,
+           c.abilities, c.skills, c.darkvision, c.inspiration,
+           c.death_saves_success, c.death_saves_failure, c.hp_current, c.hp_max
+    FROM characters c
+    JOIN campaign_members cm ON cm.character_id = c.id
+    WHERE cm.campaign_id = ?
+  `).all(campaignId) as Array<{
+    id: number; name: string; level: number; class_slug: string | null; race_slug: string | null;
+    portrait_url: string | null; abilities: string; skills: string; darkvision: number;
+    inspiration: number; death_saves_success: number; death_saves_failure: number;
+    hp_current: number; hp_max: number;
+  }>;
+
+  const characters = rows.map((r) => {
+    const abilities = JSON.parse(r.abilities) as Record<string, number>;
+    const skills = JSON.parse(r.skills) as Record<string, { proficient?: boolean }>;
+    const wis = abilities.wis ?? 10;
+    const wisMod = Math.floor((wis - 10) / 2);
+    const level = r.level;
+    const prof = level < 5 ? 2 : level < 9 ? 3 : level < 13 ? 4 : level < 17 ? 5 : 6;
+    const perceptionProf = !!skills['perception']?.proficient;
+    const passivePerception = 10 + wisMod + (perceptionProf ? prof : 0);
+    return { id: r.id, name: r.name, class_slug: r.class_slug, race_slug: r.race_slug,
+      portrait_url: r.portrait_url, passive_perception: passivePerception,
+      inspiration: r.inspiration, darkvision: r.darkvision,
+      hp_current: r.hp_current, hp_max: r.hp_max };
+  });
+
+  res.json({ characters });
+});
+
 // Remove a member — DM/admin can remove anyone; a player can remove their own character
 router.delete('/:id/members/:characterId', (req: AuthRequest, res) => {
   const campaignId = Number(req.params.id);

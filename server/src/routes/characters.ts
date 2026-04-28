@@ -34,6 +34,9 @@ interface CharacterRow {
   notes: string;
   description: string;
   darkvision: number;
+  death_saves_success: number;
+  death_saves_failure: number;
+  inspiration: number;
   created_at: number;
   updated_at: number;
 }
@@ -110,6 +113,9 @@ const UPDATABLE_SCALAR = new Set([
   'notes',
   'darkvision',
   'hit_dice_used',
+  'death_saves_success',
+  'death_saves_failure',
+  'inspiration',
 ]);
 const UPDATABLE_JSON = new Set([
   'abilities',
