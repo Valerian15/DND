@@ -48,7 +48,7 @@ export const CONDITIONS = [
 export type Condition = typeof CONDITIONS[number];
 
 export const CONDITION_COLORS: Record<string, string> = {
-  blinded: '#555', charmed: '#c55a8a', deafened: '#7a7a55',
+  blinded: '#555', charmed: '#c55a8a', concentration: '#6644aa', deafened: '#7a7a55',
   exhaustion: '#7a5a3a', frightened: '#7a3a8a', grappled: '#7a5a2a',
   incapacitated: '#aa2222', invisible: '#4488aa', paralyzed: '#cc5500',
   petrified: '#5577aa', poisoned: '#228844', prone: '#997722',

@@ -262,7 +262,7 @@ router.patch('/:id/hp', (req: AuthRequest, res) => {
 });
 
 const VALID_CONDITIONS = new Set([
-  'blinded', 'charmed', 'deafened', 'exhaustion', 'frightened', 'grappled',
+  'blinded', 'charmed', 'concentration', 'deafened', 'exhaustion', 'frightened', 'grappled',
   'incapacitated', 'invisible', 'paralyzed', 'petrified', 'poisoned',
   'prone', 'restrained', 'stunned', 'unconscious',
 ]);
