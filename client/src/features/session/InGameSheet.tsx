@@ -294,17 +294,38 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     catch { setLocalResources(prev); }
   }
 
-  async function handleDeathSave(type: 'success' | 'failure') {
+  async function handleDeathSave(type: 'success' | 'failure', count = 1) {
     if (!character || hpCurrent > 0) return;
     if (type === 'success') {
-      const next = Math.min(3, deathSavesSuccess + 1);
+      const next = Math.min(3, deathSavesSuccess + count);
       setDeathSavesSuccess(next);
       try { await updateCharacter(character.id, { death_saves_success: next }); } catch { /* ignore */ }
     } else {
-      const next = Math.min(3, deathSavesFailure + 1);
+      const next = Math.min(3, deathSavesFailure + count);
       setDeathSavesFailure(next);
       try { await updateCharacter(character.id, { death_saves_failure: next }); } catch { /* ignore */ }
     }
+  }
+
+  async function rollDeathSave() {
+    if (!character || hpCurrent > 0) return;
+    if (deathSavesSuccess >= 3 || deathSavesFailure >= 3) return;
+    const roll = Math.floor(Math.random() * 20) + 1;
+    let label: string;
+    if (roll === 20) {
+      label = `Death Save — Natural 20! 2 successes`;
+      await handleDeathSave('success', 2);
+    } else if (roll >= 11) {
+      label = `Death Save — ${roll}, success`;
+      await handleDeathSave('success', 1);
+    } else if (roll === 1) {
+      label = `Death Save — Natural 1! 2 failures`;
+      await handleDeathSave('failure', 2);
+    } else {
+      label = `Death Save — ${roll}, failure`;
+      await handleDeathSave('failure', 1);
+    }
+    socket.emit('chat:send', { body: `${character.name}: ${label}` });
   }
 
   async function resetDeathSaves() {
@@ -477,7 +498,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                 <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#a44', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
                   {deathSavesSuccess >= 3 ? '✓ Stabilized' : deathSavesFailure >= 3 ? '✗ Dead' : 'Death Saves'}
                 </div>
-                <div style={{ display: 'flex', gap: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                   <div>
                     <div style={{ fontSize: '0.65rem', color: '#4a8', fontWeight: 600, marginBottom: '0.25rem' }}>Successes</div>
                     <div style={{ display: 'flex', gap: '0.3rem' }}>
@@ -492,6 +513,19 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                           }} />
                       ))}
                     </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem' }}>
+                    <button onClick={rollDeathSave}
+                      disabled={deathSavesSuccess >= 3 || deathSavesFailure >= 3}
+                      title="Roll d20 death save"
+                      style={{
+                        width: 32, height: 32, borderRadius: '50%', border: '2px solid #888',
+                        background: deathSavesSuccess >= 3 || deathSavesFailure >= 3 ? '#f0f0f0' : '#333',
+                        color: deathSavesSuccess >= 3 || deathSavesFailure >= 3 ? '#bbb' : '#fff',
+                        fontSize: '1rem', cursor: deathSavesSuccess >= 3 || deathSavesFailure >= 3 ? 'not-allowed' : 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, lineHeight: 1,
+                      }}>🎲</button>
+                    <span style={{ fontSize: '0.55rem', color: '#aaa', textAlign: 'center' }}>d20</span>
                   </div>
                   <div>
                     <div style={{ fontSize: '0.65rem', color: '#a44', fontWeight: 600, marginBottom: '0.25rem' }}>Failures</div>
@@ -509,7 +543,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                     </div>
                   </div>
                   {(deathSavesSuccess > 0 || deathSavesFailure > 0) && (
-                    <button onClick={resetDeathSaves} style={{ marginLeft: 'auto', alignSelf: 'flex-end', fontSize: '0.68rem', padding: '0.15rem 0.4rem', border: '1px solid #ddd', borderRadius: 3, cursor: 'pointer', color: '#aaa', background: '#fff' }}>Reset</button>
+                    <button onClick={resetDeathSaves} style={{ marginLeft: 'auto', alignSelf: 'center', fontSize: '0.68rem', padding: '0.15rem 0.4rem', border: '1px solid #ddd', borderRadius: 3, cursor: 'pointer', color: '#aaa', background: '#fff' }}>Reset</button>
                   )}
                 </div>
               </div>
