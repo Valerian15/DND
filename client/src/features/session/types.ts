@@ -59,7 +59,7 @@ export interface ChatMessage {
   user_id: number;
   username: string;
   body: string;
-  type: 'chat' | 'roll';
+  type: 'chat' | 'roll' | 'action';
   data?: { expression: string; dice: number[]; modifier: number; total: number; label?: string; rollMode?: 'advantage' | 'disadvantage' };
   created_at: number;
 }

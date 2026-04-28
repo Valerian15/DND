@@ -1424,9 +1424,9 @@ export default function CampaignSessionPage() {
 
       {/* Floating Dice Log — always visible, bottom-left */}
       {(() => {
-        const rolls = messages.filter((m) => m.type === 'roll');
-        if (rolls.length === 0) return null;
-        const recent = rolls.slice(-8);
+        const logEntries = messages.filter((m) => m.type === 'roll' || m.type === 'action');
+        if (logEntries.length === 0) return null;
+        const recent = logEntries.slice(-8);
         return (
           <div style={{ position: 'fixed', bottom: 12, right: panel?.type === 'character' ? 388 : 252, zIndex: 50, width: 230, fontFamily: 'system-ui', pointerEvents: 'auto', transition: 'right 0.25s' }}>
             <div
@@ -1439,6 +1439,14 @@ export default function CampaignSessionPage() {
             {diceLogOpen && (
               <div style={{ background: 'rgba(30,30,30,0.95)', borderRadius: '0 0 6px 6px', overflow: 'hidden', border: '1px solid #444', borderTop: 'none' }}>
                 {recent.map((msg) => {
+                  if (msg.type === 'action') {
+                    const text = msg.body.replace(/^\/action\s+/, '');
+                    return (
+                      <div key={msg.id} style={{ padding: '0.35rem 0.6rem', borderBottom: '1px solid #333' }}>
+                        <div style={{ fontSize: '0.72rem', color: '#b8a', fontStyle: 'italic', lineHeight: 1.35 }}>{text}</div>
+                      </div>
+                    );
+                  }
                   const { label, expression, total, dice, modifier } = msg.data!;
                   const modStr = modifier !== 0 ? ` ${modifier > 0 ? '+' : ''}${modifier}` : '';
                   return (

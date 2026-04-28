@@ -39,7 +39,7 @@ interface ChatMessageOut {
   user_id: number;
   username: string;
   body: string;
-  type: 'chat' | 'roll';
+  type: 'chat' | 'roll' | 'action';
   data?: { expression: string; dice: number[]; modifier: number; total: number; label?: string; rollMode?: 'advantage' | 'disadvantage' };
   created_at: number;
 }
@@ -120,7 +120,7 @@ function getCampaignDm(campaignId: number): number | null {
 function hydrateMessage(row: ChatMessageRow): ChatMessageOut {
   return {
     ...row,
-    type: row.type as 'chat' | 'roll',
+    type: row.type as 'chat' | 'roll' | 'action',
     data: row.data ? JSON.parse(row.data) : undefined,
   };
 }
@@ -306,6 +306,10 @@ export function setupSession(io: AppServer) {
           const safeLabel = label ? String(label).trim().slice(0, 100) : undefined;
           data = JSON.stringify({ expression, ...result, ...(safeLabel ? { label: safeLabel } : {}) });
         }
+      }
+
+      if (text.startsWith('/action ')) {
+        type = 'action';
       }
 
       const res = db.prepare(
