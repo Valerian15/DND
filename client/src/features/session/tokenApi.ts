@@ -1,5 +1,5 @@
 import { apiFetch } from '../../lib/api';
-import type { TokenData, CampaignNpc, TokenCategory } from './types';
+import type { TokenData, CampaignNpc, TokenCategory, NpcAbilities, NpcAttack, NpcTrait } from './types';
 
 export async function listTokens(mapId: number): Promise<TokenData[]> {
   const res = await apiFetch<{ tokens: TokenData[] }>(`/tokens?map_id=${mapId}`);
@@ -11,6 +11,7 @@ export async function createToken(body: {
   token_type: 'pc' | 'npc';
   character_id?: number;
   campaign_npc_id?: number;
+  monster_slug?: string;
   col: number;
   row: number;
 }): Promise<TokenData> {
@@ -51,6 +52,12 @@ export async function createCampaignNpc(body: {
   portrait_url?: string | null;
   size?: string;
   hp_max?: number;
+  ac?: number;
+  speed?: string;
+  abilities?: NpcAbilities;
+  saving_throws?: string[];
+  attacks?: NpcAttack[];
+  traits?: NpcTrait[];
   notes?: string;
 }): Promise<CampaignNpc> {
   const res = await apiFetch<{ npc: CampaignNpc }>('/campaign-npcs', {
@@ -66,6 +73,12 @@ export async function updateCampaignNpc(id: number, body: {
   portrait_url?: string | null;
   size?: string;
   hp_max?: number;
+  ac?: number;
+  speed?: string;
+  abilities?: NpcAbilities;
+  saving_throws?: string[];
+  attacks?: NpcAttack[];
+  traits?: NpcTrait[];
   notes?: string;
 }): Promise<CampaignNpc> {
   const res = await apiFetch<{ npc: CampaignNpc }>(`/campaign-npcs/${id}`, {

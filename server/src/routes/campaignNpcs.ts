@@ -6,6 +6,7 @@ const router = Router();
 router.use(requireAuth);
 
 const SIZES = ['tiny', 'small', 'medium', 'large', 'huge', 'gargantuan'];
+const VALID_SAVES = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
 
 interface NpcRow {
   id: number;
@@ -15,8 +16,24 @@ interface NpcRow {
   portrait_url: string | null;
   size: string;
   hp_max: number;
+  ac: number;
+  speed: string;
+  abilities: string;
+  saving_throws: string;
+  attacks: string;
+  traits: string;
   notes: string;
   created_at: number;
+}
+
+function hydrateNpc(row: NpcRow) {
+  return {
+    ...row,
+    abilities: JSON.parse(row.abilities || '{"str":10,"dex":10,"con":10,"int":10,"wis":10,"cha":10}'),
+    saving_throws: JSON.parse(row.saving_throws || '[]'),
+    attacks: JSON.parse(row.attacks || '[]'),
+    traits: JSON.parse(row.traits || '[]'),
+  };
 }
 
 function getDm(campaignId: number): { dm_id: number } | undefined {
@@ -27,17 +44,15 @@ function isDmOrAdmin(req: AuthRequest, dmId: number) {
   return req.user!.role === 'admin' || req.user!.id === dmId;
 }
 
-// List NPC templates for a campaign
 router.get('/', (req: AuthRequest, res) => {
   const campaignId = Number(req.query.campaign_id);
   if (!campaignId) return res.status(400).json({ error: 'campaign_id required' });
   const rows = db.prepare('SELECT * FROM campaign_npcs WHERE campaign_id = ? ORDER BY label ASC').all(campaignId) as NpcRow[];
-  res.json({ npcs: rows });
+  res.json({ npcs: rows.map(hydrateNpc) });
 });
 
-// Create an NPC template
 router.post('/', (req: AuthRequest, res) => {
-  const { campaign_id, category_id, label, portrait_url, size, hp_max, notes } = req.body ?? {};
+  const { campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, notes } = req.body ?? {};
   const campaignId = Number(campaign_id);
   if (!campaignId) return res.status(400).json({ error: 'campaign_id required' });
   if (typeof label !== 'string' || !label.trim()) return res.status(400).json({ error: 'label required' });
@@ -48,17 +63,24 @@ router.post('/', (req: AuthRequest, res) => {
 
   const catId = Number(category_id) || null;
   const sizeVal = SIZES.includes(size) ? size : 'medium';
-  const hpVal = Number.isInteger(Number(hp_max)) && Number(hp_max) > 0 ? Number(hp_max) : 10;
+  const hpVal = Math.max(1, Number(hp_max) || 10);
+  const acVal = Math.max(1, Number(ac) || 10);
+  const speedVal = typeof speed === 'string' && speed.trim() ? speed.trim() : '30 ft.';
+  const abilitiesVal = abilities && typeof abilities === 'object' ? JSON.stringify(abilities) : '{"str":10,"dex":10,"con":10,"int":10,"wis":10,"cha":10}';
+  const savesVal = Array.isArray(saving_throws) ? JSON.stringify(saving_throws.filter((s: unknown) => VALID_SAVES.includes(s as string))) : '[]';
+  const attacksVal = Array.isArray(attacks) ? JSON.stringify(attacks) : '[]';
+  const traitsVal = Array.isArray(traits) ? JSON.stringify(traits) : '[]';
+  const notesVal = typeof notes === 'string' ? notes.trim() : '';
+  const portraitVal = typeof portrait_url === 'string' && portrait_url.trim() ? portrait_url.trim() : null;
 
   const info = db.prepare(
-    'INSERT INTO campaign_npcs (campaign_id, category_id, label, portrait_url, size, hp_max, notes) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(campaignId, catId, label.trim(), typeof portrait_url === 'string' && portrait_url.trim() ? portrait_url.trim() : null, sizeVal, hpVal, typeof notes === 'string' ? notes.trim() : '');
+    'INSERT INTO campaign_npcs (campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(campaignId, catId, label.trim(), portraitVal, sizeVal, hpVal, acVal, speedVal, abilitiesVal, savesVal, attacksVal, traitsVal, notesVal);
 
   const row = db.prepare('SELECT * FROM campaign_npcs WHERE id = ?').get(info.lastInsertRowid) as NpcRow;
-  res.status(201).json({ npc: row });
+  res.status(201).json({ npc: hydrateNpc(row) });
 });
 
-// Update an NPC template
 router.patch('/:id', (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM campaign_npcs WHERE id = ?').get(id) as NpcRow | undefined;
@@ -68,7 +90,7 @@ router.patch('/:id', (req: AuthRequest, res) => {
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   if (!isDmOrAdmin(req, campaign.dm_id)) return res.status(403).json({ error: 'DM access required' });
 
-  const { category_id, label, portrait_url, size, hp_max, notes } = req.body ?? {};
+  const { category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, notes } = req.body ?? {};
   const sets: string[] = [];
   const values: (string | number | null)[] = [];
 
@@ -76,7 +98,13 @@ router.patch('/:id', (req: AuthRequest, res) => {
   if (typeof label === 'string' && label.trim()) { sets.push('label = ?'); values.push(label.trim()); }
   if (portrait_url !== undefined) { sets.push('portrait_url = ?'); values.push(typeof portrait_url === 'string' && portrait_url.trim() ? portrait_url.trim() : null); }
   if (SIZES.includes(size)) { sets.push('size = ?'); values.push(size); }
-  if (Number.isInteger(Number(hp_max)) && Number(hp_max) > 0) { sets.push('hp_max = ?'); values.push(Number(hp_max)); }
+  if (Number(hp_max) > 0) { sets.push('hp_max = ?'); values.push(Math.max(1, Number(hp_max))); }
+  if (Number(ac) > 0) { sets.push('ac = ?'); values.push(Math.max(1, Number(ac))); }
+  if (typeof speed === 'string') { sets.push('speed = ?'); values.push(speed.trim()); }
+  if (abilities && typeof abilities === 'object') { sets.push('abilities = ?'); values.push(JSON.stringify(abilities)); }
+  if (Array.isArray(saving_throws)) { sets.push('saving_throws = ?'); values.push(JSON.stringify(saving_throws.filter((s: unknown) => VALID_SAVES.includes(s as string)))); }
+  if (Array.isArray(attacks)) { sets.push('attacks = ?'); values.push(JSON.stringify(attacks)); }
+  if (Array.isArray(traits)) { sets.push('traits = ?'); values.push(JSON.stringify(traits)); }
   if (typeof notes === 'string') { sets.push('notes = ?'); values.push(notes.trim()); }
 
   if (!sets.length) return res.status(400).json({ error: 'No valid fields' });
@@ -84,10 +112,9 @@ router.patch('/:id', (req: AuthRequest, res) => {
   db.prepare(`UPDATE campaign_npcs SET ${sets.join(', ')} WHERE id = ?`).run(...values);
 
   const updated = db.prepare('SELECT * FROM campaign_npcs WHERE id = ?').get(id) as NpcRow;
-  res.json({ npc: updated });
+  res.json({ npc: hydrateNpc(updated) });
 });
 
-// Delete an NPC template
 router.delete('/:id', (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM campaign_npcs WHERE id = ?').get(id) as NpcRow | undefined;

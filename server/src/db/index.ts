@@ -454,6 +454,15 @@ export function initSchema() {
   try { db.exec('ALTER TABLE characters ADD COLUMN death_saves_failure INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
   // Inspiration (boolean 0/1, granted by DM)
   try { db.exec('ALTER TABLE characters ADD COLUMN inspiration INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  // Library monster slug on NPC tokens (allows opening full stat block)
+  try { db.exec('ALTER TABLE tokens ADD COLUMN monster_slug TEXT'); } catch { /* exists */ }
+  // Full stat block fields on campaign NPCs
+  try { db.exec('ALTER TABLE campaign_npcs ADD COLUMN ac INTEGER NOT NULL DEFAULT 10'); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN speed TEXT NOT NULL DEFAULT '30 ft.'"); } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE campaign_npcs ADD COLUMN abilities TEXT NOT NULL DEFAULT '{"str":10,"dex":10,"con":10,"int":10,"wis":10,"cha":10}'`); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN saving_throws TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN attacks TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN traits TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
 
   console.log('✅ Database schema ready');
 }

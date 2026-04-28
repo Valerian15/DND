@@ -8,8 +8,7 @@ import {
   listCampaignNpcs, createCampaignNpc, updateCampaignNpc, deleteCampaignNpc,
   listTokenCategories, createTokenCategory, updateTokenCategory, deleteTokenCategory,
 } from '../features/session/tokenApi';
-
-const SIZES = ['tiny', 'small', 'medium', 'large', 'huge', 'gargantuan'];
+import { NpcForm, type NpcFormData } from '../features/session/NpcForm';
 
 export default function CampaignDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -31,10 +30,8 @@ export default function CampaignDetailPage() {
   const [npcs, setNpcs] = useState<CampaignNpc[]>([]);
   const [categories, setCategories] = useState<TokenCategory[]>([]);
   const [addingNpcCatId, setAddingNpcCatId] = useState<number | null>(null);
-  const [npcForm, setNpcForm] = useState({ label: '', size: 'medium', hp_max: '10', portrait_url: '', notes: '' });
   const [savingNpc, setSavingNpc] = useState(false);
   const [editingNpcId, setEditingNpcId] = useState<number | null>(null);
-  const [editNpcForm, setEditNpcForm] = useState({ label: '', size: 'medium', hp_max: '10', portrait_url: '', notes: '' });
   const [addingCategory, setAddingCategory] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [renamingCatId, setRenamingCatId] = useState<number | null>(null);
@@ -115,22 +112,26 @@ export default function CampaignDetailPage() {
     setTimeout(() => setCodeCopied(false), 2000);
   }
 
-  async function handleAddNpc(e: React.FormEvent, catId: number | null) {
-    e.preventDefault();
-    if (!campaign || !npcForm.label.trim()) return;
+  async function handleAddNpc(data: NpcFormData, catId: number | null) {
+    if (!campaign) return;
     setSavingNpc(true);
     try {
       const npc = await createCampaignNpc({
         campaign_id: campaign.id,
         category_id: catId,
-        label: npcForm.label.trim(),
-        size: npcForm.size,
-        hp_max: Number(npcForm.hp_max) || 10,
-        portrait_url: npcForm.portrait_url.trim() || null,
-        notes: npcForm.notes.trim(),
+        label: data.label,
+        size: data.size,
+        hp_max: data.hp_max,
+        ac: data.ac,
+        speed: data.speed,
+        abilities: data.abilities,
+        saving_throws: data.saving_throws,
+        attacks: data.attacks,
+        traits: data.traits,
+        portrait_url: data.portrait_url,
+        notes: data.notes,
       });
       setNpcs((prev) => [...prev, npc]);
-      setNpcForm({ label: '', size: 'medium', hp_max: '10', portrait_url: '', notes: '' });
       setAddingNpcCatId(null);
     } catch (e: any) {
       setError(e.message);
@@ -139,15 +140,20 @@ export default function CampaignDetailPage() {
     }
   }
 
-  async function handleSaveNpcEdit(e: React.FormEvent, npc: CampaignNpc) {
-    e.preventDefault();
+  async function handleSaveNpcEdit(data: NpcFormData, npc: CampaignNpc) {
     try {
       const updated = await updateCampaignNpc(npc.id, {
-        label: editNpcForm.label.trim() || npc.label,
-        size: editNpcForm.size,
-        hp_max: Number(editNpcForm.hp_max) || npc.hp_max,
-        portrait_url: editNpcForm.portrait_url.trim() || null,
-        notes: editNpcForm.notes.trim(),
+        label: data.label,
+        size: data.size,
+        hp_max: data.hp_max,
+        ac: data.ac,
+        speed: data.speed,
+        abilities: data.abilities,
+        saving_throws: data.saving_throws,
+        attacks: data.attacks,
+        traits: data.traits,
+        portrait_url: data.portrait_url,
+        notes: data.notes,
       });
       setNpcs((prev) => prev.map((n) => n.id === updated.id ? updated : n));
       setEditingNpcId(null);
@@ -157,7 +163,7 @@ export default function CampaignDetailPage() {
   }
 
   async function handleDeleteNpc(npcId: number) {
-    if (!confirm('Delete this NPC template?')) return;
+    if (!confirm('Delete this NPC?')) return;
     try {
       await deleteCampaignNpc(npcId);
       setNpcs((prev) => prev.filter((n) => n.id !== npcId));
@@ -192,7 +198,7 @@ export default function CampaignDetailPage() {
   }
 
   async function handleDeleteCategory(catId: number, catName: string) {
-    if (!confirm(`Delete category "${catName}"? NPCs must be moved first.`)) return;
+    if (!confirm(`Delete category "${catName}"? NPCs will be moved to uncategorized.`)) return;
     try {
       await deleteTokenCategory(catId);
       setCategories((prev) => prev.filter((c) => c.id !== catId));
@@ -201,39 +207,6 @@ export default function CampaignDetailPage() {
     }
   }
 
-  function startEditNpc(npc: CampaignNpc) {
-    setEditingNpcId(npc.id);
-    setEditNpcForm({ label: npc.label, size: npc.size, hp_max: String(npc.hp_max), portrait_url: npc.portrait_url ?? '', notes: npc.notes });
-  }
-
-  const npcFormFields = (
-    form: typeof npcForm,
-    setForm: (f: typeof npcForm) => void,
-    onSubmit: (e: React.FormEvent) => void,
-    onCancel: () => void,
-    submitting: boolean,
-  ) => (
-    <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.75rem', background: '#f9f9f9', borderRadius: 6, border: '1px solid #e0e0e0' }}>
-      <input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="Name *" required style={{ padding: '0.4rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem' }} />
-      <div style={{ display: 'flex', gap: '0.4rem' }}>
-        <select value={form.size} onChange={(e) => setForm({ ...form, size: e.target.value })} style={{ flex: 1, padding: '0.4rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem' }}>
-          {SIZES.map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-        </select>
-        <input type="number" value={form.hp_max} onChange={(e) => setForm({ ...form, hp_max: e.target.value })} placeholder="HP" min={1} style={{ width: 70, padding: '0.4rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem' }} />
-      </div>
-      <input value={form.portrait_url} onChange={(e) => setForm({ ...form, portrait_url: e.target.value })} placeholder="Portrait URL (optional)" style={{ padding: '0.4rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem' }} />
-      <input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Notes (optional)" style={{ padding: '0.4rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem' }} />
-      <div style={{ display: 'flex', gap: '0.4rem' }}>
-        <button type="submit" disabled={submitting} style={{ flex: 1, padding: '0.4rem', background: '#333', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.85rem' }}>
-          {submitting ? 'Saving…' : 'Save'}
-        </button>
-        <button type="button" onClick={onCancel} style={{ padding: '0.4rem 0.75rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem' }}>Cancel</button>
-      </div>
-    </form>
-  );
-
-  // Non-default categories + the "NPCs" default (sort_order=1)
-  // sort_order=0 is "Player Characters" — NPCs don't belong there
   const npcCategories = categories.filter((c) => c.sort_order !== 0);
 
   return (
@@ -358,7 +331,7 @@ export default function CampaignDetailPage() {
       {isDmOrAdmin && (
         <div style={{ background: '#fff', padding: '1.25rem', borderRadius: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h2 style={{ margin: 0, fontSize: '1.1rem' }}>NPC Templates</h2>
+            <h2 style={{ margin: 0, fontSize: '1.1rem' }}>My NPCs</h2>
             <button
               onClick={() => { setAddingCategory(true); setNewCatName(''); }}
               style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem' }}
@@ -376,7 +349,7 @@ export default function CampaignDetailPage() {
           )}
 
           {npcCategories.length === 0 && npcs.length === 0 && (
-            <p style={{ color: '#999', margin: 0, fontSize: '0.9rem' }}>No NPC templates yet.</p>
+            <p style={{ color: '#999', margin: 0, fontSize: '0.9rem' }}>No NPCs yet. Add a category to get started.</p>
           )}
 
           {npcCategories.map((cat) => {
@@ -411,7 +384,12 @@ export default function CampaignDetailPage() {
                   <div key={npc.id}>
                     {editingNpcId === npc.id ? (
                       <div style={{ marginBottom: '0.5rem' }}>
-                        {npcFormFields(editNpcForm, setEditNpcForm, (e) => handleSaveNpcEdit(e, npc), () => setEditingNpcId(null), false)}
+                        <NpcForm
+                          initial={npc}
+                          onSave={(data) => handleSaveNpcEdit(data, npc)}
+                          onCancel={() => setEditingNpcId(null)}
+                          submitting={false}
+                        />
                       </div>
                     ) : (
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: '#f9f9f9', borderRadius: 6, marginBottom: '0.4rem', border: '1px solid #eee' }}>
@@ -425,11 +403,14 @@ export default function CampaignDetailPage() {
                           )}
                           <div>
                             <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{npc.label}</div>
-                            <div style={{ fontSize: '0.75rem', color: '#888' }}>{npc.size} · {npc.hp_max} HP</div>
+                            <div style={{ fontSize: '0.75rem', color: '#888' }}>
+                              {npc.size} · AC {npc.ac ?? 10} · {npc.hp_max} HP
+                              {(npc.attacks?.length ?? 0) > 0 && ` · ${npc.attacks.length} attack${npc.attacks.length > 1 ? 's' : ''}`}
+                            </div>
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: '0.35rem' }}>
-                          <button onClick={() => startEditNpc(npc)} style={{ padding: '0.25rem 0.5rem', cursor: 'pointer', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.75rem' }}>Edit</button>
+                          <button onClick={() => setEditingNpcId(npc.id)} style={{ padding: '0.25rem 0.5rem', cursor: 'pointer', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.75rem' }}>Edit</button>
                           <button onClick={() => handleDeleteNpc(npc.id)} style={{ padding: '0.25rem 0.5rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 4, fontSize: '0.75rem', color: 'crimson', background: '#fff' }}>✕</button>
                         </div>
                       </div>
@@ -438,9 +419,13 @@ export default function CampaignDetailPage() {
                 ))}
 
                 {addingNpcCatId === cat.id ? (
-                  npcFormFields(npcForm, setNpcForm, (e) => handleAddNpc(e, cat.id), () => setAddingNpcCatId(null), savingNpc)
+                  <NpcForm
+                    onSave={(data) => handleAddNpc(data, cat.id)}
+                    onCancel={() => setAddingNpcCatId(null)}
+                    submitting={savingNpc}
+                  />
                 ) : (
-                  <button onClick={() => { setAddingNpcCatId(cat.id); setNpcForm({ label: '', size: 'medium', hp_max: '10', portrait_url: '', notes: '' }); }} style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: '1px dashed #ccc', borderRadius: 4, fontSize: '0.82rem', background: '#fafafa', color: '#666', width: '100%' }}>
+                  <button onClick={() => setAddingNpcCatId(cat.id)} style={{ padding: '0.3rem 0.75rem', cursor: 'pointer', border: '1px dashed #ccc', borderRadius: 4, fontSize: '0.82rem', background: '#fafafa', color: '#666', width: '100%' }}>
                     + Add NPC to {cat.name}
                   </button>
                 )}
@@ -449,6 +434,7 @@ export default function CampaignDetailPage() {
           })}
         </div>
       )}
+
     </div>
   );
 }

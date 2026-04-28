@@ -14,6 +14,7 @@ export interface TokenRow {
   character_id: number | null;
   campaign_npc_id: number | null;
   category_id: number | null; // derived from campaign_npcs join
+  monster_slug: string | null;
   label: string;
   portrait_url: string | null;
   size: string;
@@ -31,6 +32,7 @@ export interface HydratedToken extends Omit<TokenRow, 'hp_visible' | 'controlled
   hp_visible: boolean;
   controlled_by: number[];
   conditions: string[];
+  monster_slug: string | null;
 }
 
 export function hydrateToken(row: TokenRow): HydratedToken {
@@ -106,6 +108,7 @@ const TOKEN_QUERY = `
   WHERE t.map_id = ?
   ORDER BY t.created_at ASC
 `;
+// monster_slug is a native column on tokens — already included via t.*
 
 // GET /api/tokens?map_id=X
 router.get('/', (req: AuthRequest, res) => {
@@ -175,8 +178,30 @@ router.post('/', (req: AuthRequest, res) => {
   } else if (token_type === 'npc') {
     if (!isDmOrAdmin) return res.status(403).json({ error: 'DM access required' });
 
+    // Path A: place from library monster slug
+    if (req.body.monster_slug) {
+      const slug = String(req.body.monster_slug).trim();
+      const mrow = db.prepare('SELECT name, data FROM monsters WHERE slug = ?').get(slug) as
+        { name: string; data: string } | undefined;
+      if (!mrow) return res.status(404).json({ error: 'Monster not found in library' });
+      const mdata = JSON.parse(mrow.data) as { hit_points?: number; size?: string };
+      const hp = mdata.hit_points ?? 10;
+      const size = (mdata.size ?? 'medium').toLowerCase();
+      const count = (db.prepare('SELECT COUNT(*) as c FROM tokens WHERE map_id = ? AND monster_slug = ?')
+        .get(mapId, slug) as { c: number }).c;
+      const label = count > 0 ? `${mrow.name} ${count + 1}` : mrow.name;
+      const info = db.prepare(
+        'INSERT INTO tokens (map_id, token_type, monster_slug, label, size, col, row, hp_current, hp_max, hp_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)'
+      ).run(mapId, 'npc', slug, label, size, colN, rowN, hp, hp);
+      const created = db.prepare('SELECT t.*, NULL as category_id FROM tokens t WHERE t.id = ?')
+        .get(info.lastInsertRowid) as TokenRow;
+      emitToken(campaign, 'token:created', hydrateToken(created), created);
+      return res.status(201).json({ token: hydrateToken(created) });
+    }
+
+    // Path B: place from campaign NPC template
     const npcId = Number(campaign_npc_id);
-    if (!npcId) return res.status(400).json({ error: 'campaign_npc_id required for npc token' });
+    if (!npcId) return res.status(400).json({ error: 'campaign_npc_id or monster_slug required for npc token' });
 
     const npc = db.prepare('SELECT * FROM campaign_npcs WHERE id = ? AND campaign_id = ?')
       .get(npcId, campaign.id) as { id: number; label: string; portrait_url: string | null; size: string; hp_max: number; category_id: number | null } | undefined;

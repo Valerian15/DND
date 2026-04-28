@@ -28,7 +28,25 @@ export interface TokenData {
   hp_visible: boolean;
   controlled_by: number[];
   conditions: string[];
+  monster_slug: string | null;
   created_at: number;
+}
+
+export interface NpcAbilities {
+  str: number; dex: number; con: number; int: number; wis: number; cha: number;
+}
+
+export interface NpcAttack {
+  name: string;
+  to_hit: number;
+  damage: string;
+  damage_type: string;
+  description?: string;
+}
+
+export interface NpcTrait {
+  name: string;
+  description: string;
 }
 
 export interface CampaignNpc {
@@ -39,6 +57,12 @@ export interface CampaignNpc {
   portrait_url: string | null;
   size: string;
   hp_max: number;
+  ac: number;
+  speed: string;
+  abilities: NpcAbilities;
+  saving_throws: string[];
+  attacks: NpcAttack[];
+  traits: NpcTrait[];
   notes: string;
   created_at: number;
 }
