@@ -15,6 +15,7 @@ const ALIGNMENTS = [
 
 export default function DetailsStep({ character, onChange }: Props) {
   const desc = (character.description ?? {}) as Record<string, any>;
+  const initialPersonality = character.personality ?? { traits: '', ideals: '', bonds: '', flaws: '' };
 
   const [name, setName] = useState(character.name);
   const [alignment, setAlignment] = useState<string>(desc.alignment ?? '');
@@ -26,10 +27,15 @@ export default function DetailsStep({ character, onChange }: Props) {
   const [skin, setSkin] = useState<string>(desc.skin ?? '');
   const [backstory, setBackstory] = useState<string>(desc.backstory ?? '');
   const [portraitUrl, setPortraitUrl] = useState<string>(character.portrait_url ?? '');
+  const [traits, setTraits] = useState(initialPersonality.traits ?? '');
+  const [ideals, setIdeals] = useState(initialPersonality.ideals ?? '');
+  const [bonds, setBonds] = useState(initialPersonality.bonds ?? '');
+  const [flaws, setFlaws] = useState(initialPersonality.flaws ?? '');
 
   // Reload when switching characters
   useEffect(() => {
     const d = (character.description ?? {}) as Record<string, any>;
+    const p = character.personality ?? { traits: '', ideals: '', bonds: '', flaws: '' };
     setName(character.name);
     setAlignment(d.alignment ?? '');
     setAge(d.age ?? '');
@@ -40,6 +46,10 @@ export default function DetailsStep({ character, onChange }: Props) {
     setSkin(d.skin ?? '');
     setBackstory(d.backstory ?? '');
     setPortraitUrl(character.portrait_url ?? '');
+    setTraits(p.traits ?? '');
+    setIdeals(p.ideals ?? '');
+    setBonds(p.bonds ?? '');
+    setFlaws(p.flaws ?? '');
   }, [character.id]);
 
   function saveAll() {
@@ -47,6 +57,7 @@ export default function DetailsStep({ character, onChange }: Props) {
       name: name.trim() || 'Unnamed Hero',
       portrait_url: portraitUrl.trim() || null,
       description: { alignment, age, height, weight, eyes, hair, skin, backstory },
+      personality: { traits, ideals, bonds, flaws },
     });
   }
 
@@ -112,6 +123,33 @@ export default function DetailsStep({ character, onChange }: Props) {
             rows={6}
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
           />
+        </Field>
+      </div>
+
+      <h3 style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontSize: '1rem' }}>Personality</h3>
+      <p style={{ color: '#666', fontSize: '0.85rem', margin: '0 0 1rem' }}>
+        Roleplay anchors — your character's habits, beliefs, attachments, and weaknesses.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+        <Field label="Personality Traits">
+          <textarea value={traits} onChange={(e) => setTraits(e.target.value)} rows={3}
+            placeholder="How you act and present yourself…"
+            style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+        </Field>
+        <Field label="Ideals">
+          <textarea value={ideals} onChange={(e) => setIdeals(e.target.value)} rows={3}
+            placeholder="What drives you, your principles…"
+            style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+        </Field>
+        <Field label="Bonds">
+          <textarea value={bonds} onChange={(e) => setBonds(e.target.value)} rows={3}
+            placeholder="Connections to people, places, things…"
+            style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+        </Field>
+        <Field label="Flaws">
+          <textarea value={flaws} onChange={(e) => setFlaws(e.target.value)} rows={3}
+            placeholder="Weaknesses, vices, fears…"
+            style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
         </Field>
       </div>
 

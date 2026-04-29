@@ -52,6 +52,9 @@ export interface Character {
   spell_slots_used: Record<string, number>;
   hit_dice_used: number;
   resources: ClassResource[];
+  currency: { pp: number; gp: number; ep: number; sp: number; cp: number };
+  feats: string[];
+  personality: { traits: string; ideals: string; bonds: string; flaws: string };
   features: unknown[];
   notes: string;
   description: Record<string, unknown>;
@@ -59,6 +62,7 @@ export interface Character {
   death_saves_success: number;
   death_saves_failure: number;
   inspiration: number;
+  exhaustion_level: number;
   created_at: number;
   updated_at: number;
 }

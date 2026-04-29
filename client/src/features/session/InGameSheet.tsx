@@ -33,6 +33,14 @@ interface SpellMeta {
   concentration?: boolean;
 }
 
+interface InventoryItem {
+  id: string;
+  source?: string;
+  name: string;
+  quantity: number;
+  description?: string;
+}
+
 const HIT_DIE_BY_CLASS: Record<string, number> = {
   barbarian: 12, fighter: 10, paladin: 10, ranger: 10,
   bard: 8, cleric: 8, druid: 8, monk: 8, rogue: 8, warlock: 8,
@@ -94,7 +102,18 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const [condSaving, setCondSaving] = useState(false);
   const [weaponData, setWeaponData] = useState<Record<string, WeaponData>>({});
   const [spellMeta, setSpellMeta] = useState<Record<string, SpellMeta>>({});
-  const [page, setPage] = useState<'main' | 'spells'>('main');
+  const [page, setPage] = useState<'main' | 'inventory' | 'spells'>('main');
+  const [localInventory, setLocalInventory] = useState<InventoryItem[]>([]);
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemQty, setNewItemQty] = useState('1');
+  const [newItemDesc, setNewItemDesc] = useState('');
+  const [localCurrency, setLocalCurrency] = useState<{ pp: number; gp: number; ep: number; sp: number; cp: number }>({ pp: 0, gp: 0, ep: 0, sp: 0, cp: 0 });
+  const [actionUsed, setActionUsed] = useState(false);
+  const [bonusUsed, setBonusUsed] = useState(false);
+  const [reactionUsed, setReactionUsed] = useState(false);
+  const [localFeats, setLocalFeats] = useState<string[]>([]);
+  const [localPersonality, setLocalPersonality] = useState<{ traits: string; ideals: string; bonds: string; flaws: string }>({ traits: '', ideals: '', bonds: '', flaws: '' });
+  const [featDetails, setFeatDetails] = useState<Record<string, { name: string; desc?: string; prerequisite?: string; effects_desc?: string[] }>>({});
   const [preparedSlugs, setPreparedSlugs] = useState<string[]>([]);
   const [preparingSaving, setPreparingSaving] = useState(false);
   const [rollMode, setRollMode] = useState<'advantage' | 'normal' | 'disadvantage'>('normal');
@@ -105,6 +124,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const [deathSavesSuccess, setDeathSavesSuccess] = useState(0);
   const [deathSavesFailure, setDeathSavesFailure] = useState(0);
   const [inspiration, setInspiration] = useState(0);
+  const [exhaustion, setExhaustion] = useState(0);
 
   useEffect(() => {
     getCharacter(characterId)
@@ -115,13 +135,50 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
         setSlotsUsed(c.spell_slots_used ?? {});
         setHitDiceUsed(c.hit_dice_used ?? 0);
         setLocalResources(c.resources ?? []);
+        setLocalInventory(((c.inventory ?? []) as InventoryItem[]).map((i) => ({
+          id: i.id ?? `it-${Date.now()}-${Math.random()}`,
+          source: i.source,
+          name: i.name ?? 'Unnamed',
+          quantity: typeof i.quantity === 'number' ? i.quantity : 1,
+          description: i.description,
+        })));
+        setLocalCurrency({
+          pp: c.currency?.pp ?? 0, gp: c.currency?.gp ?? 0, ep: c.currency?.ep ?? 0,
+          sp: c.currency?.sp ?? 0, cp: c.currency?.cp ?? 0,
+        });
         setDeathSavesSuccess(c.death_saves_success ?? 0);
         setDeathSavesFailure(c.death_saves_failure ?? 0);
         setInspiration(c.inspiration ?? 0);
+        setExhaustion(c.exhaustion_level ?? 0);
+
+        setLocalFeats(c.feats ?? []);
+        setLocalPersonality({
+          traits: c.personality?.traits ?? '',
+          ideals: c.personality?.ideals ?? '',
+          bonds: c.personality?.bonds ?? '',
+          flaws: c.personality?.flaws ?? '',
+        });
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [characterId]);
+
+  // Load detail for any selected feat slug we haven't fetched yet
+  useEffect(() => {
+    const missing = localFeats.filter((s) => !featDetails[s]);
+    if (missing.length === 0) return;
+    Promise.all(missing.map((slug) =>
+      getLibraryItem<{ name: string; data: { desc?: string; prerequisite?: string; effects_desc?: string[] } }>('feats', slug)
+        .then((r) => ({ slug, name: r.name, ...r.data }))
+        .catch(() => null),
+    )).then((results) => {
+      setFeatDetails((prev) => {
+        const next = { ...prev };
+        for (const r of results) if (r) next[r.slug] = r;
+        return next;
+      });
+    });
+  }, [localFeats, featDetails]);
 
   useEffect(() => {
     if (!character?.weapons?.length) return;
@@ -326,6 +383,57 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     catch { setLocalResources(prev); }
   }
 
+  async function saveInventory(next: InventoryItem[]) {
+    if (!character) return;
+    const prev = localInventory;
+    setLocalInventory(next);
+    try { await updateCharacter(character.id, { inventory: next }); }
+    catch { setLocalInventory(prev); }
+  }
+
+  async function adjustItemQty(id: string, delta: number) {
+    const next = localInventory
+      .map((i) => i.id === id ? { ...i, quantity: i.quantity + delta } : i)
+      .filter((i) => i.quantity > 0);
+    await saveInventory(next);
+  }
+
+  async function removeItem(id: string) {
+    await saveInventory(localInventory.filter((i) => i.id !== id));
+  }
+
+  async function addItem() {
+    const name = newItemName.trim();
+    if (!name) return;
+    const qty = Math.max(1, Number(newItemQty) || 1);
+    const item: InventoryItem = {
+      id: `it-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      name, quantity: qty,
+      description: newItemDesc.trim() || undefined,
+    };
+    setNewItemName(''); setNewItemQty('1'); setNewItemDesc('');
+    await saveInventory([...localInventory, item]);
+  }
+
+  async function adjustCurrency(coin: 'pp' | 'gp' | 'ep' | 'sp' | 'cp', delta: number) {
+    if (!character) return;
+    const next = { ...localCurrency, [coin]: Math.max(0, localCurrency[coin] + delta) };
+    const prev = localCurrency;
+    setLocalCurrency(next);
+    try { await updateCharacter(character.id, { currency: next }); }
+    catch { setLocalCurrency(prev); }
+  }
+
+  async function setCurrencyValue(coin: 'pp' | 'gp' | 'ep' | 'sp' | 'cp', value: number) {
+    if (!character) return;
+    const next = { ...localCurrency, [coin]: Math.max(0, Math.floor(value) || 0) };
+    const prev = localCurrency;
+    setLocalCurrency(next);
+    try { await updateCharacter(character.id, { currency: next }); }
+    catch { setLocalCurrency(prev); }
+  }
+
+
   async function handleDeathSave(type: 'success' | 'failure', count = 1) {
     if (!character || hpCurrent > 0) return;
     if (type === 'success') {
@@ -372,6 +480,22 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     const next = inspiration ? 0 : 1;
     setInspiration(next);
     try { await updateCharacter(character.id, { inspiration: next }); } catch { setInspiration(inspiration); }
+  }
+
+  async function setExhaustionLevel(level: number) {
+    if (!character) return;
+    const clamped = Math.max(0, Math.min(6, level));
+    const prev = exhaustion;
+    setExhaustion(clamped);
+    try { await updateCharacter(character.id, { exhaustion_level: clamped }); }
+    catch { setExhaustion(prev); return; }
+    // Keep the 'exhaustion' condition badge in sync with whether level > 0
+    const hasCondition = conditions.includes('exhaustion');
+    if (clamped > 0 && !hasCondition) {
+      await onConditionsChange([...conditions, 'exhaustion']);
+    } else if (clamped === 0 && hasCondition) {
+      await onConditionsChange(conditions.filter((c) => c !== 'exhaustion'));
+    }
   }
 
   async function handleShortRest() {
@@ -443,9 +567,12 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const conMod = abilityModifier(character.abilities.con);
   const hasResources = localResources.length > 0;
 
-  const tabBar = isSpellcaster ? (
+  const availableTabs: Array<'main' | 'inventory' | 'spells'> = isSpellcaster
+    ? ['main', 'inventory', 'spells']
+    : ['main', 'inventory'];
+  const tabBar = (
     <div style={{ display: 'flex', flexShrink: 0, background: '#fafafa', borderBottom: '1px solid #eee' }}>
-      {(['main', 'spells'] as const).map((p) => (
+      {availableTabs.map((p) => (
         <button key={p} onClick={() => setPage(p)} style={{
           flex: 1, padding: '0.5rem 0', border: 'none',
           borderBottom: `2px solid ${page === p ? '#333' : 'transparent'}`,
@@ -454,11 +581,11 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
           cursor: 'pointer', fontSize: '0.82rem',
           color: page === p ? '#333' : '#888',
         }}>
-          {p === 'main' ? 'Stats' : 'Spells'}
+          {p === 'main' ? 'Stats' : p === 'inventory' ? 'Inventory' : 'Spells'}
         </button>
       ))}
     </div>
-  ) : undefined;
+  );
 
   return (
     <SheetOverlay onClose={onClose} extra={tabBar}>
@@ -585,7 +712,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
           {/* Conditions */}
           <Section title={`Conditions${canEditConditions ? '' : ' (view only)'}`}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-              {CONDITIONS.map((cond) => {
+              {CONDITIONS.filter((c) => c !== 'exhaustion').map((cond) => {
                 const active = conditions.includes(cond);
                 return (
                   <button key={cond} onClick={() => toggleCondition(cond)} disabled={!canEditConditions || condSaving}
@@ -604,9 +731,51 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             </div>
           </Section>
 
+          {/* Exhaustion (5e: 0–6 levels with cumulative effects) */}
+          <Section title={`Exhaustion${exhaustion > 0 ? ` — Level ${exhaustion}` : ''}`}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: exhaustion > 0 ? '0.4rem' : 0 }}>
+              {[0, 1, 2, 3, 4, 5, 6].map((lvl) => {
+                const active = lvl <= exhaustion && lvl > 0;
+                const isCurrent = lvl === exhaustion;
+                return (
+                  <button key={lvl} onClick={() => setExhaustionLevel(lvl)} disabled={!canEditConditions}
+                    title={lvl === 0 ? 'No exhaustion' : `Set exhaustion to level ${lvl}`}
+                    style={{
+                      width: 26, height: 26, borderRadius: '50%', padding: 0,
+                      border: `2px solid ${active ? '#7a3a1a' : isCurrent ? '#7a3a1a' : '#ccc'}`,
+                      background: active ? '#7a5a3a' : 'transparent',
+                      color: active ? '#fff' : '#888',
+                      cursor: canEditConditions ? 'pointer' : 'default',
+                      fontSize: '0.75rem', fontWeight: 700,
+                      flexShrink: 0,
+                    }}>{lvl}</button>
+                );
+              })}
+            </div>
+            {exhaustion > 0 && (() => {
+              const effects = [
+                'Disadvantage on ability checks',
+                'Speed halved',
+                'Disadvantage on attack rolls and saving throws',
+                'HP maximum halved',
+                'Speed reduced to 0',
+                'Death',
+              ];
+              return (
+                <ul style={{ margin: 0, padding: '0 0 0 1.1rem', fontSize: '0.78rem', color: '#7a5a3a' }}>
+                  {effects.slice(0, exhaustion).map((e, i) => (
+                    <li key={i} style={{ marginBottom: '0.15rem' }}>
+                      <strong>L{i + 1}:</strong> {e}
+                    </li>
+                  ))}
+                </ul>
+              );
+            })()}
+          </Section>
+
           {/* Combat */}
           <Section title="Combat">
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', textAlign: 'center' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', textAlign: 'center', marginBottom: '0.5rem' }}>
               {[
                 { label: 'AC', value: character.ac },
                 { label: 'Initiative', value: formatModifier(init) },
@@ -618,6 +787,30 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                   <div style={{ fontSize: '0.65rem', color: '#888', marginTop: 2 }}>{label}</div>
                 </div>
               ))}
+            </div>
+            <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
+              {([
+                { key: 'action', label: 'Action', used: actionUsed, set: setActionUsed },
+                { key: 'bonus', label: 'Bonus', used: bonusUsed, set: setBonusUsed },
+                { key: 'reaction', label: 'Reaction', used: reactionUsed, set: setReactionUsed },
+              ] as const).map((c) => (
+                <button key={c.key} onClick={() => c.set(!c.used)}
+                  title={c.used ? `${c.label} used — click to mark available` : `${c.label} available — click to mark used`}
+                  style={{
+                    flex: 1, padding: '0.3rem 0.4rem', fontSize: '0.72rem', fontWeight: 700,
+                    border: `1px solid ${c.used ? '#bbb' : '#3a8'}`,
+                    borderRadius: 4,
+                    background: c.used ? '#eee' : '#e0f5ec',
+                    color: c.used ? '#bbb' : '#287',
+                    cursor: 'pointer',
+                    textDecoration: c.used ? 'line-through' : 'none',
+                  }}>
+                  {c.used ? '✓ ' : '○ '}{c.label}
+                </button>
+              ))}
+              <button onClick={() => { setActionUsed(false); setBonusUsed(false); setReactionUsed(false); }}
+                title="Reset all (start of new turn)"
+                style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', color: '#666' }}>↻</button>
             </div>
           </Section>
 
@@ -677,40 +870,6 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             )}
           </Section>
 
-          {/* Spell Slot Tracker */}
-          {isSpellcaster && Object.keys(character.spell_slots).length > 0 && (
-            <Section title="Spell Slots">
-              <div style={{ display: 'grid', gap: '0.35rem' }}>
-                {Object.entries(character.spell_slots)
-                  .sort(([a], [b]) => Number(a) - Number(b))
-                  .map(([lvl, max]) => {
-                    const used = slotsUsed[lvl] ?? 0;
-                    const available = Math.max(0, max - used);
-                    return (
-                      <div key={lvl} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span style={{ fontSize: '0.68rem', color: '#888', minWidth: 26, textAlign: 'right', fontWeight: 600 }}>{slotLabel(Number(lvl))}</span>
-                        <div style={{ display: 'flex', gap: '0.2rem', flexWrap: 'wrap', flex: 1 }}>
-                          {Array.from({ length: max }, (_, i) => {
-                            const filled = i < available;
-                            return (
-                              <button key={i} onClick={() => handleSlotClick(lvl, filled, max)}
-                                title={filled ? 'Click to spend slot' : 'Click to recover slot'}
-                                style={{
-                                  width: 18, height: 18, borderRadius: '50%', border: '2px solid',
-                                  borderColor: filled ? '#4477cc' : '#ccc',
-                                  background: filled ? '#4477cc' : 'transparent',
-                                  cursor: 'pointer', padding: 0, flexShrink: 0,
-                                }} />
-                            );
-                          })}
-                        </div>
-                        <span style={{ fontSize: '0.68rem', color: '#aaa', minWidth: 28, textAlign: 'right' }}>{available}/{max}</span>
-                      </div>
-                    );
-                  })}
-              </div>
-            </Section>
-          )}
 
           {/* Hit Dice Tracker */}
           <Section title="Hit Dice">
@@ -810,6 +969,54 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             </div>
           </Section>
 
+          {/* Feats — read-only; managed in the character wizard */}
+          {localFeats.length > 0 && (
+            <Section title={`Feats (${localFeats.length})`}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                {localFeats.map((slug) => {
+                  const feat = featDetails[slug];
+                  return (
+                    <details key={slug} style={{ background: '#fafafa', border: '1px solid #eee', borderRadius: 5, padding: '0.4rem 0.6rem' }}>
+                      <summary style={{ fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', color: '#446' }}>
+                        ✦ {feat?.name ?? slug}
+                      </summary>
+                      {feat && (
+                        <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#444', lineHeight: 1.45 }}>
+                          {feat.prerequisite && <div style={{ marginBottom: '0.3rem', fontStyle: 'italic', color: '#888' }}>Prerequisite: {feat.prerequisite}</div>}
+                          {feat.desc && <div style={{ whiteSpace: 'pre-wrap', marginBottom: feat.effects_desc ? '0.4rem' : 0 }}>{feat.desc}</div>}
+                          {feat.effects_desc && feat.effects_desc.length > 0 && (
+                            <ul style={{ margin: 0, paddingLeft: '1.1rem' }}>
+                              {feat.effects_desc.map((e, i) => <li key={i} style={{ marginBottom: '0.2rem' }}>{e}</li>)}
+                            </ul>
+                          )}
+                        </div>
+                      )}
+                    </details>
+                  );
+                })}
+              </div>
+            </Section>
+          )}
+
+          {/* Personality — read-only; edit in the character wizard */}
+          {(localPersonality.traits || localPersonality.ideals || localPersonality.bonds || localPersonality.flaws) && (
+            <Section title="Personality">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {([
+                  { key: 'traits', label: 'Traits' },
+                  { key: 'ideals', label: 'Ideals' },
+                  { key: 'bonds', label: 'Bonds' },
+                  { key: 'flaws', label: 'Flaws' },
+                ] as const).map((f) => localPersonality[f.key] ? (
+                  <div key={f.key}>
+                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#666', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>{f.label}</div>
+                    <div style={{ fontSize: '0.8rem', color: '#444', whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{localPersonality[f.key]}</div>
+                  </div>
+                ) : null)}
+              </div>
+            </Section>
+          )}
+
           {character.notes && (
             <Section title="Notes">
               <p style={{ margin: 0, fontSize: '0.82rem', color: '#555', whiteSpace: 'pre-wrap' }}>{character.notes}</p>
@@ -834,6 +1041,81 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             </div>
           </Section>
         </div>
+      ) : page === 'inventory' ? (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 1rem' }}>
+          <Section title="Currency">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.4rem' }}>
+              {(['pp', 'gp', 'ep', 'sp', 'cp'] as const).map((coin) => {
+                const colors = { pp: '#cad', gp: '#cb4', ep: '#bbb', sp: '#aab', cp: '#a85' };
+                return (
+                  <div key={coin} style={{ background: '#fafafa', border: `1px solid ${colors[coin]}`, borderRadius: 6, padding: '0.35rem 0.25rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.62rem', fontWeight: 700, color: colors[coin], textTransform: 'uppercase', marginBottom: 2 }}>{coin}</div>
+                    <input
+                      type="number" value={localCurrency[coin]} min={0}
+                      onChange={(e) => setCurrencyValue(coin, Number(e.target.value))}
+                      style={{ width: '100%', padding: '0.15rem 0.2rem', border: '1px solid #ccc', borderRadius: 3, fontSize: '0.85rem', textAlign: 'center', fontWeight: 700, boxSizing: 'border-box' }}
+                    />
+                    <div style={{ display: 'flex', gap: 2, marginTop: 3 }}>
+                      <button onClick={() => adjustCurrency(coin, -1)} disabled={localCurrency[coin] === 0}
+                        style={{ flex: 1, padding: '0.1rem', fontSize: '0.7rem', cursor: localCurrency[coin] === 0 ? 'not-allowed' : 'pointer', border: '1px solid #ddd', borderRadius: 2, background: '#fff', color: localCurrency[coin] === 0 ? '#ccc' : '#666' }}>−</button>
+                      <button onClick={() => adjustCurrency(coin, 1)}
+                        style={{ flex: 1, padding: '0.1rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #ddd', borderRadius: 2, background: '#fff', color: '#666' }}>+</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Section>
+
+          <Section title={`Inventory (${localInventory.length})`}>
+            {localInventory.length === 0 ? (
+              <div style={{ color: '#aaa', fontSize: '0.85rem', padding: '0.5rem 0' }}>No items yet.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                {localInventory.map((item) => (
+                  <div key={item.id} style={{ padding: '0.5rem 0.6rem', background: '#fafafa', border: '1px solid #eee', borderRadius: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
+                      </div>
+                      <button onClick={() => adjustItemQty(item.id, -1)}
+                        style={{ width: 22, height: 22, padding: 0, fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3, background: '#fff', flexShrink: 0 }}>−</button>
+                      <span style={{ minWidth: 22, textAlign: 'center', fontWeight: 700, fontSize: '0.85rem' }}>{item.quantity}</span>
+                      <button onClick={() => adjustItemQty(item.id, 1)}
+                        style={{ width: 22, height: 22, padding: 0, fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3, background: '#fff', flexShrink: 0 }}>+</button>
+                      <button onClick={() => removeItem(item.id)}
+                        title="Remove item"
+                        style={{ width: 22, height: 22, padding: 0, fontSize: '0.78rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, background: '#fff', color: 'crimson', flexShrink: 0 }}>✕</button>
+                    </div>
+                    {item.description && (
+                      <div style={{ fontSize: '0.74rem', color: '#777', marginTop: '0.25rem', whiteSpace: 'pre-wrap' }}>{item.description}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+
+          <Section title="Add Item">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                <input value={newItemName} onChange={(e) => setNewItemName(e.target.value)}
+                  placeholder="Item name *"
+                  style={{ flex: 1, padding: '0.35rem 0.5rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem', boxSizing: 'border-box' }} />
+                <input type="number" value={newItemQty} onChange={(e) => setNewItemQty(e.target.value)}
+                  min={1} placeholder="Qty"
+                  style={{ width: 60, padding: '0.35rem 0.5rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem', boxSizing: 'border-box' }} />
+              </div>
+              <textarea value={newItemDesc} onChange={(e) => setNewItemDesc(e.target.value)}
+                rows={2} placeholder="Description (optional)"
+                style={{ padding: '0.35rem 0.5rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.82rem', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
+              <button onClick={addItem} disabled={!newItemName.trim()}
+                style={{ padding: '0.4rem', background: newItemName.trim() ? '#333' : '#ccc', color: '#fff', border: 'none', borderRadius: 4, cursor: newItemName.trim() ? 'pointer' : 'not-allowed', fontSize: '0.85rem', fontWeight: 600 }}>
+                + Add to inventory
+              </button>
+            </div>
+          </Section>
+        </div>
       ) : (
         <SpellsPageContent
           character={character}
@@ -847,6 +1129,8 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
           spellAtk={spellAtk}
           spellDc={spellDc}
           slotsUsed={slotsUsed}
+          spellSlots={character.spell_slots}
+          onSlotClick={handleSlotClick}
           conditions={conditions}
           onConditionsChange={onConditionsChange}
           concentratingOn={concentratingOn}
@@ -886,6 +1170,8 @@ interface SpellsPageProps {
   spellAtk: number;
   spellDc: number;
   slotsUsed: Record<string, number>;
+  spellSlots: Record<string, number>;
+  onSlotClick: (lvl: string, filled: boolean, max: number) => void;
   conditions: string[];
   onConditionsChange: (c: string[]) => Promise<void>;
   concentratingOn: string | null;
@@ -893,7 +1179,7 @@ interface SpellsPageProps {
   rollInChat: (label: string, expr: string) => void;
 }
 
-function SpellsPageContent({ character, config, spellMeta, preparedSlugs, preparedNonCantrips, maxPrepared, onToggle, saving, spellAtk, spellDc, slotsUsed, conditions, onConditionsChange, concentratingOn: _concentratingOn, setConcentratingOn, rollInChat }: SpellsPageProps) {
+function SpellsPageContent({ character, config, spellMeta, preparedSlugs, preparedNonCantrips, maxPrepared, onToggle, saving, spellAtk, spellDc, slotsUsed, spellSlots, onSlotClick, conditions, onConditionsChange, concentratingOn: _concentratingOn, setConcentratingOn, rollInChat }: SpellsPageProps) {
   const [upcastPicker, setUpcastPicker] = useState<string | null>(null);
   const knownSlugs = character.spells_known as string[];
   const isPreparedModel = config.model !== 'known';
@@ -949,12 +1235,40 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
           const slugsAtLevel = [...byLevel[level]].sort((a, b) =>
             (spellMeta[a]?.name ?? a).localeCompare(spellMeta[b]?.name ?? b),
           );
+          const lvlKey = String(level);
+          const maxSlots = level > 0 ? (spellSlots[lvlKey] ?? 0) : 0;
+          const usedSlots = level > 0 ? (slotsUsed[lvlKey] ?? 0) : 0;
+          const availableSlots = Math.max(0, maxSlots - usedSlots);
           return (
-            <div key={level} style={{ marginBottom: '0.75rem' }}>
-              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.35rem', borderBottom: '1px solid #eee', paddingBottom: '0.2rem' }}>
-                {levelLabel(level)}
-              </div>
-              <div style={{ display: 'grid', gap: '0.25rem' }}>
+            <details key={level} open style={{ marginBottom: '0.5rem', borderBottom: '1px solid #eee', paddingBottom: '0.4rem' }}>
+              <summary style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', listStyle: 'none', padding: '0.25rem 0' }}>
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  {levelLabel(level)}
+                </span>
+                {level > 0 && maxSlots > 0 && (
+                  <>
+                    <div style={{ display: 'flex', gap: '0.18rem', alignItems: 'center' }} onClick={(e) => e.preventDefault()}>
+                      {Array.from({ length: maxSlots }, (_, i) => {
+                        const filled = i < availableSlots;
+                        return (
+                          <button key={i}
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onSlotClick(lvlKey, filled, maxSlots); }}
+                            title={filled ? 'Click to spend slot' : 'Click to recover slot'}
+                            style={{
+                              width: 14, height: 14, borderRadius: '50%', border: '2px solid',
+                              borderColor: filled ? '#4477cc' : '#bbb',
+                              background: filled ? '#4477cc' : 'transparent',
+                              cursor: 'pointer', padding: 0, flexShrink: 0,
+                            }} />
+                        );
+                      })}
+                    </div>
+                    <span style={{ fontSize: '0.65rem', color: '#aaa', fontWeight: 600 }}>{availableSlots}/{maxSlots}</span>
+                  </>
+                )}
+                <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: '#bbb' }}>{slugsAtLevel.length}</span>
+              </summary>
+              <div style={{ display: 'grid', gap: '0.25rem', marginTop: '0.35rem' }}>
                 {slugsAtLevel.map((slug) => {
                   const meta = spellMeta[slug];
                   const isCantrip = level === 0;
@@ -1091,7 +1405,7 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                   );
                 })}
               </div>
-            </div>
+            </details>
           );
         })
       )}

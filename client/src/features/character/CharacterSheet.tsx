@@ -359,6 +359,9 @@ export default function CharacterSheet() {
                 title="Cantrips"
                 slugs={(character.spells_known as string[]).filter((s) => spellNames[s]?.level === 0)}
                 spellNames={spellNames}
+                spellAtk={prof + abilityModifier(character.abilities[config.ability])}
+                spellDc={8 + prof + abilityModifier(character.abilities[config.ability])}
+                characterLevel={character.level}
               />
               <SpellList
                 title={config.model === 'known' ? 'Known spells' : config.model === 'spellbook' ? 'Spellbook' : 'Available to prepare'}
@@ -366,6 +369,9 @@ export default function CharacterSheet() {
                 spellNames={spellNames}
                 preparedSet={new Set(character.spells_prepared as string[])}
                 showPreparedMark={config.model !== 'known'}
+                spellAtk={prof + abilityModifier(character.abilities[config.ability])}
+                spellDc={8 + prof + abilityModifier(character.abilities[config.ability])}
+                characterLevel={character.level}
               />
             </Card>
           )}
@@ -373,31 +379,14 @@ export default function CharacterSheet() {
           {(() => {
             const strMod = abilityModifier(character.abilities.str);
             const dexMod = abilityModifier(character.abilities.dex);
-            const spellAtk = config ? prof + abilityModifier(character.abilities[config.ability]) : 0;
-            const spellDc  = config ? 8 + spellAtk : 0;
-
-            // Collect damage spells from known + prepared lists
-            const spellSlugs = Array.from(new Set([
-              ...(character.spells_known as string[]),
-              ...(character.spells_prepared as string[]),
-            ]));
-            const damageSpells = spellSlugs
-              .map((slug) => ({ slug, meta: spellNames[slug] }))
-              .filter(({ meta }) => {
-                if (!meta?.desc) return false;
-                return parseSpellForAttack(meta.desc).mode !== null;
-              });
 
             const hasWeapons = character.weapons?.length > 0;
-            const hasSpells  = damageSpells.length > 0;
-            if (!hasWeapons && !hasSpells) return null;
+            if (!hasWeapons) return null;
 
             return (
               <Card>
                 <SectionTitle>Attacks</SectionTitle>
                 <div style={{ display: 'grid', gap: '0.5rem' }}>
-
-                  {/* ── Weapons ── */}
                   {character.weapons?.map((slug) => {
                     const w = weaponData[slug];
                     if (!w) return <div key={slug} style={{ fontSize: '0.9rem', color: '#aaa' }}>{slug}</div>;
@@ -423,39 +412,6 @@ export default function CharacterSheet() {
                         damageLabel={damageStr}
                         damageType={w.damage_type}
                         extra={w.versatile_dice ? `${w.versatile_dice}${formatModifier(damageMod)} two-handed` : undefined}
-                      />
-                    );
-                  })}
-
-                  {/* ── Damage spells ── */}
-                  {damageSpells.map(({ slug, meta }) => {
-                    const parsed = parseSpellForAttack(meta!.desc!);
-                    const isCantrip = (meta!.level) === 0;
-                    const dice = isCantrip && parsed.damageDice
-                      ? scaleCantripDice(parsed.damageDice, character.level)
-                      : parsed.damageDice;
-
-                    let attackLabel: string;
-                    let subtitle: string;
-                    if (parsed.mode === 'spell_attack') {
-                      attackLabel = formatModifier(spellAtk);
-                      subtitle = `${isCantrip ? 'Cantrip' : `Level ${meta!.level} spell`} · spell attack`;
-                    } else if (parsed.mode === 'save') {
-                      attackLabel = `DC ${spellDc}`;
-                      subtitle = `${isCantrip ? 'Cantrip' : `Level ${meta!.level} spell`} · ${parsed.saveAbility} save`;
-                    } else {
-                      attackLabel = '—';
-                      subtitle = isCantrip ? 'Cantrip' : `Level ${meta!.level} spell`;
-                    }
-
-                    return (
-                      <AttackRow
-                        key={slug}
-                        name={meta!.name}
-                        subtitle={subtitle}
-                        attackLabel={attackLabel}
-                        damageLabel={dice ?? '—'}
-                        damageType={parsed.damageType ?? ''}
                       />
                     );
                   })}
@@ -499,6 +455,38 @@ export default function CharacterSheet() {
               {desc.backstory && (
                 <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem', fontSize: '0.95rem' }}>{desc.backstory}</div>
               )}
+            </Card>
+          )}
+
+          {character.personality && (character.personality.traits || character.personality.ideals || character.personality.bonds || character.personality.flaws) && (
+            <Card>
+              <SectionTitle>Personality</SectionTitle>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem 1.5rem', fontSize: '0.9rem' }}>
+                {character.personality.traits && (
+                  <div>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Traits</div>
+                    <div style={{ whiteSpace: 'pre-wrap', color: '#444' }}>{character.personality.traits}</div>
+                  </div>
+                )}
+                {character.personality.ideals && (
+                  <div>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Ideals</div>
+                    <div style={{ whiteSpace: 'pre-wrap', color: '#444' }}>{character.personality.ideals}</div>
+                  </div>
+                )}
+                {character.personality.bonds && (
+                  <div>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Bonds</div>
+                    <div style={{ whiteSpace: 'pre-wrap', color: '#444' }}>{character.personality.bonds}</div>
+                  </div>
+                )}
+                {character.personality.flaws && (
+                  <div>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Flaws</div>
+                    <div style={{ whiteSpace: 'pre-wrap', color: '#444' }}>{character.personality.flaws}</div>
+                  </div>
+                )}
+              </div>
             </Card>
           )}
 
@@ -548,13 +536,16 @@ function Bit({ label, value }: { label: string; value: string }) {
   return <div><span style={{ color: '#888' }}>{label}:</span> {value}</div>;
 }
 function SpellList({
-  title, slugs, spellNames, preparedSet, showPreparedMark,
+  title, slugs, spellNames, preparedSet, showPreparedMark, spellAtk, spellDc, characterLevel,
 }: {
   title: string;
   slugs: string[];
-  spellNames: Record<string, { name: string; level: number; school?: string }>;
+  spellNames: Record<string, { name: string; level: number; school?: string; desc?: string }>;
   preparedSet?: Set<string>;
   showPreparedMark?: boolean;
+  spellAtk: number;
+  spellDc: number;
+  characterLevel: number;
 }) {
   if (slugs.length === 0) return null;
   const sorted = [...slugs].sort((a, b) => {
@@ -565,17 +556,47 @@ function SpellList({
   });
   return (
     <div style={{ marginTop: '0.5rem' }}>
-      <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#555', marginBottom: '0.25rem' }}>{title}</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.15rem 1rem' }}>
+      <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#555', marginBottom: '0.4rem' }}>{title}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
         {sorted.map((slug) => {
           const meta = spellNames[slug];
+          if (!meta) {
+            return <div key={slug} style={{ fontSize: '0.85rem', color: '#aaa' }}>{slug}</div>;
+          }
           const prepared = preparedSet?.has(slug);
+          const isCantrip = meta.level === 0;
+          const parsed = meta.desc ? parseSpellForAttack(meta.desc) : { mode: null, damageDice: null, damageType: null, saveAbility: null };
+          const dice = isCantrip && parsed.damageDice
+            ? scaleCantripDice(parsed.damageDice, characterLevel)
+            : parsed.damageDice;
+
           return (
-            <div key={slug} style={{ fontSize: '0.9rem' }}>
-              {showPreparedMark && (prepared ? '● ' : '○ ')}
-              {meta ? meta.name : slug}
-              <span style={{ color: '#999', fontSize: '0.8rem' }}>{meta && meta.level > 0 ? ` · L${meta.level}` : ''}</span>
-            </div>
+            <details key={slug} style={{ background: '#fafafa', border: '1px solid #eee', borderRadius: 5, padding: '0.4rem 0.6rem' }}>
+              <summary style={{ fontSize: '0.9rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                {showPreparedMark && <span style={{ color: prepared ? '#2a7' : '#bbb' }}>{prepared ? '●' : '○'}</span>}
+                <span style={{ fontWeight: 600 }}>{meta.name}</span>
+                <span style={{ color: '#999', fontSize: '0.78rem' }}>{isCantrip ? 'Cantrip' : `L${meta.level}`}{meta.school ? ` · ${meta.school}` : ''}</span>
+              </summary>
+              <div style={{ marginTop: '0.5rem', fontSize: '0.82rem', color: '#444', lineHeight: 1.5 }}>
+                {parsed.mode === 'spell_attack' && (
+                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.4rem', padding: '0.3rem 0.5rem', background: '#f0f4ff', borderRadius: 4, fontSize: '0.8rem' }}>
+                    <span><strong>Attack:</strong> {formatModifier(spellAtk)} (1d20{formatModifier(spellAtk)})</span>
+                    {dice && <span><strong>Damage:</strong> {dice}{parsed.damageType ? ` ${parsed.damageType}` : ''}</span>}
+                  </div>
+                )}
+                {parsed.mode === 'save' && (
+                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.4rem', padding: '0.3rem 0.5rem', background: '#fff4e8', borderRadius: 4, fontSize: '0.8rem' }}>
+                    <span><strong>Save:</strong> DC {spellDc}{parsed.saveAbility ? ` ${parsed.saveAbility.toUpperCase()}` : ''}</span>
+                    {dice && <span><strong>Damage:</strong> {dice}{parsed.damageType ? ` ${parsed.damageType}` : ''}</span>}
+                  </div>
+                )}
+                {meta.desc ? (
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{meta.desc}</div>
+                ) : (
+                  <div style={{ color: '#aaa', fontStyle: 'italic' }}>No description available.</div>
+                )}
+              </div>
+            </details>
           );
         })}
       </div>
