@@ -26,24 +26,40 @@ export interface TokenRow {
   controlled_by: string;
   conditions: string;
   hidden: number;
+  effects: string;
   created_at: number;
 }
 
-export interface HydratedToken extends Omit<TokenRow, 'hp_visible' | 'controlled_by' | 'conditions' | 'hidden'> {
+export interface TimedEffect {
+  name: string;
+  rounds: number;
+  indefinite?: boolean;
+}
+
+export interface HydratedToken extends Omit<TokenRow, 'hp_visible' | 'controlled_by' | 'conditions' | 'hidden' | 'effects'> {
   hp_visible: boolean;
   controlled_by: number[];
   conditions: string[];
   hidden: boolean;
+  effects: TimedEffect[];
   monster_slug: string | null;
 }
 
 export function hydrateToken(row: TokenRow): HydratedToken {
+  let effects: TimedEffect[] = [];
+  try {
+    const parsed = JSON.parse(row.effects ?? '[]');
+    if (Array.isArray(parsed)) effects = parsed
+      .filter((e: unknown): e is TimedEffect => !!e && typeof (e as TimedEffect).name === 'string' && typeof (e as TimedEffect).rounds === 'number')
+      .map((e) => ({ name: e.name, rounds: e.rounds, ...(e.indefinite ? { indefinite: true } : {}) }));
+  } catch { /* default empty */ }
   return {
     ...row,
     hp_visible: row.hp_visible === 1,
     controlled_by: JSON.parse(row.controlled_by),
     conditions: JSON.parse(row.conditions),
     hidden: row.hidden === 1,
+    effects,
   };
 }
 
@@ -291,7 +307,7 @@ router.patch('/:id/hp', (req: AuthRequest, res) => {
   res.json({ token_id: id, hp_current: clamped });
 });
 
-const VALID_CONDITIONS = new Set([
+export const VALID_CONDITIONS = new Set([
   'blinded', 'charmed', 'concentration', 'deafened', 'exhaustion', 'frightened', 'grappled',
   'incapacitated', 'invisible', 'paralyzed', 'petrified', 'poisoned',
   'prone', 'restrained', 'stunned', 'unconscious',

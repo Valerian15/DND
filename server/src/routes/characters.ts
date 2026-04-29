@@ -33,6 +33,7 @@ interface CharacterRow {
   currency: string;
   feats: string;
   personality: string;
+  effects: string;
   features: string;
   notes: string;
   description: string;
@@ -60,6 +61,7 @@ function hydrate(row: CharacterRow) {
     currency: JSON.parse(row.currency || '{"pp":0,"gp":0,"ep":0,"sp":0,"cp":0}'),
     feats: JSON.parse(row.feats || '[]'),
     personality: JSON.parse(row.personality || '{"traits":"","ideals":"","bonds":"","flaws":""}'),
+    effects: JSON.parse(row.effects || '[]'),
     features: JSON.parse(row.features),
     description: JSON.parse(row.description),
   };
@@ -138,6 +140,7 @@ const UPDATABLE_JSON = new Set([
   'currency',
   'feats',
   'personality',
+  'effects',
   'features',
   'description',
 ]);

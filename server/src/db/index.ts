@@ -477,6 +477,10 @@ export function initSchema() {
   try { db.exec(`ALTER TABLE characters ADD COLUMN personality TEXT NOT NULL DEFAULT '{"traits":"","ideals":"","bonds":"","flaws":""}'`); } catch { /* exists */ }
   // Exhaustion level (5e: 0–6)
   try { db.exec('ALTER TABLE characters ADD COLUMN exhaustion_level INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  // Active timed effects (Bless, Hunter's Mark, etc.) — stored on tokens (universal for PC/NPC/monster)
+  try { db.exec("ALTER TABLE tokens ADD COLUMN effects TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  // Legacy: previously added character.effects. Kept for compatibility but no longer used.
+  try { db.exec("ALTER TABLE characters ADD COLUMN effects TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
 
   // AOE spell templates on maps
   db.exec(`

@@ -153,12 +153,22 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, isTarge
           <div style={{ height: '100%', width: `${hp * 100}%`, background: hpColor, borderRadius: 3, transition: 'width 0.3s' }} />
         </div>
       )}
-      {/* Condition badges */}
-      {activeConditions.length > 0 && (
+      {/* Condition badges + effect timers */}
+      {(activeConditions.length > 0 || (token.effects?.length ?? 0) > 0) && (
         <div style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', marginTop: token.hp_visible && token.hp_max > 0 ? 14 : 4, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 2, pointerEvents: 'none', zIndex: 21, maxWidth: Math.max(size, 80) }}>
           {activeConditions.map((cond) => (
             <div key={cond} style={{ background: CONDITION_COLORS[cond] ?? '#555', color: '#fff', fontSize: 8, fontWeight: 700, padding: '1px 3px', borderRadius: 2, whiteSpace: 'nowrap', textTransform: 'capitalize' }}>
               {cond}
+            </div>
+          ))}
+          {(token.effects ?? []).map((eff) => (
+            <div key={`eff-${eff.name}`}
+              title={eff.indefinite ? `${eff.name} — active (no timer)` : `${eff.name} — ${eff.rounds} round${eff.rounds === 1 ? '' : 's'} left`}
+              style={{ background: '#446', color: '#fff', fontSize: 8, fontWeight: 700, padding: '1px 3px', borderRadius: 2, whiteSpace: 'nowrap', display: 'inline-flex', gap: 2, alignItems: 'center' }}>
+              {eff.name}
+              {!eff.indefinite && (
+                <span style={{ background: eff.rounds <= 2 ? '#c44' : '#668', padding: '0 2px', borderRadius: 2, fontSize: 7 }}>{eff.rounds}r</span>
+              )}
             </div>
           ))}
         </div>
@@ -2062,39 +2072,50 @@ export default function CampaignSessionPage() {
             canEditHp={panel.canEdit && !!token}
             canEditConditions={isDmOrAdmin && !!token}
             conditions={token?.conditions ?? []}
+            effects={token?.effects ?? []}
+            currentRound={initiative.round}
+            selectedTargetIds={[...targetIds]}
             onConditionsChange={(conditions) => handleTokenConditionsChange(panel.tokenId, conditions)}
+            onTargetConditionsChange={(tid, conditions) => handleTokenConditionsChange(tid, conditions)}
+            getTokenConditions={(tid) => tokens.find((t) => t.id === tid)?.conditions ?? []}
             onClose={() => setPanel(null)}
           />
         );
       })()}
 
       {/* Monster sheet panel (DM only) */}
-      {panel?.type === 'monster' && (
-        <MonsterSheet
-          slug={panel.slug}
-          tokenId={panel.tokenId}
-          hpCurrent={panel.hp}
-          hpMax={panel.hpMax}
-          onHpChange={(hp) => {
-            if (panel.encounterUid) {
-              setEncounterEntries((prev) => prev.map((e) => e.uid === panel.encounterUid ? { ...e, hp_current: hp } : e));
-              setPanel((p) => p?.type === 'monster' ? { ...p, hp } : p);
-            }
-          }}
-          onClose={() => setPanel(null)}
-        />
-      )}
+      {panel?.type === 'monster' && (() => {
+        const tok = panel.tokenId !== undefined ? tokens.find((t) => t.id === panel.tokenId) : undefined;
+        return (
+          <MonsterSheet
+            slug={panel.slug}
+            tokenId={panel.tokenId}
+            hpCurrent={panel.hp}
+            hpMax={panel.hpMax}
+            effects={tok?.effects ?? []}
+            onHpChange={(hp) => {
+              if (panel.encounterUid) {
+                setEncounterEntries((prev) => prev.map((e) => e.uid === panel.encounterUid ? { ...e, hp_current: hp } : e));
+                setPanel((p) => p?.type === 'monster' ? { ...p, hp } : p);
+              }
+            }}
+            onClose={() => setPanel(null)}
+          />
+        );
+      })()}
 
       {/* Campaign NPC sheet panel (DM only) */}
       {panel?.type === 'npc' && (() => {
         const npc = npcs.find((n) => n.id === panel.npcId);
         if (!npc) return null;
+        const tok = panel.tokenId !== undefined ? tokens.find((t) => t.id === panel.tokenId) : undefined;
         return (
           <NpcSheet
             npc={npc}
             tokenId={panel.tokenId}
             hpCurrent={panel.hp}
             hpMax={panel.hpMax}
+            effects={tok?.effects ?? []}
             onHpChange={(hp) => setPanel((p) => p?.type === 'npc' ? { ...p, hp } : p)}
             onClose={() => setPanel(null)}
           />

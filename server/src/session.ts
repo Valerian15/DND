@@ -2,7 +2,7 @@ import type { Server, Socket } from 'socket.io';
 import { verifyToken, type AuthUser } from './auth/index.js';
 import { db } from './db/index.js';
 import { broadcastFiltered } from './io.js';
-import { canUserSeeToken, hydrateToken, broadcastFogTokenChanges, type TokenRow } from './routes/tokens.js';
+import { canUserSeeToken, hydrateToken, broadcastFogTokenChanges, VALID_CONDITIONS, type TokenRow } from './routes/tokens.js';
 import { computeAndSaveFog, getVisibleSet } from './vision.js';
 
 interface OnlineUser {
@@ -79,6 +79,7 @@ interface ServerToClientEvents {
   'token:deleted': (data: { token_id: number }) => void;
   'token:hp_updated': (data: { token_id: number; hp_current: number }) => void;
   'token:conditions_updated': (data: { token_id: number; conditions: string[] }) => void;
+  'token:effects_updated': (data: { token_id: number; effects: { name: string; rounds: number; indefinite?: boolean }[] }) => void;
   'chat:message': (msg: ChatMessageOut) => void;
   'initiative:updated': (state: InitiativeStateOut) => void;
 }
@@ -94,6 +95,10 @@ interface ClientToServerEvents {
   'initiative:clear': () => void;
   'initiative:next_turn': () => void;
   'initiative:end_combat': () => void;
+  'token:effect_apply': (data: { token_id: number; name: string; rounds: number; indefinite?: boolean }) => void;
+  'token:effect_remove': (data: { token_id: number; name: string }) => void;
+  'token:effect_adjust': (data: { token_id: number; name: string; delta: number }) => void;
+  'token:conditions_set': (data: { token_id: number; conditions: string[] }) => void;
 }
 
 interface SocketData {
@@ -471,7 +476,31 @@ export function setupSession(io: AppServer) {
       const idx = state.current_id !== null ? state.entries.findIndex((e) => e.id === state.current_id) : -1;
       const nextIdx = (idx + 1) % state.entries.length;
       const nextRound = idx === -1 || nextIdx === 0 ? Math.max(1, state.round) + (nextIdx === 0 && idx !== -1 ? 1 : 0) : state.round;
+      const roundIncremented = (nextRound > state.round) && state.round > 0;
       setInitiativeTurn(campaign_id, state.entries[nextIdx].id, nextRound || 1);
+
+      // Decrement effect timers on every token in this campaign whose round just advanced
+      if (roundIncremented) {
+        const tokenRows = db.prepare(
+          'SELECT t.id, t.effects FROM tokens t JOIN maps m ON m.id = t.map_id WHERE m.campaign_id = ?'
+        ).all(campaign_id) as { id: number; effects: string }[];
+        const updateStmt = db.prepare('UPDATE tokens SET effects = ? WHERE id = ?');
+        for (const tok of tokenRows) {
+          let arr: { name: string; rounds: number; indefinite?: boolean }[];
+          try { arr = JSON.parse(tok.effects ?? '[]'); }
+          catch { continue; }
+          if (!Array.isArray(arr) || arr.length === 0) continue;
+          // Indefinite effects are unchanged; timed ones decrement and drop at 0.
+          const next = arr
+            .map((e) => e.indefinite ? e : { ...e, rounds: e.rounds - 1 })
+            .filter((e) => e.indefinite || e.rounds > 0);
+          if (next.length !== arr.length || next.some((e, i) => e.rounds !== arr[i].rounds)) {
+            updateStmt.run(JSON.stringify(next), tok.id);
+            io.to(`campaign:${campaign_id}`).emit('token:effects_updated', { token_id: tok.id, effects: next });
+          }
+        }
+      }
+
       io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiativeState(campaign_id));
     });
 
@@ -482,6 +511,62 @@ export function setupSession(io: AppServer) {
 
       setInitiativeTurn(campaign_id, null, 0);
       io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiativeState(campaign_id));
+    });
+
+    function tokenIsInCampaign(tokenId: number, cid: number): boolean {
+      const row = db.prepare(
+        'SELECT 1 FROM tokens t JOIN maps m ON m.id = t.map_id WHERE t.id = ? AND m.campaign_id = ?'
+      ).get(tokenId, cid);
+      return !!row;
+    }
+
+    function applyEffectMutation(tokenId: number, mutate: (arr: { name: string; rounds: number; indefinite?: boolean }[]) => { name: string; rounds: number; indefinite?: boolean }[]) {
+      const cid = socket.data.campaign_id;
+      if (cid == null) return;
+      if (!tokenIsInCampaign(tokenId, cid)) return;
+      const row = db.prepare('SELECT effects FROM tokens WHERE id = ?').get(tokenId) as { effects: string } | undefined;
+      if (!row) return;
+      let arr: { name: string; rounds: number; indefinite?: boolean }[] = [];
+      try {
+        const parsed = JSON.parse(row.effects ?? '[]');
+        if (Array.isArray(parsed)) arr = parsed.filter((e: unknown): e is { name: string; rounds: number; indefinite?: boolean } => !!e && typeof (e as { name: string }).name === 'string' && typeof (e as { rounds: number }).rounds === 'number');
+      } catch { /* default empty */ }
+      const next = mutate(arr).filter((e) => e.indefinite || e.rounds > 0).slice(0, 32);
+      db.prepare('UPDATE tokens SET effects = ? WHERE id = ?').run(JSON.stringify(next), tokenId);
+      io.to(`campaign:${cid}`).emit('token:effects_updated', { token_id: tokenId, effects: next });
+    }
+
+    socket.on('token:effect_apply', ({ token_id, name, rounds, indefinite }) => {
+      if (typeof name !== 'string' || !name.trim()) return;
+      if (!indefinite && (!Number.isFinite(rounds) || rounds <= 0)) return;
+      const trimmed = name.trim().slice(0, 50);
+      const r = indefinite ? 1 : Math.min(600, Math.floor(rounds));
+      applyEffectMutation(token_id, (arr) => {
+        const without = arr.filter((e) => e.name !== trimmed);
+        return [...without, indefinite ? { name: trimmed, rounds: r, indefinite: true } : { name: trimmed, rounds: r }];
+      });
+    });
+
+    socket.on('token:effect_remove', ({ token_id, name }) => {
+      if (typeof name !== 'string') return;
+      applyEffectMutation(token_id, (arr) => arr.filter((e) => e.name !== name));
+    });
+
+    socket.on('token:effect_adjust', ({ token_id, name, delta }) => {
+      if (typeof name !== 'string' || !Number.isFinite(delta)) return;
+      const d = Math.floor(delta);
+      applyEffectMutation(token_id, (arr) => arr.map((e) => e.name === name ? { ...e, rounds: e.rounds + d } : e));
+    });
+
+    socket.on('token:conditions_set', ({ token_id, conditions }) => {
+      const cid = socket.data.campaign_id;
+      if (cid == null) return;
+      if (!Array.isArray(conditions)) return;
+      if (!tokenIsInCampaign(token_id, cid)) return;
+      const filtered = (conditions as unknown[]).filter((c): c is string => typeof c === 'string' && VALID_CONDITIONS.has(c));
+      const json = JSON.stringify(filtered);
+      db.prepare('UPDATE tokens SET conditions = ? WHERE id = ?').run(json, token_id);
+      io.to(`campaign:${cid}`).emit('token:conditions_updated', { token_id, conditions: filtered });
     });
 
     socket.on('disconnect', () => {

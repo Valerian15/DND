@@ -9,6 +9,7 @@ interface Props {
   tokenId?: number;
   hpCurrent: number;
   hpMax: number;
+  effects?: { name: string; rounds: number }[];
   onHpChange?: (hp: number) => void;
   onClose: () => void;
 }
@@ -43,9 +44,20 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, onHpChange, onClose }: Props) {
+export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, effects = [], onHpChange, onClose }: Props) {
   const [hp, setHp] = useState(hpCurrent);
   const [saving, setSaving] = useState(false);
+  const [newEffectName, setNewEffectName] = useState('');
+  const [newEffectRounds, setNewEffectRounds] = useState('10');
+
+  function addEffect() {
+    if (tokenId === undefined) return;
+    const name = newEffectName.trim();
+    const rounds = Math.max(1, Number(newEffectRounds) || 0);
+    if (!name || rounds < 1) return;
+    socket.emit('token:effect_apply', { token_id: tokenId, name, rounds });
+    setNewEffectName(''); setNewEffectRounds('10');
+  }
 
   function rollInChat(label: string, expression: string) {
     socket.emit('chat:send', { body: `/roll ${expression}`, label });
@@ -109,6 +121,51 @@ export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, onHpChange, onClose }
             ))}
           </div>
         </div>
+
+        {/* Active timed effects */}
+        {tokenId !== undefined && (
+          <div style={{ marginBottom: '0.85rem' }}>
+            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#8b0000', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' }}>
+              Active Effects{effects.length > 0 ? ` (${effects.length})` : ''}
+            </div>
+            {effects.length === 0 ? (
+              <div style={{ fontSize: '0.75rem', color: '#aaa', fontStyle: 'italic', marginBottom: '0.4rem' }}>None active.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '0.4rem' }}>
+                {effects.map((eff) => (
+                  <div key={eff.name} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.45rem', background: '#f5e8e8', border: '1px solid #e8c8c8', borderRadius: 4 }}>
+                    <span style={{ flex: 1, fontSize: '0.78rem', fontWeight: 600, color: '#6a2222', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{eff.name}</span>
+                    {eff.indefinite ? (
+                      <span title="No round timer" style={{ minWidth: 30, textAlign: 'center', fontWeight: 700, fontSize: '0.72rem', color: '#888', fontStyle: 'italic' }}>active</span>
+                    ) : (
+                      <>
+                        <button onClick={() => socket.emit('token:effect_adjust', { token_id: tokenId, name: eff.name, delta: -1 })}
+                          style={{ width: 20, height: 20, padding: 0, fontSize: '0.78rem', cursor: 'pointer', border: '1px solid #c88', borderRadius: 3, background: '#fff' }}>−</button>
+                        <span style={{ minWidth: 30, textAlign: 'center', fontWeight: 700, fontSize: '0.75rem', color: eff.rounds <= 2 ? '#c44' : '#6a2222' }}>{eff.rounds}r</span>
+                        <button onClick={() => socket.emit('token:effect_adjust', { token_id: tokenId, name: eff.name, delta: 1 })}
+                          style={{ width: 20, height: 20, padding: 0, fontSize: '0.78rem', cursor: 'pointer', border: '1px solid #c88', borderRadius: 3, background: '#fff' }}>+</button>
+                      </>
+                    )}
+                    <button onClick={() => socket.emit('token:effect_remove', { token_id: tokenId, name: eff.name })}
+                      style={{ width: 20, height: 20, padding: 0, fontSize: '0.72rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, background: '#fff', color: 'crimson' }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '0.3rem' }}>
+              <input value={newEffectName} onChange={(e) => setNewEffectName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addEffect(); }}
+                placeholder="Effect name (e.g. Restrained, Hex)"
+                style={{ flex: 1, padding: '0.25rem 0.4rem', border: '1px solid #c88', borderRadius: 3, fontSize: '0.75rem', boxSizing: 'border-box', background: '#fff8f8' }} />
+              <input type="number" value={newEffectRounds} onChange={(e) => setNewEffectRounds(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addEffect(); }}
+                min={1} placeholder="r"
+                style={{ width: 44, padding: '0.25rem 0.3rem', border: '1px solid #c88', borderRadius: 3, fontSize: '0.75rem', boxSizing: 'border-box', textAlign: 'center', background: '#fff8f8' }} />
+              <button onClick={addEffect} disabled={!newEffectName.trim()}
+                style={{ padding: '0.25rem 0.55rem', background: newEffectName.trim() ? '#8b0000' : '#ccc', color: '#fff', border: 'none', borderRadius: 3, cursor: newEffectName.trim() ? 'pointer' : 'not-allowed', fontSize: '0.78rem', fontWeight: 700 }}>+</button>
+            </div>
+          </div>
+        )}
 
         <hr style={{ border: 'none', borderTop: '2px solid #8b0000', margin: '0 0 0.75rem' }} />
 

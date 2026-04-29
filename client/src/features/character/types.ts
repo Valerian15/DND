@@ -27,6 +27,11 @@ export interface ClassResource {
   reset: 'long' | 'short';
 }
 
+export interface TimedEffect {
+  name: string;
+  rounds: number;
+}
+
 export interface Character {
   id: number;
   owner_id: number;
@@ -63,6 +68,7 @@ export interface Character {
   death_saves_failure: number;
   inspiration: number;
   exhaustion_level: number;
+  effects: TimedEffect[];
   created_at: number;
   updated_at: number;
 }

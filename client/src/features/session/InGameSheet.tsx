@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getCharacter, getLibraryItem, updateCharacter } from '../character/api';
 import { abilityModifier, formatModifier } from '../character/pointBuy';
 import { proficiencyBonus, initiative, passivePerception } from '../character/rules';
@@ -6,7 +6,8 @@ import { getCasterConfig, preparedCount } from '../character/casters';
 import type { CasterConfig } from '../character/casters';
 import { SKILLS } from '../character/skills';
 import { ABILITY_ORDER, ABILITY_NAMES } from '../character/types';
-import type { Character, ClassResource } from '../character/types';
+import type { Character, ClassResource, TimedEffect } from '../character/types';
+import { parseSpellDurationRounds, getSpellConditions } from './spellEffects';
 import { isWeaponProficient } from '../character/weaponProficiency';
 import { parseSpellForAttack, scaleCantripDice } from '../character/attackUtils';
 import { updateTokenHp } from './tokenApi';
@@ -31,6 +32,7 @@ interface SpellMeta {
   desc?: string;
   higher_level?: string;
   concentration?: boolean;
+  duration?: string;
 }
 
 interface InventoryItem {
@@ -69,7 +71,12 @@ interface Props {
   canEditHp: boolean;
   canEditConditions: boolean;
   conditions: string[];
+  effects: { name: string; rounds: number }[];
+  currentRound: number;
+  selectedTargetIds: number[];
   onConditionsChange: (conditions: string[]) => Promise<void>;
+  onTargetConditionsChange?: (tokenId: number, conditions: string[]) => void;
+  getTokenConditions?: (tokenId: number) => string[];
   onClose: () => void;
 }
 
@@ -92,7 +99,7 @@ function buildCastDice(baseDice: string, hl: string | undefined, baseLevel: numb
   return baseDice;
 }
 
-export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions, conditions, onConditionsChange, onClose }: Props) {
+export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions, conditions, effects, currentRound, selectedTargetIds, onConditionsChange, onTargetConditionsChange, getTokenConditions, onClose }: Props) {
   const [character, setCharacter] = useState<Character | null>(null);
   const [loading, setLoading] = useState(true);
   const [hpCurrent, setHpCurrent] = useState(0);
@@ -125,6 +132,8 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const [deathSavesFailure, setDeathSavesFailure] = useState(0);
   const [inspiration, setInspiration] = useState(0);
   const [exhaustion, setExhaustion] = useState(0);
+  const [newEffectName, setNewEffectName] = useState('');
+  const [newEffectRounds, setNewEffectRounds] = useState('10');
 
   useEffect(() => {
     getCharacter(characterId)
@@ -222,7 +231,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             const isConc = typeof conc === 'boolean' ? conc
               : typeof conc === 'string' ? (conc !== '' && conc !== 'no')
               : !!(r.data?.duration?.toLowerCase().includes('concentration'));
-            return { slug, name: r.name, level: r.level, desc: r.data?.desc, higher_level: r.data?.higher_level, concentration: isConc };
+            return { slug, name: r.name, level: r.level, desc: r.data?.desc, higher_level: r.data?.higher_level, concentration: isConc, duration: r.data?.duration };
           })
           .catch(() => null),
       ),
@@ -480,6 +489,59 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     const next = inspiration ? 0 : 1;
     setInspiration(next);
     try { await updateCharacter(character.id, { inspiration: next }); } catch { setInspiration(inspiration); }
+  }
+
+  function addEffectToSelf() {
+    const name = newEffectName.trim();
+    const rounds = Math.max(1, Number(newEffectRounds) || 0);
+    if (!name || rounds < 1) return;
+    setNewEffectName(''); setNewEffectRounds('10');
+    socket.emit('token:effect_apply', { token_id: tokenId, name, rounds });
+  }
+
+  // Auto-apply timed effect + curated conditions + concentration when a spell is cast.
+  // Timer effects skipped outside combat; concentration & curated conditions still applied.
+  function autoApplySpellEffects(slug: string, meta: SpellMeta) {
+    const rounds = parseSpellDurationRounds(meta.duration);
+    const conds = getSpellConditions(slug);
+    const isConcentration = !!meta.concentration;
+
+    // Recipients: selected targets if any, otherwise just the caster (self-cast).
+    // The caster only gets the effect if they explicitly target themselves.
+    const recipientIds = selectedTargetIds.length > 0 ? selectedTargetIds : [tokenId];
+    const casterIsRecipient = recipientIds.includes(tokenId);
+
+    // 1. Effect badge on each recipient: timed during combat, indefinite outside it
+    if (rounds != null) {
+      const inCombat = currentRound > 0;
+      for (const id of recipientIds) {
+        if (inCombat) {
+          socket.emit('token:effect_apply', { token_id: id, name: meta.name, rounds });
+        } else {
+          socket.emit('token:effect_apply', { token_id: id, name: meta.name, rounds: 1, indefinite: true });
+        }
+      }
+    }
+
+    // 2. Caster's conditions: add 'concentration' (if applicable) + curated (if caster is recipient)
+    const casterAdditions: string[] = [];
+    if (isConcentration && !conditions.includes('concentration')) casterAdditions.push('concentration');
+    if (casterIsRecipient && conds.length > 0) casterAdditions.push(...conds);
+    if (casterAdditions.length > 0) {
+      const merged = Array.from(new Set([...conditions, ...casterAdditions]));
+      onConditionsChange(merged).catch(() => { /* ignore */ });
+    }
+
+    // 3. Curated conditions on OTHER targets (caster handled above) — uses socket
+    //    so that any campaign member can apply effects to enemies they don't own.
+    if (conds.length > 0 && getTokenConditions) {
+      for (const id of recipientIds) {
+        if (id === tokenId) continue;
+        const existing = getTokenConditions(id);
+        const merged = Array.from(new Set([...existing, ...conds]));
+        socket.emit('token:conditions_set', { token_id: id, conditions: merged });
+      }
+    }
   }
 
   async function setExhaustionLevel(level: number) {
@@ -771,6 +833,47 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                 </ul>
               );
             })()}
+          </Section>
+
+          {/* Active timed effects (Bless, Hunter's Mark, etc.) */}
+          <Section title={`Active Effects${effects.length > 0 ? ` (${effects.length})` : ''}`}>
+            {effects.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '0.4rem' }}>
+                {effects.map((eff, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0.5rem', background: '#eef0f5', border: '1px solid #d8dde6', borderRadius: 5 }}>
+                    <span style={{ flex: 1, fontSize: '0.85rem', fontWeight: 600, color: '#334', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{eff.name}</span>
+                    {eff.indefinite ? (
+                      <span title="No round timer (cast outside combat)" style={{ minWidth: 38, textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: '#888', fontStyle: 'italic' }}>active</span>
+                    ) : (
+                      <>
+                        <button onClick={() => socket.emit('token:effect_adjust', { token_id: tokenId, name: eff.name, delta: -1 })} title="Decrease rounds (or remove)"
+                          style={{ width: 22, height: 22, padding: 0, fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3, background: '#fff', flexShrink: 0 }}>−</button>
+                        <span title="Rounds remaining" style={{ minWidth: 38, textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: eff.rounds <= 2 ? '#c44' : '#446' }}>{eff.rounds}r</span>
+                        <button onClick={() => socket.emit('token:effect_adjust', { token_id: tokenId, name: eff.name, delta: 1 })} title="Add a round"
+                          style={{ width: 22, height: 22, padding: 0, fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3, background: '#fff', flexShrink: 0 }}>+</button>
+                      </>
+                    )}
+                    <button onClick={() => socket.emit('token:effect_remove', { token_id: tokenId, name: eff.name })} title="Remove effect"
+                      style={{ width: 22, height: 22, padding: 0, fontSize: '0.78rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, background: '#fff', color: 'crimson', flexShrink: 0 }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '0.35rem' }}>
+              <input value={newEffectName} onChange={(e) => setNewEffectName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addEffectToSelf(); }}
+                placeholder="Effect name (e.g. Bless)"
+                style={{ flex: 1, padding: '0.3rem 0.45rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.8rem', boxSizing: 'border-box' }} />
+              <input type="number" value={newEffectRounds} onChange={(e) => setNewEffectRounds(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addEffectToSelf(); }}
+                min={1} placeholder="r"
+                style={{ width: 54, padding: '0.3rem 0.4rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.8rem', boxSizing: 'border-box', textAlign: 'center' }} />
+              <button onClick={addEffectToSelf} disabled={!newEffectName.trim()}
+                style={{ padding: '0.3rem 0.55rem', background: newEffectName.trim() ? '#446' : '#ccc', color: '#fff', border: 'none', borderRadius: 4, cursor: newEffectName.trim() ? 'pointer' : 'not-allowed', fontSize: '0.8rem', fontWeight: 600 }}>+</button>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#999', marginTop: '0.35rem' }}>
+              Auto-decrements when initiative round advances during combat. 10 rounds = 1 minute.
+            </div>
           </Section>
 
           {/* Combat */}
@@ -1136,6 +1239,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
           concentratingOn={concentratingOn}
           setConcentratingOn={setConcentratingOn}
           rollInChat={rollInChat}
+          autoApplySpellEffects={autoApplySpellEffects}
         />
       )}
     </SheetOverlay>
@@ -1177,9 +1281,10 @@ interface SpellsPageProps {
   concentratingOn: string | null;
   setConcentratingOn: (s: string | null) => void;
   rollInChat: (label: string, expr: string) => void;
+  autoApplySpellEffects: (slug: string, meta: SpellMeta) => void;
 }
 
-function SpellsPageContent({ character, config, spellMeta, preparedSlugs, preparedNonCantrips, maxPrepared, onToggle, saving, spellAtk, spellDc, slotsUsed, spellSlots, onSlotClick, conditions, onConditionsChange, concentratingOn: _concentratingOn, setConcentratingOn, rollInChat }: SpellsPageProps) {
+function SpellsPageContent({ character, config, spellMeta, preparedSlugs, preparedNonCantrips, maxPrepared, onToggle, saving, spellAtk, spellDc, slotsUsed, spellSlots, onSlotClick, conditions, onConditionsChange, concentratingOn: _concentratingOn, setConcentratingOn, rollInChat, autoApplySpellEffects }: SpellsPageProps) {
   const [upcastPicker, setUpcastPicker] = useState<string | null>(null);
   const knownSlugs = character.spells_known as string[];
   const isPreparedModel = config.model !== 'known';
@@ -1301,12 +1406,10 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                     if (meta?.concentration) {
                       if (conditions.includes('concentration') && _concentratingOn) {
                         socket.emit('chat:send', { body: `/action ${character.name} drops concentration on ${_concentratingOn}, now concentrating on ${meta.name}.` });
-                        setConcentratingOn(meta.name);
-                      } else if (!conditions.includes('concentration')) {
-                        setConcentratingOn(meta.name);
-                        try { await onConditionsChange([...conditions, 'concentration']); } catch { /* ignore */ }
                       }
+                      setConcentratingOn(meta.name);
                     }
+                    autoApplySpellEffects(slug, meta!);
                     setUpcastPicker(null);
                   };
 
@@ -1316,12 +1419,10 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                     if (meta?.concentration) {
                       if (conditions.includes('concentration') && _concentratingOn) {
                         socket.emit('chat:send', { body: `/action ${character.name} drops concentration on ${_concentratingOn}, now concentrating on ${meta.name}.` });
-                        setConcentratingOn(meta.name);
-                      } else if (!conditions.includes('concentration')) {
-                        setConcentratingOn(meta.name);
-                        try { await onConditionsChange([...conditions, 'concentration']); } catch { /* ignore */ }
                       }
+                      setConcentratingOn(meta.name);
                     }
+                    autoApplySpellEffects(slug, meta!);
                     setUpcastPicker(null);
                   };
 

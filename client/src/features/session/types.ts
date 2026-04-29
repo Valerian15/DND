@@ -11,6 +11,12 @@ export interface MapData {
   created_at: number;
 }
 
+export interface TokenEffect {
+  name: string;
+  rounds: number;
+  indefinite?: boolean;
+}
+
 export interface TokenData {
   id: number;
   map_id: number;
@@ -29,6 +35,7 @@ export interface TokenData {
   controlled_by: number[];
   conditions: string[];
   hidden: boolean;
+  effects: TokenEffect[];
   monster_slug: string | null;
   created_at: number;
 }

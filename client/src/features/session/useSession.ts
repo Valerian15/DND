@@ -117,6 +117,12 @@ export function useSession(campaignId: number) {
       );
     }
 
+    function onTokenEffectsUpdated(data: { token_id: number; effects: { name: string; rounds: number }[] }) {
+      setTokens((prev) =>
+        prev.map((t) => t.id === data.token_id ? { ...t, effects: data.effects } : t)
+      );
+    }
+
     function onChatMessage(msg: ChatMessage) {
       setMessages((prev) => [...prev, msg]);
     }
@@ -181,6 +187,7 @@ export function useSession(campaignId: number) {
     socket.on('token:hp_updated', onTokenHpUpdated);
     socket.on('token:conditions_updated', onTokenConditionsUpdated);
     socket.on('token:hidden_updated', onTokenHiddenUpdated);
+    socket.on('token:effects_updated', onTokenEffectsUpdated);
     socket.on('chat:message', onChatMessage);
     socket.on('initiative:updated', onInitiativeUpdated);
     socket.on('wall:created', onWallCreated);
@@ -209,6 +216,7 @@ export function useSession(campaignId: number) {
       socket.off('token:hp_updated', onTokenHpUpdated);
       socket.off('token:conditions_updated', onTokenConditionsUpdated);
       socket.off('token:hidden_updated', onTokenHiddenUpdated);
+      socket.off('token:effects_updated', onTokenEffectsUpdated);
       socket.off('chat:message', onChatMessage);
       socket.off('initiative:updated', onInitiativeUpdated);
       socket.off('wall:created', onWallCreated);
