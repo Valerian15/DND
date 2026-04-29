@@ -42,6 +42,7 @@ import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, update
 import { createWall, deleteWall, clearWalls } from '../features/session/wallApi';
 import { createTemplate, deleteTemplate, clearTemplates } from '../features/session/templateApi';
 import { createDrawing, deleteDrawing, clearDrawings } from '../features/session/drawingApi';
+import { crToXp, partyThresholds, encounterMultiplier, difficultyOf, DIFFICULTY_COLOR } from '../features/session/encounterMath';
 import { listMapFolders, createMapFolder, renameMapFolder, deleteMapFolder } from '../features/session/mapFolderApi';
 import { listNotes, createNote, updateNote, deleteNote } from '../features/session/campaignNotesApi';
 import type { CampaignNote } from '../features/session/campaignNotesApi';
@@ -1128,6 +1129,57 @@ export default function CampaignSessionPage() {
                 style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', color: '#333', fontSize: '0.78rem' }}>
                 ⚔ Initiative
               </button>
+              <select
+                value=""
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) return;
+                  const [kind, key] = v.split(':');
+                  if (kind === 'skill' || kind === 'save' || kind === 'ability') {
+                    socket.emit('group:roll', { kind, key });
+                  }
+                  e.target.value = '';
+                }}
+                title="Roll a check or save for every PC at once"
+                style={{ padding: '0.25rem 0.4rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', color: '#333', fontSize: '0.78rem' }}>
+                <option value="">🎲 Group Roll…</option>
+                <optgroup label="Saving Throws">
+                  <option value="save:str">STR Save</option>
+                  <option value="save:dex">DEX Save</option>
+                  <option value="save:con">CON Save</option>
+                  <option value="save:int">INT Save</option>
+                  <option value="save:wis">WIS Save</option>
+                  <option value="save:cha">CHA Save</option>
+                </optgroup>
+                <optgroup label="Skill Checks">
+                  <option value="skill:acrobatics">Acrobatics (DEX)</option>
+                  <option value="skill:animal-handling">Animal Handling (WIS)</option>
+                  <option value="skill:arcana">Arcana (INT)</option>
+                  <option value="skill:athletics">Athletics (STR)</option>
+                  <option value="skill:deception">Deception (CHA)</option>
+                  <option value="skill:history">History (INT)</option>
+                  <option value="skill:insight">Insight (WIS)</option>
+                  <option value="skill:intimidation">Intimidation (CHA)</option>
+                  <option value="skill:investigation">Investigation (INT)</option>
+                  <option value="skill:medicine">Medicine (WIS)</option>
+                  <option value="skill:nature">Nature (INT)</option>
+                  <option value="skill:perception">Perception (WIS)</option>
+                  <option value="skill:performance">Performance (CHA)</option>
+                  <option value="skill:persuasion">Persuasion (CHA)</option>
+                  <option value="skill:religion">Religion (INT)</option>
+                  <option value="skill:sleight-of-hand">Sleight of Hand (DEX)</option>
+                  <option value="skill:stealth">Stealth (DEX)</option>
+                  <option value="skill:survival">Survival (WIS)</option>
+                </optgroup>
+                <optgroup label="Ability Checks (no proficiency)">
+                  <option value="ability:str">STR</option>
+                  <option value="ability:dex">DEX</option>
+                  <option value="ability:con">CON</option>
+                  <option value="ability:int">INT</option>
+                  <option value="ability:wis">WIS</option>
+                  <option value="ability:cha">CHA</option>
+                </optgroup>
+              </select>
               {activeMap && (
                 <button onClick={() => setWallMode((w) => !w)}
                   title={wallMode ? 'Exit wall editor' : 'Enter wall editor'}
@@ -1148,7 +1200,7 @@ export default function CampaignSessionPage() {
                   🌫 {activeMap.fog_enabled ? 'Fog ON' : 'Fog'}
                 </button>
               )}
-              {activeMap?.fog_enabled && (
+              {!!activeMap?.fog_enabled && (
                 <button onClick={() => { if (confirm('Reset fog? All explored cells will be cleared.')) resetFog(activeMap.id).catch((e: Error) => setError(e.message)); }}
                   style={{ padding: '0.25rem 0.5rem', cursor: 'pointer', border: '1px solid #cce', borderRadius: 4, background: '#fff', color: '#448', fontSize: '0.75rem' }} title="Clear all explored fog">
                   Reset fog
@@ -1329,12 +1381,42 @@ export default function CampaignSessionPage() {
               return (
                 <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
                   {/* Encounter tracker */}
-                  {encounterEntries.length > 0 && (
+                  {encounterEntries.length > 0 && (() => {
+                    const partyLevels = (campaign.members ?? []).map((m) => m.level).filter((l) => l > 0);
+                    const totalXp = encounterEntries.reduce((sum, e) => sum + crToXp(e.cr), 0);
+                    const mult = encounterMultiplier(encounterEntries.length);
+                    const adjXp = Math.round(totalXp * mult);
+                    const thresholds = partyThresholds(partyLevels);
+                    const difficulty = partyLevels.length > 0 && totalXp > 0 ? difficultyOf(adjXp, thresholds) : null;
+                    const diffColor = difficulty ? DIFFICULTY_COLOR[difficulty] : '#888';
+                    return (
                     <div style={{ borderBottom: '1px solid #e0e0e0', background: '#fafafa' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.45rem 0.75rem', borderBottom: '1px solid #eee' }}>
                         <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em' }}>⚔ Encounter ({encounterEntries.length})</span>
                         <button onClick={() => setEncounterEntries([])} style={{ fontSize: '0.68rem', color: '#a44', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Clear all</button>
                       </div>
+                      {totalXp > 0 && (
+                        <div style={{ padding: '0.4rem 0.75rem', borderBottom: '1px solid #eee', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}
+                          title={`${totalXp} raw XP × ${mult} group multiplier = ${adjXp} adjusted XP`}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontSize: '0.7rem', color: '#666' }}>
+                              <strong style={{ color: '#333' }}>{adjXp}</strong> XP
+                              <span style={{ color: '#999' }}> ({totalXp} × {mult})</span>
+                            </span>
+                            {difficulty && (
+                              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#fff', background: diffColor, padding: '0.05rem 0.4rem', borderRadius: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                {difficulty}
+                              </span>
+                            )}
+                          </div>
+                          {partyLevels.length > 0 && (
+                            <div style={{ fontSize: '0.62rem', color: '#999', display: 'flex', justifyContent: 'space-between' }}>
+                              <span>Party {partyLevels.length} × avg L{Math.round(partyLevels.reduce((a, b) => a + b, 0) / partyLevels.length)}</span>
+                              <span>E {thresholds.easy} · M {thresholds.medium} · H {thresholds.hard} · D {thresholds.deadly}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       {encounterEntries.map((entry) => {
                         const pct = entry.hp_max > 0 ? entry.hp_current / entry.hp_max : 0;
                         const barColor = pct > 0.5 ? '#4a4' : pct > 0.25 ? '#aa4' : '#a44';
@@ -1368,7 +1450,8 @@ export default function CampaignSessionPage() {
                         );
                       })}
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {/* My NPCs — permanent list, draggable to map */}
                   {npcs.length > 0 && (

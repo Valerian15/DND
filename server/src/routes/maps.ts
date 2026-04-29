@@ -3,6 +3,7 @@ import { db } from '../db/index.js';
 import { requireAuth, type AuthRequest } from '../auth/index.js';
 import { getIo, broadcastFiltered } from '../io.js';
 import { computeAndSaveFog } from '../vision.js';
+import { hydrateToken, type TokenRow } from './tokens.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -162,6 +163,29 @@ router.post('/:id/fog/toggle', (req: AuthRequest, res) => {
   db.prepare('UPDATE maps SET fog_enabled = ? WHERE id = ?').run(newVal, id);
   const updated = db.prepare('SELECT * FROM maps WHERE id = ?').get(id) as MapRow;
   broadcastFiltered(row.campaign_id, 'map:fog_toggled', { map_id: id, fog_enabled: newVal }, () => true);
+
+  // Reconcile NPC token visibility for players based on the new fog state
+  const playerFilter = (uid: number, role: string) => role !== 'admin' && uid !== campaign.dm_id;
+  const npcTokens = db.prepare(
+    "SELECT t.*, cnpc.category_id FROM tokens t LEFT JOIN campaign_npcs cnpc ON cnpc.id = t.campaign_npc_id WHERE t.map_id = ? AND t.token_type = 'npc' AND t.hidden = 0"
+  ).all(id) as TokenRow[];
+
+  if (newVal === 0) {
+    // Fog newly disabled — every non-hidden NPC becomes visible to players
+    for (const tok of npcTokens) {
+      broadcastFiltered(row.campaign_id, 'token:created', hydrateToken(tok), playerFilter);
+    }
+  } else {
+    // Fog newly enabled — recompute visibility, hide NPCs not in visible set
+    const fog = computeAndSaveFog(id);
+    const visibleSet = new Set(fog.visible.map(([c, r]) => `${c},${r}`));
+    for (const tok of npcTokens) {
+      if (!visibleSet.has(`${tok.col},${tok.row}`)) {
+        broadcastFiltered(row.campaign_id, 'token:deleted', { token_id: tok.id }, playerFilter);
+      }
+    }
+  }
+
   res.json({ map: updated });
 });
 

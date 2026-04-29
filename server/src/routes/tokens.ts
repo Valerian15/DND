@@ -67,6 +67,9 @@ export function canUserSeeToken(userId: number, token: TokenRow, dmId: number): 
   if (userId === dmId) return true;
   if (token.hidden === 1) return false;
   if (token.token_type === 'pc') return true;
+  // If fog of war is disabled on this map, all non-hidden tokens are visible.
+  const map = db.prepare('SELECT fog_enabled FROM maps WHERE id = ?').get(token.map_id) as { fog_enabled: number } | undefined;
+  if (!map?.fog_enabled) return true;
   return getVisibleSet(token.map_id).has(`${token.col},${token.row}`);
 }
 

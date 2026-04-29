@@ -99,6 +99,7 @@ interface ClientToServerEvents {
   'token:effect_remove': (data: { token_id: number; name: string }) => void;
   'token:effect_adjust': (data: { token_id: number; name: string; delta: number }) => void;
   'token:conditions_set': (data: { token_id: number; conditions: string[] }) => void;
+  'group:roll': (data: { kind: 'skill' | 'save' | 'ability'; key: string }) => void;
 }
 
 interface SocketData {
@@ -567,6 +568,77 @@ export function setupSession(io: AppServer) {
       const json = JSON.stringify(filtered);
       db.prepare('UPDATE tokens SET conditions = ? WHERE id = ?').run(json, token_id);
       io.to(`campaign:${cid}`).emit('token:conditions_updated', { token_id, conditions: filtered });
+    });
+
+    socket.on('group:roll', ({ kind, key }) => {
+      const cid = socket.data.campaign_id;
+      if (cid == null) return;
+      if (!isDmOrAdmin(user, cid)) return;
+      if (kind !== 'skill' && kind !== 'save' && kind !== 'ability') return;
+
+      const SKILL_TO_ABILITY: Record<string, string> = {
+        'acrobatics': 'dex', 'animal-handling': 'wis', 'arcana': 'int', 'athletics': 'str',
+        'deception': 'cha', 'history': 'int', 'insight': 'wis', 'intimidation': 'cha',
+        'investigation': 'int', 'medicine': 'wis', 'nature': 'int', 'perception': 'wis',
+        'performance': 'cha', 'persuasion': 'cha', 'religion': 'int', 'sleight-of-hand': 'dex',
+        'stealth': 'dex', 'survival': 'wis',
+      };
+      const ABILITIES = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+
+      let abilityKey: string;
+      if (kind === 'skill') {
+        if (!SKILL_TO_ABILITY[key]) return;
+        abilityKey = SKILL_TO_ABILITY[key];
+      } else {
+        if (!ABILITIES.includes(key)) return;
+        abilityKey = key;
+      }
+
+      const labelBase = kind === 'skill'
+        ? key.split('-').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ')
+        : kind === 'save'
+        ? `${key.toUpperCase()} Save`
+        : `${key.toUpperCase()} Check`;
+
+      // Get all PC characters in this campaign (joined via campaign_members)
+      const pcs = db.prepare(`
+        SELECT c.id, c.name, c.level, c.abilities, c.skills, c.saves
+        FROM characters c
+        JOIN campaign_members cm ON cm.character_id = c.id
+        WHERE cm.campaign_id = ?
+        ORDER BY c.name ASC
+      `).all(cid) as { id: number; name: string; level: number; abilities: string; skills: string; saves: string }[];
+
+      const insertStmt = db.prepare(
+        'INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)'
+      );
+
+      for (const pc of pcs) {
+        let mod = 0;
+        try {
+          const abil = JSON.parse(pc.abilities) as Record<string, number>;
+          const score = abil[abilityKey] ?? 10;
+          const abilMod = Math.floor((score - 10) / 2);
+          const prof = Math.floor((pc.level - 1) / 4) + 2; // 5e prof bonus by level
+          let isProficient = false;
+          if (kind === 'skill') {
+            const skills = JSON.parse(pc.skills) as Record<string, { proficient?: boolean }>;
+            isProficient = !!skills[key]?.proficient;
+          } else if (kind === 'save') {
+            const saves = JSON.parse(pc.saves) as Record<string, { proficient?: boolean }>;
+            isProficient = !!saves[key]?.proficient;
+          }
+          mod = abilMod + (isProficient ? prof : 0);
+        } catch { /* fall through with mod = 0 */ }
+
+        const roll = Math.floor(Math.random() * 20) + 1;
+        const total = roll + mod;
+        const expression = `1d20${mod >= 0 ? '+' : ''}${mod}`;
+        const data = JSON.stringify({ expression, dice: [roll], modifier: mod, total, label: `${pc.name} — ${labelBase}` });
+        const res = insertStmt.run(cid, user.id, user.username, `/roll ${expression}`, 'roll', data);
+        const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(res.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
+      }
     });
 
     socket.on('disconnect', () => {

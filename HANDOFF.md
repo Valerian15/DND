@@ -122,30 +122,33 @@ Start servers: `cd server && pnpm dev` and `cd client && pnpm dev` in separate t
 - Migrate to fantasy theme via Claude Design
 - Target: parchment background, serif headings, illustrated borders, dark/candlelight palette
 
-### Queued gameplay features (in priority order)
+### Queued gameplay features
 
-**In progress / remaining from current roadmap:**
-- **#6 Status effect timers** — round counters on conditions (Bless, Hunter's Mark, etc.) that decrement per round and auto-expire
-- **#4 Multiclassing** — characters can have multiple classes (e.g. Fighter 3 / Wizard 2). Currently `class_slug` is singular. Big refactor across rules / hit dice / spell slots.
-- **#8 Group rolls** — DM clicks "Roll Perception for the party" → all PCs roll at once
-- **#7 Encounter builder** — DM-side tool: pick monsters from library, assign XP, see Easy/Medium/Hard/Deadly rating. Saves DM prep time.
+**Remaining from original roadmap:**
+- **#4 Multiclassing** — characters can have multiple classes (e.g. Fighter 3 / Wizard 2). Currently `class_slug` is singular. Big refactor across rules / hit dice / spell slots / ASI timing / multiclass prereqs / level-up. Probably a dedicated full session.
+
+**Done in recent sessions (don't redo):**
+- ✅ #1 Targeting + auto-damage application (shift+click + dice log buttons)
+- ✅ #3 Action / Bonus / Reaction trackers
+- ✅ #5 Exhaustion levels 1–6
+- ✅ #6 Status effect timers — token-level effects, server-side round decrement, spell-cast auto-application, curated condition map, indefinite-mode for out-of-combat casts
+- ✅ #8 Group rolls — DM dropdown for skill / save / ability checks rolls 1d20+mod for every PC
+- ✅ #7 Encounter builder — XP rating banner in encounter tracker (Easy/Medium/Hard/Deadly per 5e DMG p.82)
 
 **Big future feature — Combat automation (Foundry-style):**
-DM can toggle in **campaign settings** between two modes:
-1. **Manual mode (current default)** — players select targets, roll, click `−Total`/`−½` buttons in dice log to apply damage. Conditions are toggled manually.
+DM toggle in **campaign settings** between two modes:
+1. **Manual mode (current default)** — players select targets, roll, click `−Total`/`−½` buttons in dice log to apply damage.
 2. **Automatic mode** — clicking "Cast Fireball" with targets selected:
-   - Auto-rolls each target's save (DC vs their save mod, which we already have for PC/monster/NPC)
+   - Auto-rolls each target's save (DC vs their save mod)
    - Applies full damage to fails / half to passes
-   - Auto-applies any conditions the spell inflicts (needs a curated `spell_slug → conditions[]` map for ~30-40 condition spells)
-   - Logs every per-target roll in the dice log
-   - Same flow for spell-attack spells (vs target AC) and weapon attacks
+   - Auto-rolls attack vs target AC for spell-attack spells & weapon attacks
    - Out of scope for v1: resistances/vulnerabilities/immunities, ongoing aura spells (Spirit Guardians), Counterspell reactions
 
 Add a `combat_automation: 0|1` column to `campaigns` table. UI in CampaignDetailPage edit form. Code branches in InGameSheet's "Cast" buttons.
 
 **Polish / small things:**
-- **Initiative — auto-roll for monsters/NPCs** is already done (uses dex from monster `data.dexterity` / NPC `abilities.dex`)
 - **NPC saving throw proficiency bonus** is hardcoded +2 in NpcSheet (should scale with CR or be user-defined)
+- **Concentration auto-cleanup link** — when a concentration spell's timer expires, the caster's `concentration` condition isn't auto-removed. Currently relies on user removing it manually or another spell triggering swap.
 
 ### Minor known issues
 - NPC saving throw proficiency bonus is hardcoded +2 in NpcSheet (should scale with CR or be user-defined)
