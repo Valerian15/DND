@@ -16,6 +16,8 @@ import tokenRoutes from './routes/tokens.js';
 import campaignNpcRoutes from './routes/campaignNpcs.js';
 import tokenCategoryRoutes from './routes/tokenCategories.js';
 import wallRoutes from './routes/walls.js';
+import templateRoutes from './routes/templates.js';
+import drawingRoutes from './routes/drawings.js';
 import mapFolderRoutes from './routes/mapFolders.js';
 import campaignNotesRoutes from './routes/campaignNotes.js';
 
@@ -44,6 +46,8 @@ app.use('/api/tokens', tokenRoutes);
 app.use('/api/campaign-npcs', campaignNpcRoutes);
 app.use('/api/token-categories', tokenCategoryRoutes);
 app.use('/api/maps', wallRoutes);
+app.use('/api/maps', templateRoutes);
+app.use('/api/maps', drawingRoutes);
 app.use('/api/campaigns/:id/map-folders', mapFolderRoutes);
 app.use('/api/campaigns/:id/notes', campaignNotesRoutes);
 

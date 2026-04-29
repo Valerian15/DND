@@ -30,6 +30,9 @@ interface CharacterRow {
   spell_slots_used: string;
   hit_dice_used: number;
   resources: string;
+  currency: string;
+  feats: string;
+  personality: string;
   features: string;
   notes: string;
   description: string;
@@ -54,6 +57,9 @@ function hydrate(row: CharacterRow) {
     spell_slots: JSON.parse(row.spell_slots),
     spell_slots_used: JSON.parse(row.spell_slots_used),
     resources: JSON.parse(row.resources),
+    currency: JSON.parse(row.currency || '{"pp":0,"gp":0,"ep":0,"sp":0,"cp":0}'),
+    feats: JSON.parse(row.feats || '[]'),
+    personality: JSON.parse(row.personality || '{"traits":"","ideals":"","bonds":"","flaws":""}'),
     features: JSON.parse(row.features),
     description: JSON.parse(row.description),
   };
@@ -116,6 +122,7 @@ const UPDATABLE_SCALAR = new Set([
   'death_saves_success',
   'death_saves_failure',
   'inspiration',
+  'exhaustion_level',
 ]);
 const UPDATABLE_JSON = new Set([
   'abilities',
@@ -128,6 +135,9 @@ const UPDATABLE_JSON = new Set([
   'spell_slots',
   'spell_slots_used',
   'resources',
+  'currency',
+  'feats',
+  'personality',
   'features',
   'description',
 ]);

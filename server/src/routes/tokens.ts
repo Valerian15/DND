@@ -25,13 +25,15 @@ export interface TokenRow {
   hp_visible: number;
   controlled_by: string;
   conditions: string;
+  hidden: number;
   created_at: number;
 }
 
-export interface HydratedToken extends Omit<TokenRow, 'hp_visible' | 'controlled_by' | 'conditions'> {
+export interface HydratedToken extends Omit<TokenRow, 'hp_visible' | 'controlled_by' | 'conditions' | 'hidden'> {
   hp_visible: boolean;
   controlled_by: number[];
   conditions: string[];
+  hidden: boolean;
   monster_slug: string | null;
 }
 
@@ -41,11 +43,13 @@ export function hydrateToken(row: TokenRow): HydratedToken {
     hp_visible: row.hp_visible === 1,
     controlled_by: JSON.parse(row.controlled_by),
     conditions: JSON.parse(row.conditions),
+    hidden: row.hidden === 1,
   };
 }
 
 export function canUserSeeToken(userId: number, token: TokenRow, dmId: number): boolean {
   if (userId === dmId) return true;
+  if (token.hidden === 1) return false;
   if (token.token_type === 'pc') return true;
   return getVisibleSet(token.map_id).has(`${token.col},${token.row}`);
 }
@@ -66,6 +70,7 @@ export function broadcastFogTokenChanges(
   const playerFilter = (userId: number, role: string) => role !== 'admin' && userId !== dmId;
 
   for (const token of npcTokens) {
+    if (token.hidden === 1) continue; // hidden tokens never broadcast to players
     const key = `${token.col},${token.row}`;
     const wasVisible = oldVisible.has(key);
     const isVisible = newVisible.has(key);
@@ -320,6 +325,48 @@ router.patch('/:id/conditions', (req: AuthRequest, res) => {
   db.prepare('UPDATE tokens SET conditions = ? WHERE id = ?').run(json, id);
   broadcastFiltered(campaign.id, 'token:conditions_updated', { token_id: id, conditions }, () => true);
   res.json({ token_id: id, conditions });
+});
+
+router.patch('/:id/hidden', (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const hidden = req.body?.hidden ? 1 : 0;
+
+  const token = db.prepare('SELECT t.*, cnpc.category_id FROM tokens t LEFT JOIN campaign_npcs cnpc ON cnpc.id = t.campaign_npc_id WHERE t.id = ?')
+    .get(id) as TokenRow | undefined;
+  if (!token) return res.status(404).json({ error: 'Token not found' });
+
+  const campaign = getCampaignForMap(token.map_id);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+  const isDmOrAdmin = req.user!.role === 'admin' || req.user!.id === campaign.dm_id;
+  if (!isDmOrAdmin) return res.status(403).json({ error: 'DM access required' });
+
+  db.prepare('UPDATE tokens SET hidden = ? WHERE id = ?').run(hidden, id);
+  const updated = { ...token, hidden };
+
+  // For players: send delete (becoming hidden) or create (becoming visible).
+  // Only relevant for tokens players could otherwise see — for NPCs, also need fog visibility.
+  const playerFilter = (userId: number, role: string) => role !== 'admin' && userId !== campaign.dm_id;
+  if (hidden === 1) {
+    broadcastFiltered(campaign.id, 'token:deleted', { token_id: id }, playerFilter);
+  } else {
+    // Becoming visible — only send to players who could see it (PC always, NPC needs fog cell visible)
+    broadcastFiltered(
+      campaign.id,
+      'token:created',
+      hydrateToken(updated),
+      (userId, role) => role !== 'admin' && userId !== campaign.dm_id && canUserSeeToken(userId, updated, campaign.dm_id),
+    );
+  }
+  // For DM/admin: just notify of the new hidden state
+  broadcastFiltered(
+    campaign.id,
+    'token:hidden_updated',
+    { token_id: id, hidden: hidden === 1 },
+    (userId, role) => role === 'admin' || userId === campaign.dm_id,
+  );
+
+  res.json({ token_id: id, hidden: hidden === 1 });
 });
 
 // Suppress unused export warning

@@ -56,12 +56,18 @@ interface InitiativeEntryRow {
 
 interface WallRow { id: number; map_id: number; x1: number; y1: number; x2: number; y2: number; created_at: number }
 
+interface InitiativeStateOut {
+  entries: InitiativeEntryRow[];
+  current_id: number | null;
+  round: number;
+}
+
 interface ServerToClientEvents {
   'session:state': (state: {
     online: OnlineUser[];
     active_map: MapRow | null;
     chat_history: ChatMessageOut[];
-    initiative: InitiativeEntryRow[];
+    initiative: InitiativeStateOut;
     walls: WallRow[];
     fog_visible: [number, number][];
     fog_explored: [number, number][];
@@ -74,7 +80,7 @@ interface ServerToClientEvents {
   'token:hp_updated': (data: { token_id: number; hp_current: number }) => void;
   'token:conditions_updated': (data: { token_id: number; conditions: string[] }) => void;
   'chat:message': (msg: ChatMessageOut) => void;
-  'initiative:updated': (entries: InitiativeEntryRow[]) => void;
+  'initiative:updated': (state: InitiativeStateOut) => void;
 }
 
 interface ClientToServerEvents {
@@ -86,6 +92,8 @@ interface ClientToServerEvents {
   'initiative:remove': (data: { id: number }) => void;
   'initiative:add': (data: { label: string; initiative: number }) => void;
   'initiative:clear': () => void;
+  'initiative:next_turn': () => void;
+  'initiative:end_combat': () => void;
 }
 
 interface SocketData {
@@ -132,10 +140,57 @@ function getRecentMessages(campaignId: number): ChatMessageOut[] {
   return rows.reverse().map(hydrateMessage);
 }
 
-function getInitiative(campaignId: number): InitiativeEntryRow[] {
+function getInitiativeEntries(campaignId: number): InitiativeEntryRow[] {
   return db.prepare(
     'SELECT * FROM initiative_entries WHERE campaign_id = ? ORDER BY initiative DESC, dex_score DESC, id ASC'
   ).all(campaignId) as InitiativeEntryRow[];
+}
+
+function getInitiativeState(campaignId: number): InitiativeStateOut {
+  const entries = getInitiativeEntries(campaignId);
+  const turn = db.prepare('SELECT initiative_current_id, initiative_round FROM campaigns WHERE id = ?')
+    .get(campaignId) as { initiative_current_id: number | null; initiative_round: number } | undefined;
+  return {
+    entries,
+    current_id: turn?.initiative_current_id ?? null,
+    round: turn?.initiative_round ?? 0,
+  };
+}
+
+function setInitiativeTurn(campaignId: number, currentId: number | null, round: number) {
+  db.prepare('UPDATE campaigns SET initiative_current_id = ?, initiative_round = ? WHERE id = ?')
+    .run(currentId, round, campaignId);
+}
+
+function getNpcDex(token: { character_id: number | null; campaign_npc_id?: number | null; monster_slug?: string | null; abilities?: string | null }): number {
+  // PC: from characters.abilities (JSON)
+  if (token.character_id !== null && token.abilities) {
+    try {
+      const a = JSON.parse(token.abilities) as { dex?: number };
+      return a.dex ?? 10;
+    } catch { /* fall through */ }
+  }
+  // Library monster: from monsters.data JSON via monster_slug
+  if (token.monster_slug) {
+    const mrow = db.prepare('SELECT data FROM monsters WHERE slug = ?').get(token.monster_slug) as { data: string } | undefined;
+    if (mrow?.data) {
+      try {
+        const d = JSON.parse(mrow.data) as { dexterity?: number };
+        return d.dexterity ?? 10;
+      } catch { /* fall through */ }
+    }
+  }
+  // Campaign NPC: from campaign_npcs.abilities (JSON)
+  if (token.campaign_npc_id) {
+    const nrow = db.prepare('SELECT abilities FROM campaign_npcs WHERE id = ?').get(token.campaign_npc_id) as { abilities: string } | undefined;
+    if (nrow?.abilities) {
+      try {
+        const a = JSON.parse(nrow.abilities) as { dex?: number };
+        return a.dex ?? 10;
+      } catch { /* fall through */ }
+    }
+  }
+  return 10;
 }
 
 function rollDice(expression: string): { dice: number[]; modifier: number; total: number; rollMode?: 'advantage' | 'disadvantage' } | null {
@@ -205,7 +260,7 @@ export function setupSession(io: AppServer) {
         online: onlineList(campaign_id),
         active_map: activeMapNow,
         chat_history: getRecentMessages(campaign_id),
-        initiative: getInitiative(campaign_id),
+        initiative: getInitiativeState(campaign_id),
         walls,
         fog_visible: fog.visible,
         fog_explored: fog.explored,
@@ -329,11 +384,11 @@ export function setupSession(io: AppServer) {
       if (!activeMap) return;
 
       const mapTokens = db.prepare(`
-        SELECT t.id, t.label, t.character_id, c.abilities
+        SELECT t.id, t.label, t.character_id, t.campaign_npc_id, t.monster_slug, c.abilities
         FROM tokens t
         LEFT JOIN characters c ON c.id = t.character_id
         WHERE t.map_id = ?
-      `).all(activeMap.id) as { id: number; label: string; character_id: number | null; abilities: string | null }[];
+      `).all(activeMap.id) as { id: number; label: string; character_id: number | null; campaign_npc_id: number | null; monster_slug: string | null; abilities: string | null }[];
 
       db.prepare('DELETE FROM initiative_entries WHERE campaign_id = ?').run(campaign_id);
 
@@ -342,19 +397,16 @@ export function setupSession(io: AppServer) {
       );
 
       for (const token of mapTokens) {
-        let dexScore = 10;
-        if (token.abilities) {
-          try {
-            const abilities = JSON.parse(token.abilities) as { dex?: number };
-            dexScore = abilities.dex ?? 10;
-          } catch { /* ignore bad JSON */ }
-        }
+        const dexScore = getNpcDex(token);
         const dexMod = Math.floor((dexScore - 10) / 2);
         const roll = Math.floor(Math.random() * 20) + 1;
         insertStmt.run(campaign_id, token.id, token.label, roll + dexMod, dexScore);
       }
 
-      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiative(campaign_id));
+      // Set round 1 and highlight first entry
+      const firstEntry = getInitiativeEntries(campaign_id)[0];
+      setInitiativeTurn(campaign_id, firstEntry?.id ?? null, firstEntry ? 1 : 0);
+      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiativeState(campaign_id));
     });
 
     socket.on('initiative:set', ({ id, initiative }) => {
@@ -365,7 +417,7 @@ export function setupSession(io: AppServer) {
 
       db.prepare('UPDATE initiative_entries SET initiative = ? WHERE id = ? AND campaign_id = ?')
         .run(initiative, id, campaign_id);
-      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiative(campaign_id));
+      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiativeState(campaign_id));
     });
 
     socket.on('initiative:remove', ({ id }) => {
@@ -373,8 +425,17 @@ export function setupSession(io: AppServer) {
       if (campaign_id == null) return;
       if (!isDmOrAdmin(user, campaign_id)) return;
 
+      // If we remove the current turn entry, advance the turn first
+      const state = getInitiativeState(campaign_id);
+      if (state.current_id === id && state.entries.length > 1) {
+        const idx = state.entries.findIndex((e) => e.id === id);
+        const next = state.entries[(idx + 1) % state.entries.length];
+        setInitiativeTurn(campaign_id, next.id, state.round);
+      } else if (state.current_id === id) {
+        setInitiativeTurn(campaign_id, null, 0);
+      }
       db.prepare('DELETE FROM initiative_entries WHERE id = ? AND campaign_id = ?').run(id, campaign_id);
-      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiative(campaign_id));
+      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiativeState(campaign_id));
     });
 
     socket.on('initiative:add', ({ label, initiative }) => {
@@ -386,7 +447,7 @@ export function setupSession(io: AppServer) {
       db.prepare(
         'INSERT INTO initiative_entries (campaign_id, token_id, label, initiative, dex_score) VALUES (?, NULL, ?, ?, 10)'
       ).run(campaign_id, String(label).trim().slice(0, 100), initiative);
-      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiative(campaign_id));
+      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiativeState(campaign_id));
     });
 
     socket.on('initiative:clear', () => {
@@ -395,7 +456,32 @@ export function setupSession(io: AppServer) {
       if (!isDmOrAdmin(user, campaign_id)) return;
 
       db.prepare('DELETE FROM initiative_entries WHERE campaign_id = ?').run(campaign_id);
-      io.to(`campaign:${campaign_id}`).emit('initiative:updated', []);
+      setInitiativeTurn(campaign_id, null, 0);
+      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiativeState(campaign_id));
+    });
+
+    socket.on('initiative:next_turn', () => {
+      const campaign_id = socket.data.campaign_id;
+      if (campaign_id == null) return;
+      if (!isDmOrAdmin(user, campaign_id)) return;
+
+      const state = getInitiativeState(campaign_id);
+      if (state.entries.length === 0) return;
+
+      const idx = state.current_id !== null ? state.entries.findIndex((e) => e.id === state.current_id) : -1;
+      const nextIdx = (idx + 1) % state.entries.length;
+      const nextRound = idx === -1 || nextIdx === 0 ? Math.max(1, state.round) + (nextIdx === 0 && idx !== -1 ? 1 : 0) : state.round;
+      setInitiativeTurn(campaign_id, state.entries[nextIdx].id, nextRound || 1);
+      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiativeState(campaign_id));
+    });
+
+    socket.on('initiative:end_combat', () => {
+      const campaign_id = socket.data.campaign_id;
+      if (campaign_id == null) return;
+      if (!isDmOrAdmin(user, campaign_id)) return;
+
+      setInitiativeTurn(campaign_id, null, 0);
+      io.to(`campaign:${campaign_id}`).emit('initiative:updated', getInitiativeState(campaign_id));
     });
 
     socket.on('disconnect', () => {

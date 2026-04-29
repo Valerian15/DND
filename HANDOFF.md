@@ -122,16 +122,30 @@ Start servers: `cd server && pnpm dev` and `cd client && pnpm dev` in separate t
 - Migrate to fantasy theme via Claude Design
 - Target: parchment background, serif headings, illustrated borders, dark/candlelight palette
 
-### Queued gameplay features (discussed, not yet built)
-- **Spell slot tracker** in InGameSheet (bubbles per level, spend/recover)
-- **Hit dice tracker** in InGameSheet (roll HD during short rest)
-- **Class resource tracker** (Rage, Ki, Channel Divinity, etc.)
-- **Long rest / short rest buttons** (reset HP, slots, resources)
-- **Advantage/disadvantage toggle** on dice rolls (Adv/N/Dis buttons)
-- **Map folders** (nest maps in collapsible folders in DM bar)
-- **DM bar reorganisation** (wall/fog/initiative controls moved inside DM bar, collapse arrow)
-- **Passive perception** display (already stored, not surfaced in session UI)
-- **Initiative — auto-roll for monsters** (currently DM types in manually)
+### Queued gameplay features (in priority order)
+
+**In progress / remaining from current roadmap:**
+- **#6 Status effect timers** — round counters on conditions (Bless, Hunter's Mark, etc.) that decrement per round and auto-expire
+- **#4 Multiclassing** — characters can have multiple classes (e.g. Fighter 3 / Wizard 2). Currently `class_slug` is singular. Big refactor across rules / hit dice / spell slots.
+- **#8 Group rolls** — DM clicks "Roll Perception for the party" → all PCs roll at once
+- **#7 Encounter builder** — DM-side tool: pick monsters from library, assign XP, see Easy/Medium/Hard/Deadly rating. Saves DM prep time.
+
+**Big future feature — Combat automation (Foundry-style):**
+DM can toggle in **campaign settings** between two modes:
+1. **Manual mode (current default)** — players select targets, roll, click `−Total`/`−½` buttons in dice log to apply damage. Conditions are toggled manually.
+2. **Automatic mode** — clicking "Cast Fireball" with targets selected:
+   - Auto-rolls each target's save (DC vs their save mod, which we already have for PC/monster/NPC)
+   - Applies full damage to fails / half to passes
+   - Auto-applies any conditions the spell inflicts (needs a curated `spell_slug → conditions[]` map for ~30-40 condition spells)
+   - Logs every per-target roll in the dice log
+   - Same flow for spell-attack spells (vs target AC) and weapon attacks
+   - Out of scope for v1: resistances/vulnerabilities/immunities, ongoing aura spells (Spirit Guardians), Counterspell reactions
+
+Add a `combat_automation: 0|1` column to `campaigns` table. UI in CampaignDetailPage edit form. Code branches in InGameSheet's "Cast" buttons.
+
+**Polish / small things:**
+- **Initiative — auto-roll for monsters/NPCs** is already done (uses dex from monster `data.dexterity` / NPC `abilities.dex`)
+- **NPC saving throw proficiency bonus** is hardcoded +2 in NpcSheet (should scale with CR or be user-defined)
 
 ### Minor known issues
 - NPC saving throw proficiency bonus is hardcoded +2 in NpcSheet (should scale with CR or be user-defined)

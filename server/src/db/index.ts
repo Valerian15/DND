@@ -463,6 +463,51 @@ export function initSchema() {
   try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN saving_throws TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
   try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN attacks TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
   try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN traits TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  // Initiative turn tracking
+  try { db.exec('ALTER TABLE campaigns ADD COLUMN initiative_current_id INTEGER'); } catch { /* exists */ }
+  try { db.exec('ALTER TABLE campaigns ADD COLUMN initiative_round INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+
+  // Hidden tokens (DM-only visibility)
+  try { db.exec('ALTER TABLE tokens ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  // Character currency (pp, gp, ep, sp, cp)
+  try { db.exec(`ALTER TABLE characters ADD COLUMN currency TEXT NOT NULL DEFAULT '{"pp":0,"gp":0,"ep":0,"sp":0,"cp":0}'`); } catch { /* exists */ }
+  // Character feats (array of feat slugs from library)
+  try { db.exec("ALTER TABLE characters ADD COLUMN feats TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  // Character personality (traits, ideals, bonds, flaws)
+  try { db.exec(`ALTER TABLE characters ADD COLUMN personality TEXT NOT NULL DEFAULT '{"traits":"","ideals":"","bonds":"","flaws":""}'`); } catch { /* exists */ }
+  // Exhaustion level (5e: 0–6)
+  try { db.exec('ALTER TABLE characters ADD COLUMN exhaustion_level INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+
+  // AOE spell templates on maps
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS map_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      map_id INTEGER NOT NULL,
+      shape TEXT NOT NULL CHECK (shape IN ('circle', 'square', 'cone', 'line')),
+      origin_x REAL NOT NULL,
+      origin_y REAL NOT NULL,
+      end_x REAL NOT NULL,
+      end_y REAL NOT NULL,
+      color TEXT NOT NULL DEFAULT '#ff6b6b',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      FOREIGN KEY (map_id) REFERENCES maps(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_map_templates_map ON map_templates(map_id);
+  `);
+
+  // Freehand drawings on maps (DM annotations)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS map_drawings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      map_id INTEGER NOT NULL,
+      path TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT '#ffeb3b',
+      stroke_width INTEGER NOT NULL DEFAULT 3,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      FOREIGN KEY (map_id) REFERENCES maps(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_map_drawings_map ON map_drawings(map_id);
+  `);
 
   console.log('✅ Database schema ready');
 }
