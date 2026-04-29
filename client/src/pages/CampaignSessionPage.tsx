@@ -17,17 +17,35 @@ function distToSegment(px: number, py: number, x1: number, y1: number, x2: numbe
   const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
+
+function minDistToPath(px: number, py: number, path: [number, number][]): number {
+  if (path.length === 0) return Infinity;
+  if (path.length === 1) return Math.hypot(px - path[0][0], py - path[0][1]);
+  let best = Infinity;
+  for (let i = 0; i < path.length - 1; i++) {
+    const d = distToSegment(px, py, path[i][0], path[i][1], path[i + 1][0], path[i + 1][1]);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+function pathToD(path: [number, number][]): string {
+  if (path.length === 0) return '';
+  return path.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ');
+}
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../features/auth/AuthContext';
 import { getCampaign } from '../features/campaign/api';
 import { useSession } from '../features/session/useSession';
 import { listMaps, createMap, deleteMap, activateMap, updateMap, toggleFog, resetFog } from '../features/session/mapApi';
-import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenConditions } from '../features/session/tokenApi';
+import { listCampaignNpcs, listTokenCategories, createToken, deleteToken, updateTokenConditions, setTokenHidden, updateTokenHp } from '../features/session/tokenApi';
 import { createWall, deleteWall, clearWalls } from '../features/session/wallApi';
+import { createTemplate, deleteTemplate, clearTemplates } from '../features/session/templateApi';
+import { createDrawing, deleteDrawing, clearDrawings } from '../features/session/drawingApi';
 import { listMapFolders, createMapFolder, renameMapFolder, deleteMapFolder } from '../features/session/mapFolderApi';
 import { listNotes, createNote, updateNote, deleteNote } from '../features/session/campaignNotesApi';
 import type { CampaignNote } from '../features/session/campaignNotesApi';
-import type { WallSegment } from '../features/session/types';
+import type { WallSegment, MapTemplate, TemplateShape, MapDrawing } from '../features/session/types';
 import { InGameSheet, CONDITION_COLORS } from '../features/session/InGameSheet';
 import { MonsterSheet } from '../features/session/MonsterSheet';
 import { NpcSheet } from '../features/session/NpcSheet';
@@ -89,10 +107,11 @@ interface TokenOnMapProps {
   dragCol?: number;
   dragRow?: number;
   canMove: boolean;
+  isTarget?: boolean;
   onPointerDown?: (e: React.PointerEvent) => void;
 }
 
-function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, onPointerDown }: TokenOnMapProps) {
+function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, isTarget, onPointerDown }: TokenOnMapProps) {
   const displayCol = isDragging && dragCol !== undefined ? dragCol : token.col;
   const displayRow = isDragging && dragRow !== undefined ? dragRow : token.row;
   const { left, top, size } = tokenPixelPos({ col: displayCol, row: displayRow, size: token.size }, map);
@@ -107,7 +126,10 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, onPoint
         cursor: canMove ? (isDragging ? 'grabbing' : 'grab') : 'default',
         zIndex: isDragging ? 20 : 5,
         touchAction: 'none', userSelect: 'none',
-        outline: isDragging ? '2px solid #4a8' : 'none', outlineOffset: 1,
+        outline: isDragging ? '2px solid #4a8' : token.hidden ? '2px dashed #888' : 'none', outlineOffset: 1,
+        opacity: token.hidden ? 0.45 : 1,
+        boxShadow: isTarget ? '0 0 0 3px #c44, 0 0 0 5px rgba(255,255,255,0.7)' : undefined,
+        borderRadius: '50%',
       }}
       onPointerDown={onPointerDown}
     >
@@ -117,6 +139,9 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, onPoint
         <div style={{ width: '100%', height: '100%', borderRadius: '50%', background: token.token_type === 'pc' ? '#4a8' : '#a44', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: Math.max(10, size * 0.35), border: '2px solid #fff', boxSizing: 'border-box' }}>
           {token.label[0]?.toUpperCase()}
         </div>
+      )}
+      {token.hidden && (
+        <div style={{ position: 'absolute', top: -2, right: -2, background: '#666', color: '#fff', fontSize: 11, width: 18, height: 18, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #fff', zIndex: 22 }} title="Hidden from players">👁</div>
       )}
       {/* Label above the token */}
       <div style={{ position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 10, padding: '1px 4px', borderRadius: 3, whiteSpace: 'nowrap', pointerEvents: 'none', marginBottom: 3, zIndex: 21 }}>
@@ -173,6 +198,73 @@ function crLabel(cr: number | null): string {
   if (cr === 0.25) return 'CR ¼';
   if (cr === 0.5) return 'CR ½';
   return `CR ${cr}`;
+}
+
+function renderTemplateLabel(t: { shape: TemplateShape; origin_x: number; origin_y: number; end_x: number; end_y: number; color: string }, key: string | number, gridSize: number, emphasized = false) {
+  const dx = t.end_x - t.origin_x;
+  const dy = t.end_y - t.origin_y;
+  const len = Math.hypot(dx, dy);
+  if (len < 4 || gridSize <= 0) return null;
+  const ftPerPx = 5 / gridSize;
+  let labelText = '';
+  let cx = 0, cy = 0;
+  if (t.shape === 'circle') {
+    labelText = `r ${Math.round(len * ftPerPx)} ft`;
+    cx = t.origin_x; cy = t.origin_y;
+  } else if (t.shape === 'square') {
+    labelText = `${Math.round(len * 2 * ftPerPx)} ft`;
+    cx = t.origin_x; cy = t.origin_y;
+  } else if (t.shape === 'cone' || t.shape === 'line') {
+    labelText = `${Math.round(len * ftPerPx)} ft`;
+    cx = (t.origin_x + t.end_x) / 2; cy = (t.origin_y + t.end_y) / 2;
+  }
+  return (
+    <g key={`${key}-label`}>
+      <rect x={cx - 22} y={cy - 9} width={44} height={18} rx={3}
+        fill="rgba(0,0,0,0.7)" stroke={emphasized ? '#fff' : 'transparent'} strokeWidth={emphasized ? 1 : 0} />
+      <text x={cx} y={cy + 4} textAnchor="middle" fill="#fff" fontSize="11" fontWeight={emphasized ? 700 : 600} fontFamily="system-ui">{labelText}</text>
+    </g>
+  );
+}
+
+function renderTemplateShape(t: { shape: TemplateShape; origin_x: number; origin_y: number; end_x: number; end_y: number; color: string }, key: string | number, dashed = false) {
+  const dx = t.end_x - t.origin_x;
+  const dy = t.end_y - t.origin_y;
+  const len = Math.hypot(dx, dy);
+  const fillOpacity = dashed ? 0.18 : 0.28;
+  const strokeOpacity = dashed ? 0.5 : 0.85;
+  const strokeDash = dashed ? '6 4' : undefined;
+
+  if (t.shape === 'circle') {
+    return <circle key={key} cx={t.origin_x} cy={t.origin_y} r={Math.max(2, len)} fill={t.color} fillOpacity={fillOpacity} stroke={t.color} strokeOpacity={strokeOpacity} strokeWidth={2} strokeDasharray={strokeDash} />;
+  }
+  if (t.shape === 'square') {
+    // Centered on origin, side = 2 * len
+    const side = Math.max(4, len * 2);
+    return <rect key={key} x={t.origin_x - side / 2} y={t.origin_y - side / 2} width={side} height={side} fill={t.color} fillOpacity={fillOpacity} stroke={t.color} strokeOpacity={strokeOpacity} strokeWidth={2} strokeDasharray={strokeDash} />;
+  }
+  if (t.shape === 'cone') {
+    // 60° cone (5e standard): apex at origin, axis from origin toward end
+    if (len < 1) return null;
+    const ux = dx / len, uy = dy / len;
+    // Half-angle for 60° cone is 30° => tan(30°) ≈ 0.5774
+    const halfWidth = len * 0.5774;
+    // Perpendicular unit vector
+    const px = -uy, py = ux;
+    const x1 = t.end_x + px * halfWidth, y1 = t.end_y + py * halfWidth;
+    const x2 = t.end_x - px * halfWidth, y2 = t.end_y - py * halfWidth;
+    return <polygon key={key} points={`${t.origin_x},${t.origin_y} ${x1},${y1} ${x2},${y2}`} fill={t.color} fillOpacity={fillOpacity} stroke={t.color} strokeOpacity={strokeOpacity} strokeWidth={2} strokeDasharray={strokeDash} />;
+  }
+  if (t.shape === 'line') {
+    // 5ft-wide line from origin to end (approximated as fixed pixel width — caller can adjust)
+    if (len < 1) return null;
+    const ux = dx / len, uy = dy / len;
+    const halfW = 12; // px — half of standard 5ft line width; scales with grid_size in practice
+    const px = -uy * halfW, py = ux * halfW;
+    const points = `${t.origin_x + px},${t.origin_y + py} ${t.end_x + px},${t.end_y + py} ${t.end_x - px},${t.end_y - py} ${t.origin_x - px},${t.origin_y - py}`;
+    return <polygon key={key} points={points} fill={t.color} fillOpacity={fillOpacity} stroke={t.color} strokeOpacity={strokeOpacity} strokeWidth={2} strokeDasharray={strokeDash} />;
+  }
+  return null;
 }
 
 interface MapRowProps {
@@ -270,7 +362,7 @@ function FolderTree({ folders, maps, activeMapId, parentId, expandedFolders, ren
   );
 }
 
-function ChatMsgItem({ msg, myUserId }: { msg: ChatMessage; myUserId: number }) {
+function ChatMsgItem({ msg, myUserId, targetCount, onApply }: { msg: ChatMessage; myUserId: number; targetCount: number; onApply?: (amount: number, mode: 'damage' | 'half' | 'heal') => void }) {
   const isMe = msg.user_id === myUserId;
   if (msg.type === 'roll' && msg.data) {
     const { expression, dice, modifier, total, label, rollMode } = msg.data;
@@ -291,6 +383,7 @@ function ChatMsgItem({ msg, myUserId }: { msg: ChatMessage; myUserId: number }) 
     } else {
       diceDisplay = <span>[{dice.join(', ')}]</span>;
     }
+    const showApply = targetCount > 0 && onApply;
     return (
       <div style={{ background: '#f5f0e8', border: '1px solid #e4d5b8', borderRadius: 5, padding: '0.35rem 0.5rem' }}>
         <div style={{ fontSize: '0.7rem', color: '#886', fontWeight: 600, marginBottom: 2 }}>
@@ -300,6 +393,16 @@ function ChatMsgItem({ msg, myUserId }: { msg: ChatMessage; myUserId: number }) 
         {label && <div style={{ fontSize: '0.7rem', color: '#999', marginBottom: 2 }}>{expression}</div>}
         <div style={{ fontSize: '0.78rem', color: '#666' }}>{diceDisplay}{modStr}</div>
         <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#333' }}>= {total}</div>
+        {showApply && (
+          <div style={{ display: 'flex', gap: '0.2rem', marginTop: 4, flexWrap: 'wrap' }}>
+            <button onClick={() => onApply!(total, 'damage')} title={`Apply ${total} damage to ${targetCount} target${targetCount > 1 ? 's' : ''}`}
+              style={{ padding: '0.15rem 0.4rem', fontSize: '0.68rem', border: '1px solid #c44', borderRadius: 3, background: '#c44', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>−{total} dmg</button>
+            <button onClick={() => onApply!(Math.floor(total / 2), 'half')} title={`Apply ${Math.floor(total / 2)} (half) damage`}
+              style={{ padding: '0.15rem 0.4rem', fontSize: '0.68rem', border: '1px solid #c84', borderRadius: 3, background: '#fff', color: '#c84', cursor: 'pointer', fontWeight: 600 }}>−½ ({Math.floor(total / 2)})</button>
+            <button onClick={() => onApply!(total, 'heal')} title={`Heal ${total}`}
+              style={{ padding: '0.15rem 0.4rem', fontSize: '0.68rem', border: '1px solid #4a4', borderRadius: 3, background: '#fff', color: '#4a4', cursor: 'pointer', fontWeight: 600 }}>+{total} hp</button>
+          </div>
+        )}
       </div>
     );
   }
@@ -363,7 +466,8 @@ export default function CampaignSessionPage() {
 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [drag, setDrag] = useState<{ tokenId: number; ghostCol: number; ghostRow: number } | null>(null);
-  const [pointerDown, setPointerDown] = useState<{ token: TokenData; startX: number; startY: number } | null>(null);
+  const [pointerDown, setPointerDown] = useState<{ token: TokenData; startX: number; startY: number; shiftKey: boolean } | null>(null);
+  const [targetIds, setTargetIds] = useState<Set<number>>(new Set());
 
   // Grid style
   const [gridColor, setGridColor] = useState('#000000');
@@ -375,6 +479,27 @@ export default function CampaignSessionPage() {
   const [wallDrawEnd, setWallDrawEnd] = useState<{ x: number; y: number } | null>(null);
   const wallDrawStartRef = useRef<{ x: number; y: number } | null>(null);
   const fogCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // AOE templates
+  const [templateMode, setTemplateMode] = useState(false);
+  const [templateShape, setTemplateShape] = useState<TemplateShape>('circle');
+  const [templateColor, setTemplateColor] = useState('#ff6b6b');
+  const [templateDrawStart, setTemplateDrawStart] = useState<{ x: number; y: number } | null>(null);
+  const [templateDrawEnd, setTemplateDrawEnd] = useState<{ x: number; y: number } | null>(null);
+  const templateDrawStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Measurement tool (local only)
+  const [measureMode, setMeasureMode] = useState(false);
+  const [measureStart, setMeasureStart] = useState<{ x: number; y: number } | null>(null);
+  const [measureEnd, setMeasureEnd] = useState<{ x: number; y: number } | null>(null);
+  const measureStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Drawing tool (freehand pen, persisted + synced)
+  const [drawMode, setDrawMode] = useState(false);
+  const [drawColor, setDrawColor] = useState('#ffeb3b');
+  const [drawWidth, setDrawWidth] = useState(3);
+  const [activeDrawPath, setActiveDrawPath] = useState<[number, number][] | null>(null);
+  const activeDrawPathRef = useRef<[number, number][] | null>(null);
 
   // Chat
   const [chatOpen, setChatOpen] = useState(false);
@@ -403,7 +528,7 @@ export default function CampaignSessionPage() {
   const [monsterLibrary, setMonsterLibrary] = useState<MonsterListItem[]>([]);
   const [encounterEntries, setEncounterEntries] = useState<EncounterEntry[]>([]);
 
-  const { online, connected, activeMap, setActiveMap, tokens, messages, initiative, walls, fogVisible, fogExplored } = useSession(Number(id));
+  const { online, connected, activeMap, setActiveMap, tokens, messages, initiative, walls, templates, drawings, fogVisible, fogExplored } = useSession(Number(id));
   const isDmOrAdmin = campaign ? (campaign.dm_id === user!.id || user!.role === 'admin') : false;
   const previewMap: MapData | null = activeMap
     ? { ...activeMap, grid_size: gridSize, grid_offset_x: gridOffsetX, grid_offset_y: gridOffsetY }
@@ -598,6 +723,114 @@ export default function CampaignSessionPage() {
     setWallDrawEnd(null);
   }
 
+  // Template pointer handlers — drag from origin to set size+direction
+  function handleTemplatePointerDown(e: React.PointerEvent) {
+    if (!activeMap) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pt = { x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom };
+    templateDrawStartRef.current = pt;
+    setTemplateDrawStart(pt);
+    setTemplateDrawEnd(pt);
+  }
+
+  function handleTemplatePointerMove(e: React.PointerEvent) {
+    if (!templateDrawStartRef.current || !activeMap) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setTemplateDrawEnd({ x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom });
+  }
+
+  function handleTemplatePointerUp(e: React.PointerEvent) {
+    const start = templateDrawStartRef.current;
+    if (!start || !activeMap) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const end = { x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom };
+    const moved = Math.hypot(end.x - start.x, end.y - start.y);
+    if (moved < 5) {
+      // Click without drag → check for hit on existing template to delete
+      const hit = templates.find((t) => {
+        const dx = end.x - t.origin_x, dy = end.y - t.origin_y;
+        const dist = Math.hypot(dx, dy);
+        const radius = Math.hypot(t.end_x - t.origin_x, t.end_y - t.origin_y);
+        return dist < Math.max(20, radius);
+      });
+      if (hit) deleteTemplate(activeMap.id, hit.id).catch((err: Error) => setError(err.message));
+    } else {
+      createTemplate(activeMap.id, {
+        shape: templateShape,
+        origin_x: start.x, origin_y: start.y,
+        end_x: end.x, end_y: end.y,
+        color: templateColor,
+      }).catch((err: Error) => setError(err.message));
+    }
+    templateDrawStartRef.current = null;
+    setTemplateDrawStart(null);
+    setTemplateDrawEnd(null);
+  }
+
+  // Measurement pointer handlers — local only, clears on release
+  function handleMeasurePointerDown(e: React.PointerEvent) {
+    if (!activeMap) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pt = { x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom };
+    measureStartRef.current = pt;
+    setMeasureStart(pt);
+    setMeasureEnd(pt);
+  }
+
+  function handleMeasurePointerMove(e: React.PointerEvent) {
+    if (!measureStartRef.current || !activeMap) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMeasureEnd({ x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom });
+  }
+
+  function handleMeasurePointerUp() {
+    measureStartRef.current = null;
+    setMeasureStart(null);
+    setMeasureEnd(null);
+  }
+
+  // Drawing pointer handlers — accumulate path, save on release
+  function handleDrawPointerDown(e: React.PointerEvent) {
+    if (!activeMap) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pt: [number, number] = [(e.clientX - rect.left) / zoom, (e.clientY - rect.top) / zoom];
+    activeDrawPathRef.current = [pt];
+    setActiveDrawPath([pt]);
+  }
+
+  function handleDrawPointerMove(e: React.PointerEvent) {
+    if (!activeDrawPathRef.current || !activeMap) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pt: [number, number] = [(e.clientX - rect.left) / zoom, (e.clientY - rect.top) / zoom];
+    // Skip points too close to previous one to keep path size reasonable
+    const last = activeDrawPathRef.current[activeDrawPathRef.current.length - 1];
+    if (Math.hypot(pt[0] - last[0], pt[1] - last[1]) < 3) return;
+    activeDrawPathRef.current = [...activeDrawPathRef.current, pt];
+    setActiveDrawPath(activeDrawPathRef.current);
+  }
+
+  function handleDrawPointerUp(e: React.PointerEvent) {
+    const path = activeDrawPathRef.current;
+    activeDrawPathRef.current = null;
+    setActiveDrawPath(null);
+    if (!path || !activeMap) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const endPt: [number, number] = [(e.clientX - rect.left) / zoom, (e.clientY - rect.top) / zoom];
+    if (path.length < 2) {
+      // Tap (no drag) — try to delete the nearest drawing within range
+      const hit = drawings
+        .map((d) => ({ d, dist: minDistToPath(endPt[0], endPt[1], d.path) }))
+        .reduce((best, cur) => (cur.dist < best.dist ? cur : best), { d: null as MapDrawing | null, dist: 12 });
+      if (hit.d) deleteDrawing(activeMap.id, hit.d.id).catch((err: Error) => setError(err.message));
+      return;
+    }
+    createDrawing(activeMap.id, { path, color: drawColor, stroke_width: drawWidth })
+      .catch((err: Error) => setError(err.message));
+  }
+
   function canMoveToken(token: TokenData): boolean {
     if (!campaign) return false;
     if (isDmOrAdmin) return true;
@@ -667,8 +900,8 @@ export default function CampaignSessionPage() {
     e.stopPropagation();
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    setPointerDown({ token, startX: e.clientX, startY: e.clientY });
-    if (canMoveToken(token)) {
+    setPointerDown({ token, startX: e.clientX, startY: e.clientY, shiftKey: e.shiftKey });
+    if (canMoveToken(token) && !e.shiftKey) {
       setDrag({ tokenId: token.id, ghostCol: token.col, ghostRow: token.row });
     }
   }
@@ -684,7 +917,17 @@ export default function CampaignSessionPage() {
     if (pointerDown) {
       const dist = Math.hypot(e.clientX - pointerDown.startX, e.clientY - pointerDown.startY);
       if (dist < 6) {
-        handleTokenClick(pointerDown.token);
+        if (pointerDown.shiftKey) {
+          // Shift+click toggles target selection
+          const id = pointerDown.token.id;
+          setTargetIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+          });
+        } else {
+          handleTokenClick(pointerDown.token);
+        }
       } else if (drag) {
         socket.emit('token:move', { token_id: drag.tokenId, col: drag.ghostCol, row: drag.ghostRow });
       }
@@ -706,6 +949,21 @@ export default function CampaignSessionPage() {
         setPanel({ type: 'npc', npcId: token.campaign_npc_id, tokenId: token.id, hp: token.hp_current, hpMax: token.hp_max });
       }
     }
+  }
+
+  async function applyToTargets(amount: number, mode: 'damage' | 'half' | 'heal') {
+    if (targetIds.size === 0 || amount === 0) return;
+    const value = mode === 'half' ? Math.floor(amount / 2) : amount;
+    const ops: Promise<unknown>[] = [];
+    for (const id of targetIds) {
+      const tok = tokens.find((t) => t.id === id);
+      if (!tok) continue;
+      const next = mode === 'heal'
+        ? Math.min(tok.hp_max, tok.hp_current + value)
+        : Math.max(0, tok.hp_current - value);
+      if (next !== tok.hp_current) ops.push(updateTokenHp(id, next).catch(() => {}));
+    }
+    await Promise.all(ops);
   }
 
   async function handleTokenConditionsChange(tokenId: number, conditions: string[]) {
@@ -763,6 +1021,64 @@ export default function CampaignSessionPage() {
                 style={{ padding: '0.2rem 0.5rem', cursor: 'pointer', border: `1px solid ${gridBold ? '#555' : '#ccc'}`, borderRadius: 4, background: gridBold ? '#333' : '#fff', color: gridBold ? '#fff' : '#555', fontSize: '0.8rem', fontWeight: 700 }}
               >B</button>
             </span>
+          )}
+          {activeMap && (
+            <button onClick={() => setMeasureMode((m) => !m)}
+              title={measureMode ? 'Exit measurement mode' : 'Drag on map to measure distance'}
+              style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: `1px solid ${measureMode ? '#39c' : '#ccc'}`, borderRadius: 4, background: measureMode ? '#e0f0ff' : '#fff', color: measureMode ? '#39c' : '#333', fontSize: '0.78rem', fontWeight: measureMode ? 700 : 400 }}>
+              📏 {measureMode ? 'Measure ON' : 'Measure'}
+            </button>
+          )}
+          {activeMap && (
+            <button onClick={() => setDrawMode((m) => !m)}
+              title={drawMode ? 'Exit draw mode' : 'Freehand draw on the map'}
+              style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: `1px solid ${drawMode ? '#a3a' : '#ccc'}`, borderRadius: 4, background: drawMode ? '#fae8ff' : '#fff', color: drawMode ? '#a3a' : '#333', fontSize: '0.78rem', fontWeight: drawMode ? 700 : 400 }}>
+              ✏ {drawMode ? 'Draw ON' : 'Draw'}
+            </button>
+          )}
+          {activeMap && (
+            <button onClick={() => setTemplateMode((m) => !m)}
+              title={templateMode ? 'Exit AOE mode' : 'Place AOE templates'}
+              style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: `1px solid ${templateMode ? '#c70' : '#ccc'}`, borderRadius: 4, background: templateMode ? '#fff4e0' : '#fff', color: templateMode ? '#c70' : '#333', fontSize: '0.78rem', fontWeight: templateMode ? 700 : 400 }}>
+              ✨ {templateMode ? 'AOE ON' : 'AOE'}
+            </button>
+          )}
+          {activeMap && templateMode && (
+            <>
+              <select value={templateShape} onChange={(e) => setTemplateShape(e.target.value as TemplateShape)}
+                style={{ padding: '0.2rem 0.3rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.75rem', background: '#fff' }}>
+                <option value="circle">○ Sphere</option>
+                <option value="square">□ Cube</option>
+                <option value="cone">◢ Cone</option>
+                <option value="line">▬ Line</option>
+              </select>
+              <input type="color" value={templateColor} onChange={(e) => setTemplateColor(e.target.value)}
+                title="Template colour" style={{ width: 28, height: 22, padding: 1, border: '1px solid #ccc', borderRadius: 3, cursor: 'pointer' }} />
+            </>
+          )}
+          {activeMap && templates.length > 0 && (
+            <button onClick={() => { if (confirm('Clear all AOE templates on this map?')) clearTemplates(activeMap.id).catch((e: Error) => setError(e.message)); }}
+              style={{ padding: '0.25rem 0.5rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 4, background: '#fff', color: 'crimson', fontSize: '0.75rem' }} title="Delete all templates">
+              Clear AOE
+            </button>
+          )}
+          {activeMap && drawMode && (
+            <>
+              <input type="color" value={drawColor} onChange={(e) => setDrawColor(e.target.value)}
+                title="Draw colour" style={{ width: 28, height: 22, padding: 1, border: '1px solid #ccc', borderRadius: 3, cursor: 'pointer' }} />
+              <select value={drawWidth} onChange={(e) => setDrawWidth(Number(e.target.value))}
+                title="Stroke width" style={{ padding: '0.2rem 0.3rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.75rem', background: '#fff' }}>
+                <option value={2}>Thin</option>
+                <option value={4}>Medium</option>
+                <option value={7}>Thick</option>
+              </select>
+            </>
+          )}
+          {activeMap && drawings.length > 0 && (
+            <button onClick={() => { if (confirm('Clear all drawings on this map?')) clearDrawings(activeMap.id).catch((e: Error) => setError(e.message)); }}
+              style={{ padding: '0.25rem 0.5rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 4, background: '#fff', color: 'crimson', fontSize: '0.75rem' }} title="Delete all drawings">
+              Clear drawings
+            </button>
           )}
           <span style={{ fontSize: '0.8rem', color: '#888' }}>Online:</span>
           {online.map((u) => (
@@ -1208,9 +1524,30 @@ export default function CampaignSessionPage() {
               </div>
 
               <div style={{ width: imgSize.w * zoom || '100%', height: imgSize.h * zoom || '100%', position: 'relative', minWidth: imgSize.w ? undefined : '100%', minHeight: imgSize.h ? undefined : '100%' }}>
+                {targetIds.size > 0 && (
+                  <div style={{ position: 'sticky', top: 8, right: 8, zIndex: 31, display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(196,68,68,0.92)', color: '#fff', fontSize: '0.78rem', fontWeight: 600, padding: '0.3rem 0.6rem 0.3rem 0.8rem', borderRadius: 12, marginTop: 8, marginRight: 8, float: 'right', clear: 'both' }}>
+                    🎯 {targetIds.size} target{targetIds.size > 1 ? 's' : ''}: {[...targetIds].map((id) => tokens.find((t) => t.id === id)?.label ?? '?').join(', ')}
+                    <button onClick={() => setTargetIds(new Set())} style={{ padding: '0.05rem 0.4rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid rgba(255,255,255,0.6)', borderRadius: 3, background: 'transparent', color: '#fff' }}>Clear</button>
+                  </div>
+                )}
                 {wallMode && (
                   <div style={{ position: 'sticky', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 30, display: 'inline-block', background: 'rgba(200,50,50,0.92)', color: '#fff', fontSize: '0.78rem', fontWeight: 600, padding: '0.3rem 0.8rem', borderRadius: 12, pointerEvents: 'none', whiteSpace: 'nowrap', marginTop: 8 }}>
                     🧱 Wall mode — drag to draw, click a wall to delete
+                  </div>
+                )}
+                {templateMode && (
+                  <div style={{ position: 'sticky', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 30, display: 'inline-block', background: 'rgba(200,120,0,0.92)', color: '#fff', fontSize: '0.78rem', fontWeight: 600, padding: '0.3rem 0.8rem', borderRadius: 12, pointerEvents: 'none', whiteSpace: 'nowrap', marginTop: 8 }}>
+                    ✨ AOE mode — drag from origin, click an existing template to delete
+                  </div>
+                )}
+                {measureMode && (
+                  <div style={{ position: 'sticky', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 30, display: 'inline-block', background: 'rgba(50,150,210,0.92)', color: '#fff', fontSize: '0.78rem', fontWeight: 600, padding: '0.3rem 0.8rem', borderRadius: 12, pointerEvents: 'none', whiteSpace: 'nowrap', marginTop: 8 }}>
+                    📏 Measure mode — drag on the map to measure distance
+                  </div>
+                )}
+                {drawMode && (
+                  <div style={{ position: 'sticky', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 30, display: 'inline-block', background: 'rgba(170,60,170,0.92)', color: '#fff', fontSize: '0.78rem', fontWeight: 600, padding: '0.3rem 0.8rem', borderRadius: 12, pointerEvents: 'none', whiteSpace: 'nowrap', marginTop: 8 }}>
+                    ✏ Draw mode — drag to draw, tap on a drawing to delete
                   </div>
                 )}
                 <div
@@ -1238,6 +1575,7 @@ export default function CampaignSessionPage() {
                       dragCol={drag?.tokenId === token.id ? drag.ghostCol : undefined}
                       dragRow={drag?.tokenId === token.id ? drag.ghostRow : undefined}
                       canMove={canMoveToken(token)}
+                      isTarget={targetIds.has(token.id)}
                       onPointerDown={wallMode ? undefined : (e) => handleTokenPointerDown(e, token)}
                     />
                   ))}
@@ -1260,6 +1598,72 @@ export default function CampaignSessionPage() {
                         <line x1={wallDrawStart.x} y1={wallDrawStart.y} x2={wallDrawEnd.x} y2={wallDrawEnd.y} stroke="#dd2222" strokeWidth={3} strokeLinecap="round" strokeDasharray="8 4" />
                       )}
                     </svg>
+                  )}
+                  {/* Drawings SVG — visible to all */}
+                  {imgSize.w > 0 && (drawings.length > 0 || activeDrawPath) && (
+                    <svg style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 9 }} width={imgSize.w} height={imgSize.h}>
+                      {drawings.map((d) => (
+                        <path key={d.id} d={pathToD(d.path)} stroke={d.color} strokeWidth={d.stroke_width} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                      ))}
+                      {activeDrawPath && activeDrawPath.length > 1 && (
+                        <path d={pathToD(activeDrawPath)} stroke={drawColor} strokeWidth={drawWidth} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.85} />
+                      )}
+                    </svg>
+                  )}
+                  {/* Drawing capture overlay — anyone in draw mode */}
+                  {drawMode && imgSize.w > 0 && (
+                    <div
+                      style={{ position: 'absolute', top: 0, left: 0, width: imgSize.w, height: imgSize.h, zIndex: 21, cursor: 'crosshair', touchAction: 'none' }}
+                      onPointerDown={handleDrawPointerDown}
+                      onPointerMove={handleDrawPointerMove}
+                      onPointerUp={handleDrawPointerUp}
+                    />
+                  )}
+                  {/* Templates SVG — visible to all */}
+                  {imgSize.w > 0 && (templates.length > 0 || (templateDrawStart && templateDrawEnd)) && activeMap && (
+                    <svg style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 9 }} width={imgSize.w} height={imgSize.h}>
+                      {templates.map((t) => renderTemplateShape(t, t.id))}
+                      {templates.map((t) => renderTemplateLabel(t, t.id, activeMap.grid_size))}
+                      {templateDrawStart && templateDrawEnd && renderTemplateShape({ shape: templateShape, origin_x: templateDrawStart.x, origin_y: templateDrawStart.y, end_x: templateDrawEnd.x, end_y: templateDrawEnd.y, color: templateColor }, 'preview', true)}
+                      {templateDrawStart && templateDrawEnd && renderTemplateLabel({ shape: templateShape, origin_x: templateDrawStart.x, origin_y: templateDrawStart.y, end_x: templateDrawEnd.x, end_y: templateDrawEnd.y, color: templateColor }, 'preview', activeMap.grid_size, true)}
+                    </svg>
+                  )}
+                  {/* Template drawing capture overlay — anyone in template mode */}
+                  {templateMode && imgSize.w > 0 && (
+                    <div
+                      style={{ position: 'absolute', top: 0, left: 0, width: imgSize.w, height: imgSize.h, zIndex: 21, cursor: 'crosshair', touchAction: 'none' }}
+                      onPointerDown={handleTemplatePointerDown}
+                      onPointerMove={handleTemplatePointerMove}
+                      onPointerUp={handleTemplatePointerUp}
+                    />
+                  )}
+                  {/* Measurement SVG — visible while dragging, anyone can use */}
+                  {imgSize.w > 0 && measureStart && measureEnd && activeMap && (() => {
+                    const dx = measureEnd.x - measureStart.x;
+                    const dy = measureEnd.y - measureStart.y;
+                    const distPx = Math.hypot(dx, dy);
+                    const distFt = Math.round((distPx / activeMap.grid_size) * 5);
+                    const midX = (measureStart.x + measureEnd.x) / 2;
+                    const midY = (measureStart.y + measureEnd.y) / 2;
+                    return (
+                      <svg style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 22 }} width={imgSize.w} height={imgSize.h}>
+                        <line x1={measureStart.x} y1={measureStart.y} x2={measureEnd.x} y2={measureEnd.y} stroke="#fff" strokeWidth={5} strokeLinecap="round" />
+                        <line x1={measureStart.x} y1={measureStart.y} x2={measureEnd.x} y2={measureEnd.y} stroke="#3399cc" strokeWidth={2.5} strokeLinecap="round" strokeDasharray="6 4" />
+                        <circle cx={measureStart.x} cy={measureStart.y} r={5} fill="#3399cc" stroke="#fff" strokeWidth={2} />
+                        <circle cx={measureEnd.x} cy={measureEnd.y} r={5} fill="#3399cc" stroke="#fff" strokeWidth={2} />
+                        <rect x={midX - 28} y={midY - 12} width={56} height={20} rx={4} fill="#3399cc" stroke="#fff" strokeWidth={1.5} />
+                        <text x={midX} y={midY + 4} textAnchor="middle" fill="#fff" fontSize="13" fontWeight="700" fontFamily="system-ui">{distFt} ft</text>
+                      </svg>
+                    );
+                  })()}
+                  {/* Measurement capture overlay */}
+                  {measureMode && imgSize.w > 0 && (
+                    <div
+                      style={{ position: 'absolute', top: 0, left: 0, width: imgSize.w, height: imgSize.h, zIndex: 22, cursor: 'crosshair', touchAction: 'none' }}
+                      onPointerDown={handleMeasurePointerDown}
+                      onPointerMove={handleMeasurePointerMove}
+                      onPointerUp={handleMeasurePointerUp}
+                    />
                   )}
                   {/* Wall drawing capture overlay — transparent div that sits on top in wall mode */}
                   {wallMode && imgSize.w > 0 && (
@@ -1286,21 +1690,34 @@ export default function CampaignSessionPage() {
         <div style={{ flex: 1, overflowY: 'auto' }}>
 
           {/* Initiative tracker — shown when active, at the top */}
-          {initiative.length > 0 && (
+          {initiative.entries.length > 0 && (
             <div style={{ borderBottom: '1px solid #eee' }}>
               <div onClick={() => toggleSection('initiative')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.6rem 1rem', cursor: 'pointer', background: '#fff8e8', userSelect: 'none' }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#776', textTransform: 'uppercase', letterSpacing: '0.05em' }}>⚔ Initiative</span>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#776', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  ⚔ Initiative
+                  {initiative.round > 0 && (
+                    <span style={{ marginLeft: '0.5rem', padding: '0.1rem 0.4rem', background: '#cc7700', color: '#fff', borderRadius: 3, fontSize: '0.68rem', letterSpacing: '0.02em' }}>
+                      Round {initiative.round}
+                    </span>
+                  )}
+                </span>
                 <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{collapsedSections.has('initiative') ? '▶' : '▼'}</span>
               </div>
               {!collapsedSections.has('initiative') && (
                 <div style={{ padding: '0.25rem 0.5rem 0.5rem' }}>
-                  {initiative.map((entry, idx) => {
+                  {initiative.entries.map((entry, idx) => {
                     const entryToken = entry.token_id ? tokens.find((t) => t.id === entry.token_id) : null;
                     const entryConditions = entryToken?.conditions ?? [];
                     const showPicker = initiativeConditionPicker === entry.id;
+                    const isCurrentTurn = initiative.current_id === entry.id;
                     return (
-                      <div key={entry.id} style={{ borderBottom: '1px solid #f5f5f5' }}>
+                      <div key={entry.id} style={{
+                        borderBottom: '1px solid #f5f5f5',
+                        background: isCurrentTurn ? '#fff4d0' : 'transparent',
+                        borderLeft: isCurrentTurn ? '3px solid #cc7700' : '3px solid transparent',
+                      }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0.25rem' }}>
+                          {isCurrentTurn && <span style={{ fontSize: '0.7rem', flexShrink: 0 }}>▶</span>}
                           <span style={{ fontSize: '0.68rem', color: '#bbb', width: 14, textAlign: 'right', flexShrink: 0 }}>{idx + 1}.</span>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.label}</div>
@@ -1374,9 +1791,17 @@ export default function CampaignSessionPage() {
                         <button onClick={() => setAddingInitiative(false)} style={{ padding: '0.2rem 0.35rem', fontSize: '0.72rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3 }}>✕</button>
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', gap: '0.35rem', padding: '0.4rem 0.25rem' }}>
-                        <button onClick={() => setAddingInitiative(true)} style={{ flex: 1, padding: '0.25rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3, background: '#fff' }}>+ Add</button>
-                        <button onClick={() => socket.emit('initiative:clear')} style={{ flex: 1, padding: '0.25rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>End Combat</button>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', padding: '0.4rem 0.25rem' }}>
+                        {initiative.round > 0 && (
+                          <button onClick={() => socket.emit('initiative:next_turn')} style={{ padding: '0.35rem', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: '1px solid #c70', borderRadius: 3, background: '#cc7700', color: '#fff' }}>Next Turn ▶</button>
+                        )}
+                        <div style={{ display: 'flex', gap: '0.35rem' }}>
+                          <button onClick={() => setAddingInitiative(true)} style={{ flex: 1, padding: '0.25rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3, background: '#fff' }}>+ Add</button>
+                          {initiative.round > 0 && (
+                            <button onClick={() => socket.emit('initiative:end_combat')} style={{ flex: 1, padding: '0.25rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3, background: '#fff', color: '#666' }}>End Combat</button>
+                          )}
+                          <button onClick={() => socket.emit('initiative:clear')} style={{ flex: 1, padding: '0.25rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>Clear</button>
+                        </div>
                       </div>
                     )
                   )}
@@ -1488,6 +1913,9 @@ export default function CampaignSessionPage() {
                           <div style={{ fontSize: '0.82rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.label}</div>
                           <div style={{ fontSize: '0.72rem', color: '#888' }}>{token.hp_current}/{token.hp_max} HP</div>
                         </div>
+                        <button onClick={() => setTokenHidden(token.id, !token.hidden).catch((e: Error) => setError(e.message))}
+                          title={token.hidden ? 'Hidden from players — click to reveal' : 'Visible to players — click to hide'}
+                          style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', cursor: 'pointer', border: `1px solid ${token.hidden ? '#888' : '#ddd'}`, borderRadius: 3, color: token.hidden ? '#fff' : '#666', background: token.hidden ? '#666' : '#fff' }}>👁</button>
                         <button onClick={() => handleRemoveToken(token.id)} style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>✕</button>
                       </div>
                     ))}
@@ -1516,6 +1944,9 @@ export default function CampaignSessionPage() {
                           <div style={{ fontSize: '0.82rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.label}</div>
                           <div style={{ fontSize: '0.72rem', color: '#888' }}>{token.hp_current}/{token.hp_max} HP</div>
                         </div>
+                        <button onClick={() => setTokenHidden(token.id, !token.hidden).catch((e: Error) => setError(e.message))}
+                          title={token.hidden ? 'Hidden from players — click to reveal' : 'Visible to players — click to hide'}
+                          style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', cursor: 'pointer', border: `1px solid ${token.hidden ? '#888' : '#ddd'}`, borderRadius: 3, color: token.hidden ? '#fff' : '#666', background: token.hidden ? '#666' : '#fff' }}>👁</button>
                         <button onClick={() => handleRemoveToken(token.id)} style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>✕</button>
                       </div>
                     ))}
@@ -1545,7 +1976,7 @@ export default function CampaignSessionPage() {
               <div style={{ height: 260, display: 'flex', flexDirection: 'column', borderTop: '1px solid #eee' }}>
                 <div ref={chatLogRef} style={{ flex: 1, overflowY: 'auto', padding: '0.5rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                   {messages.filter(m => m.type === 'chat').length === 0 && <div style={{ fontSize: '0.78rem', color: '#ccc', textAlign: 'center', marginTop: '0.5rem' }}>No messages yet.</div>}
-                  {messages.filter(m => m.type === 'chat').map((msg) => <ChatMsgItem key={msg.id} msg={msg} myUserId={user!.id} />)}
+                  {messages.filter(m => m.type === 'chat').map((msg) => <ChatMsgItem key={msg.id} msg={msg} myUserId={user!.id} targetCount={targetIds.size} onApply={applyToTargets} />)}
                 </div>
                 <div style={{ padding: '0.4rem 0.5rem', borderTop: '1px solid #eee', flexShrink: 0 }}>
                   <input
@@ -1590,6 +2021,7 @@ export default function CampaignSessionPage() {
                   }
                   const { label, expression, total, dice, modifier } = msg.data!;
                   const modStr = modifier !== 0 ? ` ${modifier > 0 ? '+' : ''}${modifier}` : '';
+                  const showApply = targetIds.size > 0;
                   return (
                     <div key={msg.id} style={{ padding: '0.35rem 0.6rem', borderBottom: '1px solid #333' }}>
                       <div style={{ fontSize: '0.68rem', color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1598,6 +2030,19 @@ export default function CampaignSessionPage() {
                       </div>
                       <div style={{ fontSize: '0.7rem', color: '#777' }}>[{dice.join(', ')}]{modStr}</div>
                       <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#eee' }}>= {total}</div>
+                      {showApply && (
+                        <div style={{ display: 'flex', gap: '0.2rem', marginTop: 4, flexWrap: 'wrap' }}>
+                          <button onClick={() => applyToTargets(total, 'damage')}
+                            title={`Apply ${total} damage to ${targetIds.size} target${targetIds.size > 1 ? 's' : ''}`}
+                            style={{ padding: '0.12rem 0.35rem', fontSize: '0.65rem', border: '1px solid #c44', borderRadius: 3, background: '#c44', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>−{total}</button>
+                          <button onClick={() => applyToTargets(total, 'half')}
+                            title={`Apply ${Math.floor(total / 2)} (half) damage`}
+                            style={{ padding: '0.12rem 0.35rem', fontSize: '0.65rem', border: '1px solid #a64', borderRadius: 3, background: '#3a2a1a', color: '#fa8', cursor: 'pointer', fontWeight: 600 }}>−½ ({Math.floor(total / 2)})</button>
+                          <button onClick={() => applyToTargets(total, 'heal')}
+                            title={`Heal ${total}`}
+                            style={{ padding: '0.12rem 0.35rem', fontSize: '0.65rem', border: '1px solid #4a4', borderRadius: 3, background: '#1a3a1a', color: '#8f8', cursor: 'pointer', fontWeight: 600 }}>+{total}</button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

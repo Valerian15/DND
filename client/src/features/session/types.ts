@@ -28,6 +28,7 @@ export interface TokenData {
   hp_visible: boolean;
   controlled_by: number[];
   conditions: string[];
+  hidden: boolean;
   monster_slug: string | null;
   created_at: number;
 }
@@ -77,6 +78,29 @@ export interface WallSegment {
   created_at: number;
 }
 
+export type TemplateShape = 'circle' | 'square' | 'cone' | 'line';
+
+export interface MapTemplate {
+  id: number;
+  map_id: number;
+  shape: TemplateShape;
+  origin_x: number;
+  origin_y: number;
+  end_x: number;
+  end_y: number;
+  color: string;
+  created_at: number;
+}
+
+export interface MapDrawing {
+  id: number;
+  map_id: number;
+  path: [number, number][];
+  color: string;
+  stroke_width: number;
+  created_at: number;
+}
+
 export interface ChatMessage {
   id: number;
   campaign_id: number;
@@ -95,6 +119,12 @@ export interface InitiativeEntry {
   label: string;
   initiative: number;
   dex_score: number;
+}
+
+export interface InitiativeState {
+  entries: InitiativeEntry[];
+  current_id: number | null;
+  round: number;
 }
 
 export interface TokenCategory {

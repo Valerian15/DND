@@ -40,6 +40,13 @@ export async function updateTokenConditions(id: number, conditions: string[]): P
   });
 }
 
+export async function setTokenHidden(id: number, hidden: boolean): Promise<{ token_id: number; hidden: boolean }> {
+  return apiFetch(`/tokens/${id}/hidden`, {
+    method: 'PATCH',
+    body: JSON.stringify({ hidden }),
+  });
+}
+
 export async function listCampaignNpcs(campaignId: number): Promise<CampaignNpc[]> {
   const res = await apiFetch<{ npcs: CampaignNpc[] }>(`/campaign-npcs?campaign_id=${campaignId}`);
   return res.npcs;
