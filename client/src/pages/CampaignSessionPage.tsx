@@ -2158,6 +2158,7 @@ export default function CampaignSessionPage() {
             effects={token?.effects ?? []}
             currentRound={initiative.round}
             selectedTargetIds={[...targetIds]}
+            combatAutomation={!!campaign.settings.combat_automation}
             onConditionsChange={(conditions) => handleTokenConditionsChange(panel.tokenId, conditions)}
             onTargetConditionsChange={(tid, conditions) => handleTokenConditionsChange(tid, conditions)}
             getTokenConditions={(tid) => tokens.find((t) => t.id === tid)?.conditions ?? []}

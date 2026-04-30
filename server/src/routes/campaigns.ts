@@ -21,9 +21,11 @@ interface CampaignRow {
 
 interface CampaignSettings {
   rolled_hp: boolean;
+  /** When true, the server auto-resolves saves/attacks and applies damage end-to-end. Default false (manual). */
+  combat_automation: boolean;
 }
 
-const DEFAULT_SETTINGS: CampaignSettings = { rolled_hp: false };
+const DEFAULT_SETTINGS: CampaignSettings = { rolled_hp: false, combat_automation: false };
 
 function hydrateSettings(raw: string): CampaignSettings {
   try {
@@ -227,6 +229,7 @@ router.patch('/:id', (req: AuthRequest, res) => {
     const merged: CampaignSettings = {
       ...hydrateSettings(row.settings),
       ...(typeof settings.rolled_hp === 'boolean' ? { rolled_hp: settings.rolled_hp } : {}),
+      ...(typeof settings.combat_automation === 'boolean' ? { combat_automation: settings.combat_automation } : {}),
     };
     sets.push('settings = ?');
     values.push(JSON.stringify(merged));

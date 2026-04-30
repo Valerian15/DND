@@ -22,6 +22,9 @@ interface NpcRow {
   saving_throws: string;
   attacks: string;
   traits: string;
+  resistances: string;
+  vulnerabilities: string;
+  immunities: string;
   notes: string;
   created_at: number;
 }
@@ -33,6 +36,9 @@ function hydrateNpc(row: NpcRow) {
     saving_throws: JSON.parse(row.saving_throws || '[]'),
     attacks: JSON.parse(row.attacks || '[]'),
     traits: JSON.parse(row.traits || '[]'),
+    resistances: JSON.parse(row.resistances || '[]'),
+    vulnerabilities: JSON.parse(row.vulnerabilities || '[]'),
+    immunities: JSON.parse(row.immunities || '[]'),
   };
 }
 
@@ -52,7 +58,7 @@ router.get('/', (req: AuthRequest, res) => {
 });
 
 router.post('/', (req: AuthRequest, res) => {
-  const { campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, notes } = req.body ?? {};
+  const { campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes } = req.body ?? {};
   const campaignId = Number(campaign_id);
   if (!campaignId) return res.status(400).json({ error: 'campaign_id required' });
   if (typeof label !== 'string' || !label.trim()) return res.status(400).json({ error: 'label required' });
@@ -70,12 +76,15 @@ router.post('/', (req: AuthRequest, res) => {
   const savesVal = Array.isArray(saving_throws) ? JSON.stringify(saving_throws.filter((s: unknown) => VALID_SAVES.includes(s as string))) : '[]';
   const attacksVal = Array.isArray(attacks) ? JSON.stringify(attacks) : '[]';
   const traitsVal = Array.isArray(traits) ? JSON.stringify(traits) : '[]';
+  const resVal = Array.isArray(resistances) ? JSON.stringify(resistances.filter((s: unknown): s is string => typeof s === 'string')) : '[]';
+  const vulnVal = Array.isArray(vulnerabilities) ? JSON.stringify(vulnerabilities.filter((s: unknown): s is string => typeof s === 'string')) : '[]';
+  const immVal = Array.isArray(immunities) ? JSON.stringify(immunities.filter((s: unknown): s is string => typeof s === 'string')) : '[]';
   const notesVal = typeof notes === 'string' ? notes.trim() : '';
   const portraitVal = typeof portrait_url === 'string' && portrait_url.trim() ? portrait_url.trim() : null;
 
   const info = db.prepare(
-    'INSERT INTO campaign_npcs (campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(campaignId, catId, label.trim(), portraitVal, sizeVal, hpVal, acVal, speedVal, abilitiesVal, savesVal, attacksVal, traitsVal, notesVal);
+    'INSERT INTO campaign_npcs (campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(campaignId, catId, label.trim(), portraitVal, sizeVal, hpVal, acVal, speedVal, abilitiesVal, savesVal, attacksVal, traitsVal, resVal, vulnVal, immVal, notesVal);
 
   const row = db.prepare('SELECT * FROM campaign_npcs WHERE id = ?').get(info.lastInsertRowid) as NpcRow;
   res.status(201).json({ npc: hydrateNpc(row) });
@@ -90,7 +99,7 @@ router.patch('/:id', (req: AuthRequest, res) => {
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   if (!isDmOrAdmin(req, campaign.dm_id)) return res.status(403).json({ error: 'DM access required' });
 
-  const { category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, notes } = req.body ?? {};
+  const { category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes } = req.body ?? {};
   const sets: string[] = [];
   const values: (string | number | null)[] = [];
 
@@ -105,6 +114,9 @@ router.patch('/:id', (req: AuthRequest, res) => {
   if (Array.isArray(saving_throws)) { sets.push('saving_throws = ?'); values.push(JSON.stringify(saving_throws.filter((s: unknown) => VALID_SAVES.includes(s as string)))); }
   if (Array.isArray(attacks)) { sets.push('attacks = ?'); values.push(JSON.stringify(attacks)); }
   if (Array.isArray(traits)) { sets.push('traits = ?'); values.push(JSON.stringify(traits)); }
+  if (Array.isArray(resistances)) { sets.push('resistances = ?'); values.push(JSON.stringify(resistances.filter((s: unknown): s is string => typeof s === 'string'))); }
+  if (Array.isArray(vulnerabilities)) { sets.push('vulnerabilities = ?'); values.push(JSON.stringify(vulnerabilities.filter((s: unknown): s is string => typeof s === 'string'))); }
+  if (Array.isArray(immunities)) { sets.push('immunities = ?'); values.push(JSON.stringify(immunities.filter((s: unknown): s is string => typeof s === 'string'))); }
   if (typeof notes === 'string') { sets.push('notes = ?'); values.push(notes.trim()); }
 
   if (!sets.length) return res.status(400).json({ error: 'No valid fields' });

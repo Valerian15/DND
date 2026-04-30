@@ -477,6 +477,14 @@ export function initSchema() {
   try { db.exec(`ALTER TABLE characters ADD COLUMN personality TEXT NOT NULL DEFAULT '{"traits":"","ideals":"","bonds":"","flaws":""}'`); } catch { /* exists */ }
   // Exhaustion level (5e: 0–6)
   try { db.exec('ALTER TABLE characters ADD COLUMN exhaustion_level INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  // Damage type modifiers — stored as JSON arrays of damage type strings.
+  // Library monsters already have these as text fields in their `data` JSON; PCs/NPCs need explicit columns.
+  try { db.exec("ALTER TABLE characters ADD COLUMN resistances TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE characters ADD COLUMN vulnerabilities TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE characters ADD COLUMN immunities TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN resistances TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN vulnerabilities TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN immunities TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
   // Active timed effects (Bless, Hunter's Mark, etc.) — stored on tokens (universal for PC/NPC/monster)
   try { db.exec("ALTER TABLE tokens ADD COLUMN effects TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
   // Legacy: previously added character.effects. Kept for compatibility but no longer used.

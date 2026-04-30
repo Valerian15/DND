@@ -18,6 +18,9 @@ export interface NpcFormData {
   saving_throws: string[];
   attacks: NpcAttack[];
   traits: NpcTrait[];
+  resistances: string[];
+  vulnerabilities: string[];
+  immunities: string[];
   notes: string;
 }
 
@@ -33,6 +36,9 @@ function formDataFromNpc(npc: CampaignNpc): NpcFormData {
     saving_throws: npc.saving_throws ?? [],
     attacks: npc.attacks ? npc.attacks.map((a) => ({ ...a })) : [],
     traits: npc.traits ? npc.traits.map((t) => ({ ...t })) : [],
+    resistances: npc.resistances ?? [],
+    vulnerabilities: npc.vulnerabilities ?? [],
+    immunities: npc.immunities ?? [],
     notes: npc.notes,
   };
 }
@@ -41,7 +47,9 @@ const EMPTY: NpcFormData = {
   label: '', size: 'medium', portrait_url: null,
   hp_max: 10, ac: 10, speed: '30 ft.',
   abilities: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
-  saving_throws: [], attacks: [], traits: [], notes: '',
+  saving_throws: [], attacks: [], traits: [],
+  resistances: [], vulnerabilities: [], immunities: [],
+  notes: '',
 };
 
 const EMPTY_ATTACK: NpcAttack = { name: '', to_hit: 0, damage: '1d6', damage_type: 'slashing' };
@@ -168,6 +176,40 @@ export function NpcForm({ initial, onSave, onCancel, submitting }: Props) {
           );
         })}
       </div>
+
+      {/* Damage modifiers */}
+      <div style={sectionHeadStyle}>Damage Modifiers</div>
+      <div style={{ fontSize: '0.7rem', color: '#888', marginTop: -8, marginBottom: 4 }}>
+        Half / double / zero damage of the chosen type. Used by combat automation.
+      </div>
+      {(['resistances', 'vulnerabilities', 'immunities'] as const).map((kind) => {
+        const labels = { resistances: 'Resistances (½×)', vulnerabilities: 'Vulnerabilities (2×)', immunities: 'Immunities (0×)' };
+        const colors = { resistances: '#3a8', vulnerabilities: '#c63', immunities: '#669' };
+        const selected = form[kind];
+        const toggle = (dt: string) => {
+          setForm((f) => ({ ...f, [kind]: f[kind].includes(dt) ? f[kind].filter((x) => x !== dt) : [...f[kind], dt] }));
+        };
+        return (
+          <div key={kind} style={{ marginBottom: '0.4rem' }}>
+            <div style={{ fontSize: '0.7rem', fontWeight: 600, color: colors[kind], marginBottom: 3 }}>{labels[kind]}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+              {DAMAGE_TYPES.map((dt) => {
+                const active = selected.includes(dt);
+                return (
+                  <button key={dt} type="button" onClick={() => toggle(dt)}
+                    style={{
+                      padding: '0.15rem 0.4rem', fontSize: '0.7rem',
+                      border: `1px solid ${active ? colors[kind] : '#ddd'}`,
+                      background: active ? colors[kind] : '#fff',
+                      color: active ? '#fff' : '#666', borderRadius: 3, cursor: 'pointer',
+                      textTransform: 'capitalize',
+                    }}>{dt}</button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
 
       {/* Attacks */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', ...{margin: '0.85rem 0 0.4rem'} }}>

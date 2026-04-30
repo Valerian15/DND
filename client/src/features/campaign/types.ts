@@ -1,5 +1,7 @@
 export interface CampaignSettings {
   rolled_hp: boolean;
+  /** When true, the server auto-resolves saves/attacks and applies damage end-to-end. */
+  combat_automation: boolean;
 }
 
 export interface CampaignMember {

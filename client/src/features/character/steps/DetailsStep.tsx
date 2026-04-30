@@ -13,6 +13,8 @@ const ALIGNMENTS = [
   'Unaligned',
 ];
 
+const DAMAGE_TYPES = ['acid', 'bludgeoning', 'cold', 'fire', 'force', 'lightning', 'necrotic', 'piercing', 'poison', 'psychic', 'radiant', 'slashing', 'thunder'];
+
 export default function DetailsStep({ character, onChange }: Props) {
   const desc = (character.description ?? {}) as Record<string, any>;
   const initialPersonality = character.personality ?? { traits: '', ideals: '', bonds: '', flaws: '' };
@@ -152,6 +154,41 @@ export default function DetailsStep({ character, onChange }: Props) {
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
         </Field>
       </div>
+
+      <h3 style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontSize: '1rem' }}>Damage Modifiers</h3>
+      <p style={{ color: '#666', fontSize: '0.85rem', margin: '0 0 1rem' }}>
+        Damage types your character resists, is vulnerable to, or is immune to. Used by combat automation to scale damage.
+        Most PCs leave these empty; tieflings start with fire resistance, dwarves with poison resistance, etc.
+      </p>
+      {(['resistances', 'vulnerabilities', 'immunities'] as const).map((kind) => {
+        const labels = { resistances: 'Resistances (½×)', vulnerabilities: 'Vulnerabilities (2×)', immunities: 'Immunities (0×)' };
+        const colors = { resistances: '#3a8', vulnerabilities: '#c63', immunities: '#669' };
+        const selected = (character[kind] ?? []) as string[];
+        const toggle = (dt: string) => {
+          const next = selected.includes(dt) ? selected.filter((x) => x !== dt) : [...selected, dt];
+          onChange({ [kind]: next } as Partial<Character>);
+        };
+        return (
+          <div key={kind} style={{ marginBottom: '0.75rem' }}>
+            <div style={{ fontSize: '0.85rem', fontWeight: 600, color: colors[kind], marginBottom: '0.3rem' }}>{labels[kind]}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {DAMAGE_TYPES.map((dt) => {
+                const active = selected.includes(dt);
+                return (
+                  <button key={dt} type="button" onClick={() => toggle(dt)}
+                    style={{
+                      padding: '0.2rem 0.5rem', fontSize: '0.8rem',
+                      border: `1px solid ${active ? colors[kind] : '#ddd'}`,
+                      background: active ? colors[kind] : '#fff',
+                      color: active ? '#fff' : '#666', borderRadius: 4, cursor: 'pointer',
+                      textTransform: 'capitalize',
+                    }}>{dt}</button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
 
       <button onClick={saveAll} style={{ marginTop: '1rem', padding: '0.75rem 1.5rem', cursor: 'pointer' }}>
         Save details

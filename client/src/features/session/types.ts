@@ -71,6 +71,9 @@ export interface CampaignNpc {
   saving_throws: string[];
   attacks: NpcAttack[];
   traits: NpcTrait[];
+  resistances: string[];
+  vulnerabilities: string[];
+  immunities: string[];
   notes: string;
   created_at: number;
 }

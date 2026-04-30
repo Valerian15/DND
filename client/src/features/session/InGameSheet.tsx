@@ -74,6 +74,8 @@ interface Props {
   effects: { name: string; rounds: number }[];
   currentRound: number;
   selectedTargetIds: number[];
+  /** When true, casting save-based damage spells routes to the server's auto-resolver. */
+  combatAutomation: boolean;
   onConditionsChange: (conditions: string[]) => Promise<void>;
   onTargetConditionsChange?: (tokenId: number, conditions: string[]) => void;
   getTokenConditions?: (tokenId: number) => string[];
@@ -99,7 +101,7 @@ function buildCastDice(baseDice: string, hl: string | undefined, baseLevel: numb
   return baseDice;
 }
 
-export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions, conditions, effects, currentRound, selectedTargetIds, onConditionsChange, onTargetConditionsChange, getTokenConditions, onClose }: Props) {
+export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions, conditions, effects, currentRound, selectedTargetIds, combatAutomation, onConditionsChange, onTargetConditionsChange, getTokenConditions, onClose }: Props) {
   const [character, setCharacter] = useState<Character | null>(null);
   const [loading, setLoading] = useState(true);
   const [hpCurrent, setHpCurrent] = useState(0);
@@ -975,6 +977,21 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                       attackLabel={formatModifier(attackBonus)} damageLabel={damageStr} damageType={w.damage_type}
                       extra={w.versatile_dice ? `${w.versatile_dice}${formatModifier(damageMod)} 2H` : undefined}
                       onRoll={() => {
+                        // AUTO MODE: server resolves attack vs target AC + damage on hit
+                        if (combatAutomation && selectedTargetIds.length > 0 && dmgExpr) {
+                          socket.emit('combat:resolve_attack', {
+                            caster_token_id: tokenId,
+                            target_token_ids: selectedTargetIds,
+                            attack_name: w.name,
+                            attack_bonus: attackBonus,
+                            damage_dice: dmgExpr,
+                            damage_type: w.damage_type,
+                            roll_mode: rollMode,
+                          });
+                          if (rollMode !== 'normal') setRollMode('normal');
+                          return;
+                        }
+                        // MANUAL MODE: existing behavior
                         rollInChat(`${w.name} — Attack`, atkExpr);
                         if (dmgExpr) setTimeout(() => rollInChat(`${w.name} — Damage`, dmgExpr), 80);
                       }} />
@@ -1307,6 +1324,12 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
           setConcentratingOn={setConcentratingOn}
           rollInChat={rollInChat}
           autoApplySpellEffects={autoApplySpellEffects}
+          combatAutomation={combatAutomation}
+          selectedTargetIds={selectedTargetIds}
+          casterTokenId={tokenId}
+          currentRound={currentRound}
+          rollMode={rollMode}
+          clearRollMode={() => setRollMode('normal')}
         />
       )}
     </SheetOverlay>
@@ -1349,9 +1372,15 @@ interface SpellsPageProps {
   setConcentratingOn: (s: string | null) => void;
   rollInChat: (label: string, expr: string) => void;
   autoApplySpellEffects: (slug: string, meta: SpellMeta) => void;
+  combatAutomation: boolean;
+  selectedTargetIds: number[];
+  casterTokenId: number;
+  currentRound: number;
+  rollMode: 'advantage' | 'normal' | 'disadvantage';
+  clearRollMode: () => void;
 }
 
-function SpellsPageContent({ character, config, spellMeta, preparedSlugs, preparedNonCantrips, maxPrepared, onToggle, saving, spellAtk, spellDc, slotsUsed, spellSlots, onSlotClick, conditions, onConditionsChange, concentratingOn: _concentratingOn, setConcentratingOn, rollInChat, autoApplySpellEffects }: SpellsPageProps) {
+function SpellsPageContent({ character, config, spellMeta, preparedSlugs, preparedNonCantrips, maxPrepared, onToggle, saving, spellAtk, spellDc, slotsUsed, spellSlots, onSlotClick, conditions, onConditionsChange, concentratingOn: _concentratingOn, setConcentratingOn, rollInChat, autoApplySpellEffects, combatAutomation, selectedTargetIds, casterTokenId, currentRound, rollMode, clearRollMode }: SpellsPageProps) {
   const [upcastPicker, setUpcastPicker] = useState<string | null>(null);
   const knownSlugs = character.spells_known as string[];
   const isPreparedModel = config.model !== 'known';
@@ -1462,6 +1491,108 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                   const performSpellRoll = async (castLevel: number) => {
                     const finalDice = baseDice ? buildCastDice(baseDice, meta!.higher_level, level, castLevel) : null;
                     const lvlSuffix = castLevel > level ? ` (${slotLabel(castLevel)})` : '';
+
+                    // ── AUTO MODE: Magic Missile (auto-hit, splittable across targets) ──
+                    if (combatAutomation && slug === 'magic-missile' && finalDice && selectedTargetIds.length > 0) {
+                      const dartCount = Math.max(3, castLevel + 2); // L1 = 3 darts, +1 per slot above
+                      socket.emit('combat:resolve_auto_hit', {
+                        caster_token_id: casterTokenId,
+                        target_token_ids: selectedTargetIds,
+                        attack_name: `${meta!.name}${lvlSuffix}`,
+                        hit_count: dartCount,
+                        damage_dice: finalDice,
+                        damage_type: parsed!.damageType ?? 'force',
+                      });
+                      setUpcastPicker(null);
+                      return;
+                    }
+
+                    // ── AUTO MODE: spell-attack damage spell with selected targets ──
+                    // Server rolls d20+spellAtk vs each target's AC; on hit, rolls damage; nat 20 = crit.
+                    const canAutoResolveAttack =
+                      combatAutomation
+                      && parsed!.mode === 'spell_attack'
+                      && finalDice
+                      && selectedTargetIds.length > 0;
+
+                    if (canAutoResolveAttack) {
+                      socket.emit('combat:resolve_attack', {
+                        caster_token_id: casterTokenId,
+                        target_token_ids: selectedTargetIds,
+                        attack_name: `${meta!.name}${lvlSuffix}`,
+                        attack_bonus: spellAtk,
+                        damage_dice: finalDice!,
+                        damage_type: parsed!.damageType ?? '',
+                        is_spell: true,
+                        roll_mode: rollMode,
+                      });
+                      if (rollMode !== 'normal') clearRollMode();
+                      if (meta?.concentration) {
+                        if (conditions.includes('concentration') && _concentratingOn) {
+                          socket.emit('chat:send', { body: `/action ${character.name} drops concentration on ${_concentratingOn}, now concentrating on ${meta.name}.` });
+                        }
+                        setConcentratingOn(meta.name);
+                        if (!conditions.includes('concentration')) {
+                          onConditionsChange([...conditions, 'concentration']).catch(() => { /* ignore */ });
+                        }
+                      }
+                      setUpcastPicker(null);
+                      return;
+                    }
+
+                    // ── AUTO MODE: save-based damage spell with selected targets ──
+                    // Server handles save rolls + per-target damage application + condition application.
+                    const canAutoResolve =
+                      combatAutomation
+                      && parsed!.mode === 'save'
+                      && finalDice
+                      && parsed!.saveAbility
+                      && selectedTargetIds.length > 0;
+
+                    if (canAutoResolve) {
+                      const conditionsOnFail = getSpellConditions(slug);
+                      // parseSpellForAttack returns the save ability as 3-letter UPPERCASE ("DEX");
+                      // the server expects lowercase 3-letter ('dex'). Normalize.
+                      const saveAbility = parsed!.saveAbility!.toLowerCase() as 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
+                      socket.emit('combat:resolve_spell', {
+                        caster_token_id: casterTokenId,
+                        target_token_ids: selectedTargetIds,
+                        spell_name: `${meta!.name}${lvlSuffix}`,
+                        save_ability: saveAbility,
+                        save_dc: spellDc,
+                        damage_dice: finalDice!,
+                        damage_type: parsed!.damageType ?? '',
+                        half_on_save: true, // most 5e save-based damage spells halve on save; per-spell overrides could come later
+                        conditions_on_fail: conditionsOnFail,
+                      });
+                      // Concentration + timer effect still apply client-side
+                      if (meta?.concentration) {
+                        if (conditions.includes('concentration') && _concentratingOn) {
+                          socket.emit('chat:send', { body: `/action ${character.name} drops concentration on ${_concentratingOn}, now concentrating on ${meta.name}.` });
+                        }
+                        setConcentratingOn(meta.name);
+                      }
+                      // Apply timer effect only — skip the manual condition application since the server did it per-target.
+                      const rounds = parseSpellDurationRounds(meta!.duration);
+                      if (rounds != null) {
+                        const inCombat = currentRound > 0;
+                        for (const id of selectedTargetIds) {
+                          if (inCombat) {
+                            socket.emit('token:effect_apply', { token_id: id, name: meta!.name, rounds });
+                          } else {
+                            socket.emit('token:effect_apply', { token_id: id, name: meta!.name, rounds: 1, indefinite: true });
+                          }
+                        }
+                      }
+                      // Caster gets concentration condition added for tracking (existing logic).
+                      if (meta?.concentration && !conditions.includes('concentration')) {
+                        onConditionsChange([...conditions, 'concentration']).catch(() => { /* ignore */ });
+                      }
+                      setUpcastPicker(null);
+                      return;
+                    }
+
+                    // ── MANUAL MODE (existing behavior) ──
                     if (parsed!.mode === 'spell_attack') {
                       rollInChat(`${meta!.name}${lvlSuffix} — Spell Attack`, `1d20${formatModifier(spellAtk)}`);
                       if (finalDice) setTimeout(() => rollInChat(`${meta!.name}${lvlSuffix} — Damage`, finalDice), 80);

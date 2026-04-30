@@ -100,6 +100,47 @@ interface ClientToServerEvents {
   'token:effect_adjust': (data: { token_id: number; name: string; delta: number }) => void;
   'token:conditions_set': (data: { token_id: number; conditions: string[] }) => void;
   'group:roll': (data: { kind: 'skill' | 'save' | 'ability'; key: string }) => void;
+  'combat:resolve_spell': (data: {
+    caster_token_id: number;
+    target_token_ids: number[];
+    spell_name: string;
+    save_ability: 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
+    save_dc: number;
+    damage_dice: string;
+    damage_type: string;
+    half_on_save: boolean;
+    /** Conditions to apply to targets that fail their save. */
+    conditions_on_fail?: string[];
+  }) => void;
+  /**
+   * Attack-vs-AC resolver — used for spell attacks (Fire Bolt etc.) AND weapon attacks.
+   * For each target: roll d20+attack_bonus vs AC. On hit: roll damage_dice. On nat 20: double the dice.
+   * If roll_mode is 'advantage' / 'disadvantage', the d20 roll is 2d20 pick high / low.
+   */
+  'combat:resolve_attack': (data: {
+    caster_token_id: number;
+    target_token_ids: number[];
+    attack_name: string;
+    attack_bonus: number;
+    damage_dice: string;
+    damage_type: string;
+    /** True for spell attacks (just affects chat label). */
+    is_spell?: boolean;
+    roll_mode?: 'advantage' | 'normal' | 'disadvantage';
+  }) => void;
+  /**
+   * Auto-hit damage resolver (Magic Missile and similar).
+   * `hit_count` instances of `damage_dice` are distributed round-robin across the targets.
+   * No attack roll, no save — every hit lands.
+   */
+  'combat:resolve_auto_hit': (data: {
+    caster_token_id: number;
+    target_token_ids: number[];
+    attack_name: string;
+    hit_count: number;
+    damage_dice: string;
+    damage_type: string;
+  }) => void;
 }
 
 interface SocketData {
@@ -197,6 +238,177 @@ function getNpcDex(token: { character_id: number | null; campaign_npc_id?: numbe
     }
   }
   return 10;
+}
+
+/**
+ * Roll a damage expression like "8d6", "1d8+3", "2d4+5".
+ * Returns the individual dice rolls, the flat modifier, and the total.
+ */
+function rollDiceExpression(expr: string): { rolls: number[]; modifier: number; total: number } {
+  const match = expr.replace(/\s+/g, '').match(/^(\d+)d(\d+)([+-]\d+)?$/i);
+  if (!match) return { rolls: [], modifier: 0, total: 0 };
+  const count = Math.min(50, Math.max(0, parseInt(match[1], 10)));
+  const sides = Math.max(1, parseInt(match[2], 10));
+  const mod = match[3] ? parseInt(match[3], 10) : 0;
+  const rolls: number[] = [];
+  let total = mod;
+  for (let i = 0; i < count; i++) {
+    const r = Math.floor(Math.random() * sides) + 1;
+    rolls.push(r);
+    total += r;
+  }
+  return { rolls, modifier: mod, total };
+}
+
+const ABILITY_FULL_NAME: Record<string, string> = {
+  str: 'strength', dex: 'dexterity', con: 'constitution',
+  int: 'intelligence', wis: 'wisdom', cha: 'charisma',
+};
+
+/**
+ * Compute the saving-throw modifier for any token (PC / library monster / campaign NPC).
+ * Falls back to 0 if data is missing.
+ */
+function computeSaveModForToken(
+  token: { character_id: number | null; monster_slug: string | null; campaign_npc_id: number | null },
+  ability: string,
+): number {
+  // PC
+  if (token.character_id) {
+    const c = db.prepare('SELECT level, abilities, saves FROM characters WHERE id = ?').get(token.character_id) as { level: number; abilities: string; saves: string } | undefined;
+    if (!c) return 0;
+    try {
+      const abil = JSON.parse(c.abilities) as Record<string, number>;
+      const saves = JSON.parse(c.saves) as Record<string, { proficient?: boolean }>;
+      const score = abil[ability] ?? 10;
+      const mod = Math.floor((score - 10) / 2);
+      const profBonus = Math.floor((c.level - 1) / 4) + 2;
+      return mod + (saves[ability]?.proficient ? profBonus : 0);
+    } catch { return 0; }
+  }
+  // Library monster: data has explicit `<ability>_save` field (or null) and ability scores
+  if (token.monster_slug) {
+    const m = db.prepare('SELECT data FROM monsters WHERE slug = ?').get(token.monster_slug) as { data: string } | undefined;
+    if (!m) return 0;
+    try {
+      const d = JSON.parse(m.data) as Record<string, unknown>;
+      const fullKey = ABILITY_FULL_NAME[ability];
+      const sb = d[`${fullKey}_save`];
+      if (typeof sb === 'number') return sb;
+      const score = typeof d[fullKey] === 'number' ? d[fullKey] as number : 10;
+      return Math.floor((score - 10) / 2);
+    } catch { return 0; }
+  }
+  // Campaign NPC: abilities + saving_throws array
+  if (token.campaign_npc_id) {
+    const n = db.prepare('SELECT abilities, saving_throws FROM campaign_npcs WHERE id = ?').get(token.campaign_npc_id) as { abilities: string; saving_throws: string } | undefined;
+    if (!n) return 0;
+    try {
+      const abil = JSON.parse(n.abilities) as Record<string, number>;
+      const profSaves = JSON.parse(n.saving_throws) as string[];
+      const score = abil[ability] ?? 10;
+      const mod = Math.floor((score - 10) / 2);
+      // NPC prof bonus is hardcoded +2 (matches NpcSheet display).
+      return mod + (profSaves.includes(ability) ? 2 : 0);
+    } catch { return 0; }
+  }
+  return 0;
+}
+
+/**
+ * Returns the damage modifier for a given damage type against a token:
+ *   2 = vulnerable (double), 1 = normal, 0.5 = resistant (half), 0 = immune.
+ * Library monsters use substring matching on their existing damage_resistances/vulnerabilities/immunities
+ * text fields. PCs and campaign NPCs use explicit JSON arrays of damage type names.
+ */
+function damageModifierForToken(
+  token: { character_id: number | null; monster_slug: string | null; campaign_npc_id: number | null },
+  damageType: string,
+): { multiplier: 0 | 0.5 | 1 | 2; label: '' | 'resisted' | 'vulnerable' | 'immune' } {
+  const dt = (damageType || '').toLowerCase().trim();
+  if (!dt) return { multiplier: 1, label: '' };
+
+  let resistances: string[] = [];
+  let vulnerabilities: string[] = [];
+  let immunities: string[] = [];
+
+  if (token.character_id) {
+    const c = db.prepare('SELECT resistances, vulnerabilities, immunities FROM characters WHERE id = ?').get(token.character_id) as { resistances: string; vulnerabilities: string; immunities: string } | undefined;
+    if (c) {
+      try { resistances = JSON.parse(c.resistances || '[]'); } catch { /* default */ }
+      try { vulnerabilities = JSON.parse(c.vulnerabilities || '[]'); } catch { /* default */ }
+      try { immunities = JSON.parse(c.immunities || '[]'); } catch { /* default */ }
+    }
+  } else if (token.monster_slug) {
+    const m = db.prepare('SELECT data FROM monsters WHERE slug = ?').get(token.monster_slug) as { data: string } | undefined;
+    if (m) {
+      try {
+        const d = JSON.parse(m.data) as { damage_resistances?: string; damage_vulnerabilities?: string; damage_immunities?: string };
+        // Open5e fields are comma/semicolon-separated text. Split + lowercase + trim. Substring qualifiers
+        // ("nonmagical attacks") aren't honored — caller takes the loose match.
+        const parse = (s: string | undefined) => (s ?? '').toLowerCase().split(/[,;]/).map((x) => x.trim()).filter(Boolean);
+        resistances = parse(d.damage_resistances);
+        vulnerabilities = parse(d.damage_vulnerabilities);
+        immunities = parse(d.damage_immunities);
+      } catch { /* default */ }
+    }
+  } else if (token.campaign_npc_id) {
+    const n = db.prepare('SELECT resistances, vulnerabilities, immunities FROM campaign_npcs WHERE id = ?').get(token.campaign_npc_id) as { resistances: string; vulnerabilities: string; immunities: string } | undefined;
+    if (n) {
+      try { resistances = JSON.parse(n.resistances || '[]'); } catch { /* default */ }
+      try { vulnerabilities = JSON.parse(n.vulnerabilities || '[]'); } catch { /* default */ }
+      try { immunities = JSON.parse(n.immunities || '[]'); } catch { /* default */ }
+    }
+  }
+
+  // Substring match — covers "fire" inside "fire damage from nonmagical sources" etc.
+  const has = (arr: string[]) => arr.some((entry) => entry.includes(dt));
+  if (has(immunities)) return { multiplier: 0, label: 'immune' };
+  if (has(resistances)) return { multiplier: 0.5, label: 'resisted' };
+  if (has(vulnerabilities)) return { multiplier: 2, label: 'vulnerable' };
+  return { multiplier: 1, label: '' };
+}
+
+/** Read the AC of any token (PC / library monster / campaign NPC). Defaults to 10 if missing. */
+function computeAcForToken(token: { character_id: number | null; monster_slug: string | null; campaign_npc_id: number | null }): number {
+  if (token.character_id) {
+    const c = db.prepare('SELECT ac FROM characters WHERE id = ?').get(token.character_id) as { ac: number } | undefined;
+    return c?.ac ?? 10;
+  }
+  if (token.monster_slug) {
+    const m = db.prepare('SELECT data FROM monsters WHERE slug = ?').get(token.monster_slug) as { data: string } | undefined;
+    if (!m) return 10;
+    try {
+      const d = JSON.parse(m.data) as { armor_class?: number };
+      return typeof d.armor_class === 'number' ? d.armor_class : 10;
+    } catch { return 10; }
+  }
+  if (token.campaign_npc_id) {
+    const n = db.prepare('SELECT ac FROM campaign_npcs WHERE id = ?').get(token.campaign_npc_id) as { ac: number } | undefined;
+    return n?.ac ?? 10;
+  }
+  return 10;
+}
+
+/**
+ * Roll damage as a crit: doubles the dice count, modifier unchanged.
+ * Example: "1d10+3" on crit → 2d10+3.
+ */
+function rollCritDamage(expr: string): { rolls: number[]; modifier: number; total: number } {
+  const match = expr.replace(/\s+/g, '').match(/^(\d+)d(\d+)([+-]\d+)?$/i);
+  if (!match) return { rolls: [], modifier: 0, total: 0 };
+  const baseCount = parseInt(match[1], 10);
+  const sides = Math.max(1, parseInt(match[2], 10));
+  const mod = match[3] ? parseInt(match[3], 10) : 0;
+  const count = Math.min(50, Math.max(0, baseCount * 2));
+  const rolls: number[] = [];
+  let total = mod;
+  for (let i = 0; i < count; i++) {
+    const r = Math.floor(Math.random() * sides) + 1;
+    rolls.push(r);
+    total += r;
+  }
+  return { rolls, modifier: mod, total };
 }
 
 function rollDice(expression: string): { dice: number[]; modifier: number; total: number; rollMode?: 'advantage' | 'disadvantage' } | null {
@@ -521,6 +733,44 @@ export function setupSession(io: AppServer) {
       return !!row;
     }
 
+    /**
+     * 5e concentration save triggered when a concentrating creature takes damage.
+     * DC = max(10, floor(damage/2)); on fail, remove the `concentration` condition.
+     * No-op if the token isn't concentrating or damage is zero.
+     */
+    function triggerConcentrationSave(cid: number, tokenId: number, damage: number) {
+      if (damage <= 0) return;
+      const token = db.prepare('SELECT id, label, conditions, character_id, monster_slug, campaign_npc_id FROM tokens WHERE id = ?')
+        .get(tokenId) as { id: number; label: string; conditions: string; character_id: number | null; monster_slug: string | null; campaign_npc_id: number | null } | undefined;
+      if (!token) return;
+      let conds: string[] = [];
+      try { conds = JSON.parse(token.conditions); } catch { return; }
+      if (!conds.includes('concentration')) return;
+
+      const dc = Math.max(10, Math.floor(damage / 2));
+      const conMod = computeSaveModForToken(token, 'con');
+      const roll = Math.floor(Math.random() * 20) + 1;
+      const total = roll + conMod;
+      const passed = total >= dc;
+
+      const expr = `1d20${conMod >= 0 ? '+' : ''}${conMod}`;
+      const label = `${token.label} — Concentration Save (DC ${dc}) ${passed ? '✓ held' : '✗ broken'}`;
+      const data = JSON.stringify({ expression: expr, dice: [roll], modifier: conMod, total, label });
+      const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
+      const r = insertChat.run(cid, user.id, user.username, `/roll ${expr}`, 'roll', data);
+      const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+      io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
+
+      if (!passed) {
+        const next = conds.filter((c) => c !== 'concentration');
+        db.prepare('UPDATE tokens SET conditions = ? WHERE id = ?').run(JSON.stringify(next), tokenId);
+        io.to(`campaign:${cid}`).emit('token:conditions_updated', { token_id: tokenId, conditions: next });
+        const ar = insertChat.run(cid, user.id, user.username, `/action ${token.label} loses concentration.`, 'action', null);
+        const arow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(ar.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(arow));
+      }
+    }
+
     function applyEffectMutation(tokenId: number, mutate: (arr: { name: string; rounds: number; indefinite?: boolean }[]) => { name: string; rounds: number; indefinite?: boolean }[]) {
       const cid = socket.data.campaign_id;
       if (cid == null) return;
@@ -639,6 +889,284 @@ export function setupSession(io: AppServer) {
         const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(res.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
       }
+    });
+
+    socket.on('combat:resolve_spell', ({ caster_token_id, target_token_ids, spell_name, save_ability, save_dc, damage_dice, damage_type, half_on_save, conditions_on_fail }) => {
+      const cid = socket.data.campaign_id;
+      if (cid == null) return;
+
+      // Gate: only resolve if combat automation is on for this campaign
+      const campRow = db.prepare('SELECT settings FROM campaigns WHERE id = ?').get(cid) as { settings: string } | undefined;
+      if (!campRow) return;
+      let settings: { combat_automation?: boolean } = {};
+      try { settings = JSON.parse(campRow.settings); } catch { /* default */ }
+      if (!settings.combat_automation) return;
+
+      // Validate caster is in this campaign
+      if (!tokenIsInCampaign(caster_token_id, cid)) return;
+      const validTargets = (target_token_ids ?? []).filter((id) => typeof id === 'number' && tokenIsInCampaign(id, cid));
+      if (validTargets.length === 0) return;
+      if (typeof spell_name !== 'string' || !spell_name.trim()) return;
+      if (!['str','dex','con','int','wis','cha'].includes(save_ability)) return;
+      if (!Number.isFinite(save_dc) || save_dc < 1 || save_dc > 40) return;
+      if (typeof damage_dice !== 'string' || !damage_dice.trim()) return;
+
+      const casterToken = db.prepare('SELECT label FROM tokens WHERE id = ?').get(caster_token_id) as { label: string } | undefined;
+      const casterName = casterToken?.label ?? 'Caster';
+
+      // Roll shared damage once (5e: AOE save spells share one damage roll across all targets)
+      const dmg = rollDiceExpression(damage_dice);
+      if (dmg.total === 0 && dmg.rolls.length === 0) return;
+
+      const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
+
+      // Post the damage roll once
+      {
+        const data = JSON.stringify({ expression: damage_dice, dice: dmg.rolls, modifier: dmg.modifier, total: dmg.total, label: `${spell_name} — ${damage_type || 'damage'}` });
+        const r = insertChat.run(cid, user.id, user.username, `/roll ${damage_dice}`, 'roll', data);
+        const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
+      }
+
+      // Cast announcement
+      {
+        const r = insertChat.run(cid, user.id, user.username, `/action ${casterName} casts ${spell_name} (DC ${save_dc} ${save_ability.toUpperCase()}).`, 'action', null);
+        const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
+      }
+
+      // Per-target: roll save, apply damage
+      const summaries: string[] = [];
+      for (const tid of validTargets) {
+        const target = db.prepare('SELECT id, label, hp_current, hp_max, character_id, monster_slug, campaign_npc_id FROM tokens WHERE id = ?').get(tid) as { id: number; label: string; hp_current: number; hp_max: number; character_id: number | null; monster_slug: string | null; campaign_npc_id: number | null } | undefined;
+        if (!target) continue;
+
+        const saveMod = computeSaveModForToken(target, save_ability);
+        const saveRoll = Math.floor(Math.random() * 20) + 1;
+        const saveTotal = saveRoll + saveMod;
+        const passed = saveTotal >= save_dc;
+        let damageDealt = passed ? (half_on_save ? Math.floor(dmg.total / 2) : 0) : dmg.total;
+        const dmgMod = damageModifierForToken(target, damage_type);
+        if (damageDealt > 0 && dmgMod.multiplier !== 1) {
+          damageDealt = Math.floor(damageDealt * dmgMod.multiplier);
+        }
+
+        // Post the save roll
+        const saveExpr = `1d20${saveMod >= 0 ? '+' : ''}${saveMod}`;
+        const saveLabel = `${target.label} — ${save_ability.toUpperCase()} Save (DC ${save_dc}) ${passed ? '✓ saved' : '✗ failed'}`;
+        const saveData = JSON.stringify({ expression: saveExpr, dice: [saveRoll], modifier: saveMod, total: saveTotal, label: saveLabel });
+        const sr = insertChat.run(cid, user.id, user.username, `/roll ${saveExpr}`, 'roll', saveData);
+        const saveRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(sr.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(saveRow));
+
+        // Apply damage
+        if (damageDealt > 0) {
+          const newHp = Math.max(0, target.hp_current - damageDealt);
+          db.prepare('UPDATE tokens SET hp_current = ? WHERE id = ?').run(newHp, tid);
+          io.to(`campaign:${cid}`).emit('token:hp_updated', { token_id: tid, hp_current: newHp });
+          triggerConcentrationSave(cid, tid, damageDealt);
+        }
+
+        // Apply curated conditions only to targets that failed their save
+        if (!passed && Array.isArray(conditions_on_fail) && conditions_on_fail.length > 0) {
+          const validConds = conditions_on_fail.filter((c) => typeof c === 'string' && VALID_CONDITIONS.has(c));
+          if (validConds.length > 0) {
+            const tokRow = db.prepare('SELECT conditions FROM tokens WHERE id = ?').get(tid) as { conditions: string } | undefined;
+            let existing: string[] = [];
+            try { existing = JSON.parse(tokRow?.conditions ?? '[]'); } catch { /* ignore */ }
+            const merged = Array.from(new Set([...existing, ...validConds]));
+            db.prepare('UPDATE tokens SET conditions = ? WHERE id = ?').run(JSON.stringify(merged), tid);
+            io.to(`campaign:${cid}`).emit('token:conditions_updated', { token_id: tid, conditions: merged });
+          }
+        }
+
+        const modSuffix = dmgMod.label ? ` (${dmgMod.label})` : '';
+        summaries.push(`${target.label}: ${passed ? '✓' : '✗'} ${damageDealt}${modSuffix}`);
+      }
+
+      // Final summary action
+      const summaryText = `${casterName}'s ${spell_name}: ${summaries.join(' · ')}`;
+      const sumRes = insertChat.run(cid, user.id, user.username, `/action ${summaryText}`, 'action', null);
+      const sumRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(sumRes.lastInsertRowid) as ChatMessageRow;
+      io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(sumRow));
+    });
+
+    socket.on('combat:resolve_attack', ({ caster_token_id, target_token_ids, attack_name, attack_bonus, damage_dice, damage_type, is_spell, roll_mode }) => {
+      const cid = socket.data.campaign_id;
+      if (cid == null) return;
+
+      // Gate: combat automation must be on
+      const campRow = db.prepare('SELECT settings FROM campaigns WHERE id = ?').get(cid) as { settings: string } | undefined;
+      if (!campRow) return;
+      let settings: { combat_automation?: boolean } = {};
+      try { settings = JSON.parse(campRow.settings); } catch { /* default */ }
+      if (!settings.combat_automation) return;
+
+      if (!tokenIsInCampaign(caster_token_id, cid)) return;
+      const validTargets = (target_token_ids ?? []).filter((id) => typeof id === 'number' && tokenIsInCampaign(id, cid));
+      if (validTargets.length === 0) return;
+      if (typeof attack_name !== 'string' || !attack_name.trim()) return;
+      if (!Number.isFinite(attack_bonus)) return;
+      if (typeof damage_dice !== 'string' || !damage_dice.trim()) return;
+
+      const casterToken = db.prepare('SELECT label FROM tokens WHERE id = ?').get(caster_token_id) as { label: string } | undefined;
+      const casterName = casterToken?.label ?? 'Caster';
+      const verb = is_spell ? 'casts' : 'attacks with';
+
+      const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
+
+      // Cast announcement
+      {
+        const r = insertChat.run(cid, user.id, user.username, `/action ${casterName} ${verb} ${attack_name}.`, 'action', null);
+        const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
+      }
+
+      // Per-target: roll attack vs AC, on hit roll damage (with crit on nat 20)
+      const summaries: string[] = [];
+      for (const tid of validTargets) {
+        const target = db.prepare('SELECT id, label, hp_current, hp_max, character_id, monster_slug, campaign_npc_id FROM tokens WHERE id = ?').get(tid) as { id: number; label: string; hp_current: number; hp_max: number; character_id: number | null; monster_slug: string | null; campaign_npc_id: number | null } | undefined;
+        if (!target) continue;
+
+        const ac = computeAcForToken(target);
+        // Advantage / disadvantage: roll 2d20 and pick high/low. Normal: roll 1d20.
+        const isAdv = roll_mode === 'advantage';
+        const isDis = roll_mode === 'disadvantage';
+        const r1 = Math.floor(Math.random() * 20) + 1;
+        const r2 = (isAdv || isDis) ? Math.floor(Math.random() * 20) + 1 : null;
+        const atkRoll = r2 === null ? r1 : (isAdv ? Math.max(r1, r2) : Math.min(r1, r2));
+        const dicePosted = r2 === null ? [r1] : [r1, r2, atkRoll]; // chat client treats [a,b,chosen] as adv/dis display
+        const isCrit = atkRoll === 20;
+        const isFumble = atkRoll === 1;
+        const atkTotal = atkRoll + attack_bonus;
+        const hits = isCrit || (!isFumble && atkTotal >= ac);
+
+        // Post the attack roll
+        const advSuffix = isAdv ? 'adv' : isDis ? 'dis' : '';
+        const atkExpr = `1d20${advSuffix}${attack_bonus >= 0 ? '+' : ''}${attack_bonus}`;
+        const hitLabel = isCrit ? '★ CRIT' : isFumble ? '✗ fumble' : hits ? `✓ hit (AC ${ac})` : `✗ miss (AC ${ac})`;
+        const rollModeForData = isAdv ? 'advantage' : isDis ? 'disadvantage' : undefined;
+        const atkData = JSON.stringify({ expression: atkExpr, dice: dicePosted, modifier: attack_bonus, total: atkTotal, label: `${target.label} — ${attack_name} ${hitLabel}`, rollMode: rollModeForData });
+        const ar = insertChat.run(cid, user.id, user.username, `/roll ${atkExpr}`, 'roll', atkData);
+        const atkRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(ar.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(atkRow));
+
+        if (!hits) {
+          summaries.push(`${target.label}: ${isCrit ? 'CRIT' : 'miss'}`);
+          continue;
+        }
+
+        // Damage roll (with crit doubling dice)
+        const dmg = isCrit ? rollCritDamage(damage_dice) : rollDiceExpression(damage_dice);
+        const dmgMod = damageModifierForToken(target, damage_type);
+        const adjustedTotal = dmgMod.multiplier === 1 ? dmg.total : Math.floor(dmg.total * dmgMod.multiplier);
+        const modSuffix = dmgMod.label ? ` (${dmgMod.label})` : '';
+        const dmgLabel = `${target.label} — ${attack_name} ${damage_type || 'damage'}${isCrit ? ' (crit!)' : ''}${modSuffix}`;
+        const dmgData = JSON.stringify({ expression: damage_dice, dice: dmg.rolls, modifier: dmg.modifier, total: adjustedTotal, label: dmgLabel });
+        const dr = insertChat.run(cid, user.id, user.username, `/roll ${damage_dice}`, 'roll', dmgData);
+        const dmgRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(dr.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(dmgRow));
+
+        if (adjustedTotal > 0) {
+          const newHp = Math.max(0, target.hp_current - adjustedTotal);
+          db.prepare('UPDATE tokens SET hp_current = ? WHERE id = ?').run(newHp, tid);
+          io.to(`campaign:${cid}`).emit('token:hp_updated', { token_id: tid, hp_current: newHp });
+          triggerConcentrationSave(cid, tid, adjustedTotal);
+        }
+        summaries.push(`${target.label}: ${isCrit ? '★ CRIT' : '✓'} ${adjustedTotal}${modSuffix}`);
+      }
+
+      // Final summary
+      const summaryText = `${casterName}'s ${attack_name}: ${summaries.join(' · ')}`;
+      const sumRes = insertChat.run(cid, user.id, user.username, `/action ${summaryText}`, 'action', null);
+      const sumRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(sumRes.lastInsertRowid) as ChatMessageRow;
+      io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(sumRow));
+    });
+
+    socket.on('combat:resolve_auto_hit', ({ caster_token_id, target_token_ids, attack_name, hit_count, damage_dice, damage_type }) => {
+      const cid = socket.data.campaign_id;
+      if (cid == null) return;
+
+      const campRow = db.prepare('SELECT settings FROM campaigns WHERE id = ?').get(cid) as { settings: string } | undefined;
+      if (!campRow) return;
+      let settings: { combat_automation?: boolean } = {};
+      try { settings = JSON.parse(campRow.settings); } catch { /* default */ }
+      if (!settings.combat_automation) return;
+
+      if (!tokenIsInCampaign(caster_token_id, cid)) return;
+      const validTargets = (target_token_ids ?? []).filter((id) => typeof id === 'number' && tokenIsInCampaign(id, cid));
+      if (validTargets.length === 0) return;
+      if (typeof attack_name !== 'string' || !attack_name.trim()) return;
+      if (!Number.isFinite(hit_count) || hit_count < 1) return;
+      if (typeof damage_dice !== 'string' || !damage_dice.trim()) return;
+
+      // Parse the per-hit damage dice once (e.g. "1d4+1" → count 1, sides 4, mod 1)
+      const m = damage_dice.replace(/\s+/g, '').match(/^(\d+)d(\d+)([+-]\d+)?$/i);
+      if (!m) return;
+      const baseCount = parseInt(m[1], 10);
+      const sides = Math.max(1, parseInt(m[2], 10));
+      const baseMod = m[3] ? parseInt(m[3], 10) : 0;
+      const totalHits = Math.min(20, Math.max(1, Math.floor(hit_count)));
+
+      const casterToken = db.prepare('SELECT label FROM tokens WHERE id = ?').get(caster_token_id) as { label: string } | undefined;
+      const casterName = casterToken?.label ?? 'Caster';
+
+      // Distribute hits round-robin across the targets
+      const hitsPerTarget = new Array(validTargets.length).fill(0);
+      for (let i = 0; i < totalHits; i++) {
+        hitsPerTarget[i % validTargets.length]++;
+      }
+
+      const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
+
+      // Cast announcement
+      {
+        const r = insertChat.run(cid, user.id, user.username, `/action ${casterName} casts ${attack_name} (${totalHits} hits).`, 'action', null);
+        const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
+      }
+
+      const summaries: string[] = [];
+      for (let i = 0; i < validTargets.length; i++) {
+        const tid = validTargets[i];
+        const hits = hitsPerTarget[i];
+        if (hits === 0) continue;
+        const target = db.prepare('SELECT id, label, hp_current, character_id, monster_slug, campaign_npc_id FROM tokens WHERE id = ?').get(tid) as { id: number; label: string; hp_current: number; character_id: number | null; monster_slug: string | null; campaign_npc_id: number | null } | undefined;
+        if (!target) continue;
+
+        // Roll N copies of the per-hit dice expression as a single multi-dice roll
+        const rollCount = baseCount * hits;
+        const totalMod = baseMod * hits;
+        const rolls: number[] = [];
+        let dmgTotal = totalMod;
+        for (let j = 0; j < rollCount; j++) {
+          const r = Math.floor(Math.random() * sides) + 1;
+          rolls.push(r);
+          dmgTotal += r;
+        }
+
+        const dmgMod = damageModifierForToken(target, damage_type);
+        const adjustedDmg = dmgMod.multiplier === 1 ? dmgTotal : Math.floor(dmgTotal * dmgMod.multiplier);
+        const modSuffix = dmgMod.label ? ` (${dmgMod.label})` : '';
+
+        const expr = `${rollCount}d${sides}${totalMod !== 0 ? (totalMod > 0 ? '+' + totalMod : totalMod) : ''}`;
+        const dmgLabel = `${target.label} — ${attack_name} (${hits} hit${hits > 1 ? 's' : ''}) ${damage_type || 'damage'}${modSuffix}`;
+        const dmgData = JSON.stringify({ expression: expr, dice: rolls, modifier: totalMod, total: adjustedDmg, label: dmgLabel });
+        const dr = insertChat.run(cid, user.id, user.username, `/roll ${expr}`, 'roll', dmgData);
+        const dmgRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(dr.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(dmgRow));
+
+        const newHp = Math.max(0, target.hp_current - adjustedDmg);
+        db.prepare('UPDATE tokens SET hp_current = ? WHERE id = ?').run(newHp, tid);
+        io.to(`campaign:${cid}`).emit('token:hp_updated', { token_id: tid, hp_current: newHp });
+        triggerConcentrationSave(cid, tid, adjustedDmg);
+        summaries.push(`${target.label}: ${hits}× → ${adjustedDmg}${modSuffix}`);
+      }
+
+      const summaryText = `${casterName}'s ${attack_name}: ${summaries.join(' · ')}`;
+      const sumRes = insertChat.run(cid, user.id, user.username, `/action ${summaryText}`, 'action', null);
+      const sumRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(sumRes.lastInsertRowid) as ChatMessageRow;
+      io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(sumRow));
     });
 
     socket.on('disconnect', () => {

@@ -23,6 +23,7 @@ export default function CampaignDetailPage() {
   const [editName, setEditName] = useState('');
   const [editDesc, setEditDesc] = useState('');
   const [editRolledHp, setEditRolledHp] = useState(false);
+  const [editAutomation, setEditAutomation] = useState(false);
   const [saving, setSaving] = useState(false);
   const [codeCopied, setCodeCopied] = useState(false);
 
@@ -44,6 +45,7 @@ export default function CampaignDetailPage() {
         setEditName(c.name);
         setEditDesc(c.description);
         setEditRolledHp(c.settings.rolled_hp);
+        setEditAutomation(c.settings.combat_automation ?? false);
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -71,7 +73,7 @@ export default function CampaignDetailPage() {
       const updated = await updateCampaign(campaign.id, {
         name: editName,
         description: editDesc,
-        settings: { rolled_hp: editRolledHp },
+        settings: { rolled_hp: editRolledHp, combat_automation: editAutomation },
       });
       setCampaign((prev) => ({ ...updated, members: prev?.members }));
       setShowEdit(false);
@@ -128,6 +130,9 @@ export default function CampaignDetailPage() {
         saving_throws: data.saving_throws,
         attacks: data.attacks,
         traits: data.traits,
+        resistances: data.resistances,
+        vulnerabilities: data.vulnerabilities,
+        immunities: data.immunities,
         portrait_url: data.portrait_url,
         notes: data.notes,
       });
@@ -152,6 +157,9 @@ export default function CampaignDetailPage() {
         saving_throws: data.saving_throws,
         attacks: data.attacks,
         traits: data.traits,
+        resistances: data.resistances,
+        vulnerabilities: data.vulnerabilities,
+        immunities: data.immunities,
         portrait_url: data.portrait_url,
         notes: data.notes,
       });
@@ -238,6 +246,7 @@ export default function CampaignDetailPage() {
         {campaign.description && <p style={{ margin: '0 0 1rem', color: '#444' }}>{campaign.description}</p>}
         <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', fontSize: '0.9rem', color: '#555' }}>
           <span>HP on level-up: <strong>{campaign.settings.rolled_hp ? 'Rolled' : 'Fixed average'}</strong></span>
+          <span>Combat: <strong>{campaign.settings.combat_automation ? 'Automatic' : 'Manual'}</strong></span>
         </div>
         {isDmOrAdmin && (
           <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -248,7 +257,7 @@ export default function CampaignDetailPage() {
               </button>
             </div>
             <button
-              onClick={() => { setShowEdit(!showEdit); setEditName(campaign.name); setEditDesc(campaign.description); setEditRolledHp(campaign.settings.rolled_hp); }}
+              onClick={() => { setShowEdit(!showEdit); setEditName(campaign.name); setEditDesc(campaign.description); setEditRolledHp(campaign.settings.rolled_hp); setEditAutomation(campaign.settings.combat_automation ?? false); }}
               style={{ padding: '0.4rem 0.75rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
             >
               Edit
@@ -279,6 +288,17 @@ export default function CampaignDetailPage() {
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
               <input type="checkbox" checked={editRolledHp} onChange={(e) => setEditRolledHp(e.target.checked)} />
               Roll HP on level-up (instead of fixed average)
+            </label>
+          </div>
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={editAutomation} onChange={(e) => setEditAutomation(e.target.checked)} />
+              <span>
+                <strong>Combat automation</strong>
+                <span style={{ fontSize: '0.85rem', color: '#666', display: 'block', marginTop: '0.15rem' }}>
+                  When enabled, casting damage spells with selected targets auto-rolls each target's save and applies damage end-to-end. Otherwise the dice-log apply buttons are used.
+                </span>
+              </span>
             </label>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>

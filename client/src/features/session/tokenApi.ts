@@ -65,6 +65,9 @@ export async function createCampaignNpc(body: {
   saving_throws?: string[];
   attacks?: NpcAttack[];
   traits?: NpcTrait[];
+  resistances?: string[];
+  vulnerabilities?: string[];
+  immunities?: string[];
   notes?: string;
 }): Promise<CampaignNpc> {
   const res = await apiFetch<{ npc: CampaignNpc }>('/campaign-npcs', {
@@ -86,6 +89,9 @@ export async function updateCampaignNpc(id: number, body: {
   saving_throws?: string[];
   attacks?: NpcAttack[];
   traits?: NpcTrait[];
+  resistances?: string[];
+  vulnerabilities?: string[];
+  immunities?: string[];
   notes?: string;
 }): Promise<CampaignNpc> {
   const res = await apiFetch<{ npc: CampaignNpc }>(`/campaign-npcs/${id}`, {

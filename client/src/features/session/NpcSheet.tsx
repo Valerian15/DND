@@ -207,6 +207,23 @@ export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, effects = [], onHpCha
           </div>
         </Section>
 
+        {/* Defenses (damage modifiers) */}
+        {((npc.resistances ?? []).length > 0 || (npc.vulnerabilities ?? []).length > 0 || (npc.immunities ?? []).length > 0) && (
+          <Section title="Defenses">
+            <div style={{ fontSize: '0.78rem', color: '#444', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              {(npc.vulnerabilities ?? []).length > 0 && (
+                <div><strong style={{ color: '#c63' }}>Vulnerabilities:</strong> {npc.vulnerabilities.join(', ')}</div>
+              )}
+              {(npc.resistances ?? []).length > 0 && (
+                <div><strong style={{ color: '#3a8' }}>Resistances:</strong> {npc.resistances.join(', ')}</div>
+              )}
+              {(npc.immunities ?? []).length > 0 && (
+                <div><strong style={{ color: '#669' }}>Dmg Immunities:</strong> {npc.immunities.join(', ')}</div>
+              )}
+            </div>
+          </Section>
+        )}
+
         {/* Attacks */}
         {(npc.attacks ?? []).length > 0 && (
           <Section title="Attacks">

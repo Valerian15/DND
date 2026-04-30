@@ -86,6 +86,10 @@ export interface Character {
   inspiration: number;
   exhaustion_level: number;
   effects: TimedEffect[];
+  /** Damage types this character has resistance/vulnerability/immunity to (lowercase, e.g. ['fire','cold']). */
+  resistances: string[];
+  vulnerabilities: string[];
+  immunities: string[];
   created_at: number;
   updated_at: number;
 }
