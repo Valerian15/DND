@@ -109,16 +109,51 @@ interface TokenOnMapProps {
   dragRow?: number;
   canMove: boolean;
   isTarget?: boolean;
+  viewerIsDm: boolean;
+  /** Viewer's own PC token on this map, used to compute hover-tooltip distance for players. */
+  viewerToken?: { col: number; row: number } | null;
   onPointerDown?: (e: React.PointerEvent) => void;
 }
 
-function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, isTarget, onPointerDown }: TokenOnMapProps) {
+const SIZE_LABELS: Record<string, string> = {
+  tiny: 'Tiny', small: 'Small', medium: 'Medium', large: 'Large', huge: 'Huge', gargantuan: 'Gargantuan',
+};
+
+function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, isTarget, viewerIsDm, viewerToken, onPointerDown }: TokenOnMapProps) {
+  const [hovered, setHovered] = useState(false);
   const displayCol = isDragging && dragCol !== undefined ? dragCol : token.col;
   const displayRow = isDragging && dragRow !== undefined ? dragRow : token.row;
   const { left, top, size } = tokenPixelPos({ col: displayCol, row: displayRow, size: token.size }, map);
   const hp = token.hp_max > 0 ? Math.max(0, Math.min(1, token.hp_current / token.hp_max)) : 0;
   const hpColor = hp > 0.5 ? '#4a4' : hp > 0.25 ? '#aa4' : '#a44';
   const activeConditions = token.conditions ?? [];
+
+  // Hover tooltip: DM/admin sees name + HP numbers + full condition list. Players see name + HP
+  // for PC tokens (party members are openly known); for NPC/monster tokens they see only the name
+  // plus a narrative bloodied hint, size, and 5e-grid distance from their own token.
+  const isPcToken = token.token_type === 'pc';
+  const showStatsInTooltip = viewerIsDm || isPcToken;
+
+  // Bloodied / wounded narrative cue — no exact numbers leaked.
+  const bloodiedHint =
+    !showStatsInTooltip && token.hp_max > 0 && token.hp_current > 0
+      ? hp <= 0.25 ? { text: 'Bloodied', color: '#ff7070' }
+      : hp <= 0.5 ? { text: 'Wounded', color: '#e0b060' }
+      : null
+      : null;
+  const isDown = !showStatsInTooltip && token.hp_max > 0 && token.hp_current === 0;
+
+  // Distance from viewer's own token to this one, in 5-ft squares (Chebyshev / king's-move, 5e style).
+  const distanceFt =
+    !showStatsInTooltip && viewerToken && viewerToken !== null
+      ? Math.max(Math.abs(token.col - viewerToken.col), Math.abs(token.row - viewerToken.row)) * 5
+      : null;
+
+  // Aura ring (visible to all). Radius is in feet — convert to image pixels using map.grid_size (5 ft per cell).
+  const auraRadiusPx = token.aura_radius && map.grid_size > 0
+    ? (token.aura_radius / 5) * map.grid_size
+    : null;
+  const auraColor = token.aura_color ?? '#ffd86b';
 
   return (
     <div
@@ -133,7 +168,24 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, isTarge
         borderRadius: '50%',
       }}
       onPointerDown={onPointerDown}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
+      {auraRadiusPx && auraRadiusPx > 0 && (
+        <div style={{
+          position: 'absolute',
+          left: size / 2 - auraRadiusPx,
+          top: size / 2 - auraRadiusPx,
+          width: auraRadiusPx * 2,
+          height: auraRadiusPx * 2,
+          borderRadius: '50%',
+          background: auraColor,
+          opacity: 0.18,
+          border: `2px solid ${auraColor}`,
+          pointerEvents: 'none',
+          zIndex: 0,
+        }} />
+      )}
       {token.portrait_url ? (
         <img src={token.portrait_url} alt={token.label} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%', border: '2px solid #fff', boxSizing: 'border-box', display: 'block' }} draggable={false} />
       ) : (
@@ -172,6 +224,39 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, isTarge
               )}
             </div>
           ))}
+        </div>
+      )}
+      {/* Hover tooltip */}
+      {hovered && !isDragging && (
+        <div style={{
+          position: 'absolute', left: '100%', top: 0, marginLeft: 8,
+          background: 'rgba(20,18,16,0.94)', color: '#fff', fontSize: 11, lineHeight: 1.4,
+          padding: '0.4rem 0.55rem', borderRadius: 5, whiteSpace: 'nowrap',
+          pointerEvents: 'none', zIndex: 30, minWidth: 90, boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+        }}>
+          <div style={{ fontWeight: 700, marginBottom: showStatsInTooltip || bloodiedHint || isDown || distanceFt !== null ? 3 : 0 }}>{token.label}</div>
+          {showStatsInTooltip && token.hp_max > 0 && (
+            <div style={{ fontSize: 10, color: '#ddd' }}>
+              HP <span style={{ color: hpColor, fontWeight: 700 }}>{token.hp_current}</span> / {token.hp_max}
+            </div>
+          )}
+          {showStatsInTooltip && activeConditions.length > 0 && (
+            <div style={{ fontSize: 10, color: '#cbb', marginTop: 2, textTransform: 'capitalize' }}>{activeConditions.join(', ')}</div>
+          )}
+          {/* Player view of an enemy token: narrative cue + size + distance, no numbers. */}
+          {!showStatsInTooltip && (
+            <div style={{ fontSize: 10, color: '#bbb' }}>
+              {(bloodiedHint || isDown) && (
+                <div style={{ color: isDown ? '#ff5050' : bloodiedHint!.color, fontWeight: 700, fontStyle: 'italic' }}>
+                  {isDown ? 'Down' : bloodiedHint!.text}
+                </div>
+              )}
+              <div style={{ marginTop: bloodiedHint || isDown ? 1 : 0 }}>
+                {SIZE_LABELS[token.size] ?? token.size}
+                {distanceFt !== null && <span style={{ color: '#888' }}> · {distanceFt} ft</span>}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -373,13 +458,17 @@ function FolderTree({ folders, maps, activeMapId, parentId, expandedFolders, ren
   );
 }
 
-function ChatMsgItem({ msg, myUserId, targetCount, onApply }: { msg: ChatMessage; myUserId: number; targetCount: number; onApply?: (amount: number, mode: 'damage' | 'half' | 'heal') => void }) {
+function ChatMsgItem({ msg, myUserId, targetCount, isDmOrAdmin, onApply }: { msg: ChatMessage; myUserId: number; targetCount: number; isDmOrAdmin: boolean; onApply?: (amount: number, mode: 'damage' | 'half' | 'heal') => void }) {
   const isMe = msg.user_id === myUserId;
   if (msg.type === 'roll' && msg.data) {
-    const { expression, dice, modifier, total, label, rollMode } = msg.data;
+    const { expression, dice = [], modifier = 0, total = 0, label, rollMode, target_token_id, prev_hp, undone } = msg.data;
     const modStr = modifier !== 0 ? ` ${modifier > 0 ? '+' : ''}${modifier}` : '';
     const isAdvDis = rollMode && dice.length === 3;
     const chosen = isAdvDis ? dice[2] : null;
+    // Undo button: visible to DM/admin only when the server attached target_token_id + prev_hp.
+    // Stays for ~10 minutes so old rolls don't accumulate live buttons.
+    const ageMinutes = (Date.now() / 1000 - msg.created_at) / 60;
+    const canUndo = isDmOrAdmin && target_token_id != null && prev_hp != null && !undone && ageMinutes < 10;
     let diceDisplay: React.ReactNode;
     if (isAdvDis) {
       diceDisplay = (
@@ -396,10 +485,18 @@ function ChatMsgItem({ msg, myUserId, targetCount, onApply }: { msg: ChatMessage
     }
     const showApply = targetCount > 0 && onApply;
     return (
-      <div style={{ background: '#f5f0e8', border: '1px solid #e4d5b8', borderRadius: 5, padding: '0.35rem 0.5rem' }}>
+      <div style={{ background: '#f5f0e8', border: '1px solid #e4d5b8', borderRadius: 5, padding: '0.35rem 0.5rem', position: 'relative', opacity: undone ? 0.5 : 1 }}>
         <div style={{ fontSize: '0.7rem', color: '#886', fontWeight: 600, marginBottom: 2 }}>
           {msg.username}{label ? <span style={{ color: '#a86' }}> — {label}</span> : <span> rolled {expression}</span>}
           {rollMode && <span style={{ marginLeft: 4, fontSize: '0.65rem', color: rollMode === 'advantage' ? '#2a6' : '#a24', fontWeight: 700 }}>{rollMode === 'advantage' ? 'ADV' : 'DIS'}</span>}
+          {canUndo && (
+            <button onClick={() => socket.emit('combat:undo_hp', { message_id: msg.id })}
+              title={`Restore HP to ${prev_hp}`}
+              style={{ float: 'right', padding: '0 0.35rem', fontSize: '0.65rem', border: '1px solid #d8c898', borderRadius: 3, background: '#fffbef', cursor: 'pointer', color: '#7a5500', fontWeight: 700 }}>
+              ↶ undo
+            </button>
+          )}
+          {undone && <span style={{ float: 'right', fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>↶ undone</span>}
         </div>
         {label && <div style={{ fontSize: '0.7rem', color: '#999', marginBottom: 2 }}>{expression}</div>}
         <div style={{ fontSize: '0.78rem', color: '#666' }}>{diceDisplay}{modStr}</div>
@@ -417,10 +514,76 @@ function ChatMsgItem({ msg, myUserId, targetCount, onApply }: { msg: ChatMessage
       </div>
     );
   }
+  if (msg.type === 'whisper') {
+    const toName = msg.data?.whisper?.to_name ?? '?';
+    return (
+      <div style={{ background: '#f3edff', border: '1px solid #d6c7f3', borderRadius: 5, padding: '0.3rem 0.5rem' }}>
+        <div style={{ fontSize: '0.68rem', color: '#7355aa', fontWeight: 600, marginBottom: 2 }}>
+          🔒 {isMe ? `whisper to ${toName}` : `whisper from ${msg.username}`}
+        </div>
+        <div style={{ fontSize: '0.78rem', color: '#3d2870', fontStyle: 'italic' }}>{msg.body}</div>
+      </div>
+    );
+  }
   return (
     <div>
       <span style={{ fontSize: '0.72rem', fontWeight: 600, color: isMe ? '#4a8' : '#668' }}>{msg.username}: </span>
       <span style={{ fontSize: '0.78rem', color: '#333' }}>{msg.body}</span>
+    </div>
+  );
+}
+
+// Italic scene-tag banner under the top bar. Shows the current map's scene_tag.
+// DM/admin can edit inline; saves on blur or Enter, cancels on Escape.
+function SceneBanner({ map, canEdit, onSave }: { map: MapData; canEdit: boolean; onSave: (next: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(map.scene_tag ?? '');
+  // Reset draft whenever the active map's scene_tag changes externally
+  useEffect(() => { setDraft(map.scene_tag ?? ''); }, [map.id, map.scene_tag]);
+
+  if (editing && canEdit) {
+    const commit = async () => {
+      const next = draft.trim();
+      if (next !== (map.scene_tag ?? '')) await onSave(next);
+      setEditing(false);
+    };
+    return (
+      <div style={{ padding: '0.35rem 1.25rem', background: '#1f1c18', color: '#e9d8b8', borderBottom: '1px solid #3a342b', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commit(); }
+            else if (e.key === 'Escape') { setDraft(map.scene_tag ?? ''); setEditing(false); }
+          }}
+          maxLength={280}
+          placeholder="Scene description (e.g. 🌧️ Stormy night, the wizard's tower hums with arcane energy.)"
+          style={{ flex: 1, padding: '0.25rem 0.45rem', borderRadius: 3, border: '1px solid #4d4538', background: '#2a261f', color: '#f5e7c8', fontSize: '0.82rem', fontStyle: 'italic', outline: 'none' }}
+        />
+        <span style={{ fontSize: '0.65rem', color: '#88795c' }}>Enter to save · Esc to cancel</span>
+      </div>
+    );
+  }
+
+  // Not editing — show the line, or a faint "click to set" prompt for DM with empty tag
+  const text = map.scene_tag?.trim();
+  return (
+    <div
+      onClick={canEdit ? () => setEditing(true) : undefined}
+      style={{
+        padding: '0.35rem 1.25rem', background: '#1f1c18', color: '#e9d8b8',
+        borderBottom: '1px solid #3a342b', fontSize: '0.85rem', fontStyle: 'italic',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        cursor: canEdit ? 'text' : 'default',
+      }}>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: text ? '#e9d8b8' : '#7a6c50' }}>
+        {text || (canEdit ? 'Click to set the scene…' : '')}
+      </span>
+      {canEdit && (
+        <span title="Edit scene description" style={{ fontSize: '0.7rem', color: '#88795c', flexShrink: 0, marginLeft: '0.5rem' }}>✏</span>
+      )}
     </div>
   );
 }
@@ -539,7 +702,7 @@ export default function CampaignSessionPage() {
   const [monsterLibrary, setMonsterLibrary] = useState<MonsterListItem[]>([]);
   const [encounterEntries, setEncounterEntries] = useState<EncounterEntry[]>([]);
 
-  const { online, connected, activeMap, setActiveMap, tokens, messages, initiative, walls, templates, drawings, fogVisible, fogExplored } = useSession(Number(id));
+  const { online, connected, activeMap, setActiveMap, tokens, messages, initiative, walls, templates, drawings, fogVisible, fogExplored, pings } = useSession(Number(id));
   const isDmOrAdmin = campaign ? (campaign.dm_id === user!.id || user!.role === 'admin') : false;
   const previewMap: MapData | null = activeMap
     ? { ...activeMap, grid_size: gridSize, grid_offset_x: gridOffsetX, grid_offset_y: gridOffsetY }
@@ -634,6 +797,18 @@ export default function CampaignSessionPage() {
     if (!body) return;
     socket.emit('chat:send', { body });
     setChatInput('');
+  }
+
+  // Alt-click on the map → emit a ping at that point. Server colors it per-user.
+  function handleMapPointerDown(e: React.PointerEvent) {
+    if (!e.altKey || !activeMap) return;
+    // Don't ping while in a special mode — those have their own overlays.
+    if (wallMode || templateMode || measureMode || drawMode) return;
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / zoom;
+    const y = (e.clientY - rect.top) / zoom;
+    socket.emit('session:ping', { x, y });
   }
 
   function commitInitiativeEdit(id: number) {
@@ -1006,6 +1181,14 @@ export default function CampaignSessionPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: 'system-ui' }}>
+      {/* Animations used by ephemeral overlay layers (map pings, etc) */}
+      <style>{`
+        @keyframes dnd-ping {
+          0% { transform: scale(0.4); opacity: 1; }
+          70% { transform: scale(1.6); opacity: 0.6; }
+          100% { transform: scale(2.2); opacity: 0; }
+        }
+      `}</style>
 
       {/* Top bar */}
       <div style={{ padding: '0.6rem 1.25rem', background: '#fff', borderBottom: '1px solid #ddd', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, gap: '1rem' }}>
@@ -1106,6 +1289,21 @@ export default function CampaignSessionPage() {
           {error}
           <button onClick={() => setError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'crimson' }}>✕</button>
         </div>
+      )}
+
+      {/* Scene tag banner — italic atmospheric line for the active map. DM can edit inline. */}
+      {activeMap && (activeMap.scene_tag || isDmOrAdmin) && (
+        <SceneBanner
+          map={activeMap}
+          canEdit={isDmOrAdmin}
+          onSave={async (next) => {
+            try {
+              const updated = await updateMap(activeMap.id, { scene_tag: next });
+              setActiveMap(updated);
+              setMaps((prev) => prev.map((m) => m.id === updated.id ? updated : m));
+            } catch (e) { setError((e as Error).message); }
+          }}
+        />
       )}
 
       {/* Main area */}
@@ -1648,6 +1846,7 @@ export default function CampaignSessionPage() {
                   style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', position: 'absolute', top: 0, left: 0 }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={handleMapDrop}
+                  onPointerDown={handleMapPointerDown}
                 >
                   <img
                     key={previewMap.id}
@@ -1659,19 +1858,28 @@ export default function CampaignSessionPage() {
                     draggable={false}
                   />
                   {imgSize.w > 0 && <GridOverlay map={previewMap} width={imgSize.w} height={imgSize.h} color={gridColor} bold={gridBold} />}
-                  {tokens.map((token) => (
-                    <TokenOnMap
-                      key={token.id}
-                      token={token}
-                      map={previewMap}
-                      isDragging={drag?.tokenId === token.id}
-                      dragCol={drag?.tokenId === token.id ? drag.ghostCol : undefined}
-                      dragRow={drag?.tokenId === token.id ? drag.ghostRow : undefined}
-                      canMove={canMoveToken(token)}
-                      isTarget={targetIds.has(token.id)}
-                      onPointerDown={wallMode ? undefined : (e) => handleTokenPointerDown(e, token)}
-                    />
-                  ))}
+                  {(() => {
+                    // Find the viewer's own PC token on this map (used for hover-tooltip distance).
+                    const viewerToken = tokens.find((t) =>
+                      t.token_type === 'pc' && campaign?.members?.some((m) => m.character_id === t.character_id && m.owner_id === user!.id)
+                    );
+                    const viewerPos = viewerToken ? { col: viewerToken.col, row: viewerToken.row } : null;
+                    return tokens.map((token) => (
+                      <TokenOnMap
+                        key={token.id}
+                        token={token}
+                        map={previewMap}
+                        isDragging={drag?.tokenId === token.id}
+                        dragCol={drag?.tokenId === token.id ? drag.ghostCol : undefined}
+                        dragRow={drag?.tokenId === token.id ? drag.ghostRow : undefined}
+                        canMove={canMoveToken(token)}
+                        isTarget={targetIds.has(token.id)}
+                        viewerIsDm={isDmOrAdmin}
+                        viewerToken={viewerPos}
+                        onPointerDown={wallMode ? undefined : (e) => handleTokenPointerDown(e, token)}
+                      />
+                    ));
+                  })()}
                   {/* Fog of war canvas — players only */}
                   {!isDmOrAdmin && (
                     <canvas
@@ -1766,6 +1974,17 @@ export default function CampaignSessionPage() {
                       onPointerMove={handleWallPointerMove}
                       onPointerUp={handleWallPointerUp}
                     />
+                  )}
+                  {/* Map pings — pulsing colored rings that fade after 2s. Pointer-events none so they don't block clicks. */}
+                  {pings.length > 0 && (
+                    <svg style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 25 }} width={imgSize.w} height={imgSize.h}>
+                      {pings.map((p) => (
+                        <g key={p.id} style={{ transformOrigin: `${p.x}px ${p.y}px`, animation: 'dnd-ping 2s ease-out forwards' }}>
+                          <circle cx={p.x} cy={p.y} r={28} fill="none" stroke={p.color} strokeWidth={4} opacity={0.9} />
+                          <circle cx={p.x} cy={p.y} r={6} fill={p.color} opacity={0.95} />
+                        </g>
+                      ))}
+                    </svg>
                   )}
                 </div>
               </div>
@@ -2068,15 +2287,15 @@ export default function CampaignSessionPage() {
             {chatOpen && (
               <div style={{ height: 260, display: 'flex', flexDirection: 'column', borderTop: '1px solid #eee' }}>
                 <div ref={chatLogRef} style={{ flex: 1, overflowY: 'auto', padding: '0.5rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                  {messages.filter(m => m.type === 'chat').length === 0 && <div style={{ fontSize: '0.78rem', color: '#ccc', textAlign: 'center', marginTop: '0.5rem' }}>No messages yet.</div>}
-                  {messages.filter(m => m.type === 'chat').map((msg) => <ChatMsgItem key={msg.id} msg={msg} myUserId={user!.id} targetCount={targetIds.size} onApply={applyToTargets} />)}
+                  {messages.filter(m => m.type === 'chat' || m.type === 'whisper').length === 0 && <div style={{ fontSize: '0.78rem', color: '#ccc', textAlign: 'center', marginTop: '0.5rem' }}>No messages yet.</div>}
+                  {messages.filter(m => m.type === 'chat' || m.type === 'whisper').map((msg) => <ChatMsgItem key={msg.id} msg={msg} myUserId={user!.id} targetCount={targetIds.size} isDmOrAdmin={isDmOrAdmin} onApply={applyToTargets} />)}
                 </div>
                 <div style={{ padding: '0.4rem 0.5rem', borderTop: '1px solid #eee', flexShrink: 0 }}>
                   <input
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') sendChat(); }}
-                    placeholder="Message or /roll 1d20+5"
+                    placeholder="Message, /roll 1d20+5, or /w Name secret"
                     style={{ width: '100%', padding: '0.38rem 0.5rem', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.8rem', boxSizing: 'border-box', outline: 'none' }}
                   />
                 </div>
@@ -2112,16 +2331,38 @@ export default function CampaignSessionPage() {
                       </div>
                     );
                   }
-                  const { label, expression, total, dice, modifier } = msg.data!;
+                  const { label, expression, total = 0, dice = [], modifier = 0, rollMode, target_token_id, prev_hp, undone } = msg.data!;
                   const modStr = modifier !== 0 ? ` ${modifier > 0 ? '+' : ''}${modifier}` : '';
+                  const isAdvDis = rollMode && dice.length === 3;
                   const showApply = targetIds.size > 0;
+                  const ageMin = (Date.now() / 1000 - msg.created_at) / 60;
+                  const canUndo = isDmOrAdmin && target_token_id != null && prev_hp != null && !undone && ageMin < 10;
                   return (
-                    <div key={msg.id} style={{ padding: '0.35rem 0.6rem', borderBottom: '1px solid #333' }}>
+                    <div key={msg.id} style={{ padding: '0.35rem 0.6rem', borderBottom: '1px solid #333', opacity: undone ? 0.45 : 1 }}>
                       <div style={{ fontSize: '0.68rem', color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         <span style={{ color: '#7ac' }}>{msg.username}</span>
                         {label ? <span style={{ color: '#ca8' }}> — {label}</span> : <span style={{ color: '#888' }}> · {expression}</span>}
+                        {rollMode && <span style={{ marginLeft: 4, fontSize: '0.6rem', color: rollMode === 'advantage' ? '#7d7' : '#d77', fontWeight: 700 }}>{rollMode === 'advantage' ? 'ADV' : 'DIS'}</span>}
+                        {canUndo && (
+                          <button onClick={() => socket.emit('combat:undo_hp', { message_id: msg.id })}
+                            title={`Restore HP to ${prev_hp}`}
+                            style={{ float: 'right', padding: '0 0.3rem', fontSize: '0.6rem', border: '1px solid #886040', borderRadius: 3, background: '#3a2a18', cursor: 'pointer', color: '#f0d090', fontWeight: 700 }}>
+                            ↶
+                          </button>
+                        )}
+                        {undone && <span style={{ float: 'right', fontSize: '0.6rem', color: '#777', fontStyle: 'italic' }}>undone</span>}
                       </div>
-                      <div style={{ fontSize: '0.7rem', color: '#777' }}>[{dice.join(', ')}]{modStr}</div>
+                      <div style={{ fontSize: '0.7rem', color: '#777' }}>
+                        {isAdvDis ? (
+                          <>[{[dice[0], dice[1]].map((d, i) => (
+                            <span key={i} style={{ color: d === dice[2] ? '#eee' : '#666', fontWeight: d === dice[2] ? 700 : 400, textDecoration: d !== dice[2] ? 'line-through' : undefined }}>
+                              {i > 0 ? ', ' : ''}{d}
+                            </span>
+                          ))}]{modStr}</>
+                        ) : (
+                          <>[{dice.join(', ')}]{modStr}</>
+                        )}
+                      </div>
                       <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#eee' }}>= {total}</div>
                       {showApply && (
                         <div style={{ display: 'flex', gap: '0.2rem', marginTop: 4, flexWrap: 'wrap' }}>
@@ -2159,6 +2400,8 @@ export default function CampaignSessionPage() {
             currentRound={initiative.round}
             selectedTargetIds={[...targetIds]}
             combatAutomation={!!campaign.settings.combat_automation}
+            auraRadius={token?.aura_radius ?? null}
+            auraColor={token?.aura_color ?? null}
             onConditionsChange={(conditions) => handleTokenConditionsChange(panel.tokenId, conditions)}
             onTargetConditionsChange={(tid, conditions) => handleTokenConditionsChange(tid, conditions)}
             getTokenConditions={(tid) => tokens.find((t) => t.id === tid)?.conditions ?? []}
@@ -2177,6 +2420,8 @@ export default function CampaignSessionPage() {
             hpCurrent={panel.hp}
             hpMax={panel.hpMax}
             effects={tok?.effects ?? []}
+            auraRadius={tok?.aura_radius ?? null}
+            auraColor={tok?.aura_color ?? null}
             onHpChange={(hp) => {
               if (panel.encounterUid) {
                 setEncounterEntries((prev) => prev.map((e) => e.uid === panel.encounterUid ? { ...e, hp_current: hp } : e));
@@ -2200,6 +2445,8 @@ export default function CampaignSessionPage() {
             hpCurrent={panel.hp}
             hpMax={panel.hpMax}
             effects={tok?.effects ?? []}
+            auraRadius={tok?.aura_radius ?? null}
+            auraColor={tok?.aura_color ?? null}
             onHpChange={(hp) => setPanel((p) => p?.type === 'npc' ? { ...p, hp } : p)}
             onClose={() => setPanel(null)}
           />

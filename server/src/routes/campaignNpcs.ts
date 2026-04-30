@@ -26,11 +26,13 @@ interface NpcRow {
   vulnerabilities: string;
   immunities: string;
   notes: string;
+  dm_notes: string;
   created_at: number;
 }
 
-function hydrateNpc(row: NpcRow) {
-  return {
+// Hydrate NPC. dm_notes is stripped for non-DM/non-admin viewers.
+function hydrateNpc(row: NpcRow, viewerIsDm: boolean) {
+  const out: Record<string, unknown> = {
     ...row,
     abilities: JSON.parse(row.abilities || '{"str":10,"dex":10,"con":10,"int":10,"wis":10,"cha":10}'),
     saving_throws: JSON.parse(row.saving_throws || '[]'),
@@ -40,6 +42,8 @@ function hydrateNpc(row: NpcRow) {
     vulnerabilities: JSON.parse(row.vulnerabilities || '[]'),
     immunities: JSON.parse(row.immunities || '[]'),
   };
+  if (!viewerIsDm) delete out.dm_notes;
+  return out;
 }
 
 function getDm(campaignId: number): { dm_id: number } | undefined {
@@ -53,12 +57,14 @@ function isDmOrAdmin(req: AuthRequest, dmId: number) {
 router.get('/', (req: AuthRequest, res) => {
   const campaignId = Number(req.query.campaign_id);
   if (!campaignId) return res.status(400).json({ error: 'campaign_id required' });
+  const campaign = getDm(campaignId);
+  const viewerIsDm = !!campaign && isDmOrAdmin(req, campaign.dm_id);
   const rows = db.prepare('SELECT * FROM campaign_npcs WHERE campaign_id = ? ORDER BY label ASC').all(campaignId) as NpcRow[];
-  res.json({ npcs: rows.map(hydrateNpc) });
+  res.json({ npcs: rows.map((r) => hydrateNpc(r, viewerIsDm)) });
 });
 
 router.post('/', (req: AuthRequest, res) => {
-  const { campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes } = req.body ?? {};
+  const { campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes, dm_notes } = req.body ?? {};
   const campaignId = Number(campaign_id);
   if (!campaignId) return res.status(400).json({ error: 'campaign_id required' });
   if (typeof label !== 'string' || !label.trim()) return res.status(400).json({ error: 'label required' });
@@ -80,14 +86,15 @@ router.post('/', (req: AuthRequest, res) => {
   const vulnVal = Array.isArray(vulnerabilities) ? JSON.stringify(vulnerabilities.filter((s: unknown): s is string => typeof s === 'string')) : '[]';
   const immVal = Array.isArray(immunities) ? JSON.stringify(immunities.filter((s: unknown): s is string => typeof s === 'string')) : '[]';
   const notesVal = typeof notes === 'string' ? notes.trim() : '';
+  const dmNotesVal = typeof dm_notes === 'string' ? dm_notes.trim() : '';
   const portraitVal = typeof portrait_url === 'string' && portrait_url.trim() ? portrait_url.trim() : null;
 
   const info = db.prepare(
-    'INSERT INTO campaign_npcs (campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(campaignId, catId, label.trim(), portraitVal, sizeVal, hpVal, acVal, speedVal, abilitiesVal, savesVal, attacksVal, traitsVal, resVal, vulnVal, immVal, notesVal);
+    'INSERT INTO campaign_npcs (campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes, dm_notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(campaignId, catId, label.trim(), portraitVal, sizeVal, hpVal, acVal, speedVal, abilitiesVal, savesVal, attacksVal, traitsVal, resVal, vulnVal, immVal, notesVal, dmNotesVal);
 
   const row = db.prepare('SELECT * FROM campaign_npcs WHERE id = ?').get(info.lastInsertRowid) as NpcRow;
-  res.status(201).json({ npc: hydrateNpc(row) });
+  res.status(201).json({ npc: hydrateNpc(row, true) });
 });
 
 router.patch('/:id', (req: AuthRequest, res) => {
@@ -99,7 +106,7 @@ router.patch('/:id', (req: AuthRequest, res) => {
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   if (!isDmOrAdmin(req, campaign.dm_id)) return res.status(403).json({ error: 'DM access required' });
 
-  const { category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes } = req.body ?? {};
+  const { category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes, dm_notes } = req.body ?? {};
   const sets: string[] = [];
   const values: (string | number | null)[] = [];
 
@@ -118,13 +125,14 @@ router.patch('/:id', (req: AuthRequest, res) => {
   if (Array.isArray(vulnerabilities)) { sets.push('vulnerabilities = ?'); values.push(JSON.stringify(vulnerabilities.filter((s: unknown): s is string => typeof s === 'string'))); }
   if (Array.isArray(immunities)) { sets.push('immunities = ?'); values.push(JSON.stringify(immunities.filter((s: unknown): s is string => typeof s === 'string'))); }
   if (typeof notes === 'string') { sets.push('notes = ?'); values.push(notes.trim()); }
+  if (typeof dm_notes === 'string') { sets.push('dm_notes = ?'); values.push(dm_notes.trim()); }
 
   if (!sets.length) return res.status(400).json({ error: 'No valid fields' });
   values.push(id);
   db.prepare(`UPDATE campaign_npcs SET ${sets.join(', ')} WHERE id = ?`).run(...values);
 
   const updated = db.prepare('SELECT * FROM campaign_npcs WHERE id = ?').get(id) as NpcRow;
-  res.json({ npc: hydrateNpc(updated) });
+  res.json({ npc: hydrateNpc(updated, true) });
 });
 
 router.delete('/:id', (req: AuthRequest, res) => {

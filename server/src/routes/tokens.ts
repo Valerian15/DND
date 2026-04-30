@@ -27,6 +27,8 @@ export interface TokenRow {
   conditions: string;
   hidden: number;
   effects: string;
+  aura_radius: number | null;
+  aura_color: string | null;
   created_at: number;
 }
 
@@ -43,6 +45,8 @@ export interface HydratedToken extends Omit<TokenRow, 'hp_visible' | 'controlled
   hidden: boolean;
   effects: TimedEffect[];
   monster_slug: string | null;
+  aura_radius: number | null;
+  aura_color: string | null;
 }
 
 export function hydrateToken(row: TokenRow): HydratedToken {
@@ -344,6 +348,43 @@ router.patch('/:id/conditions', (req: AuthRequest, res) => {
   db.prepare('UPDATE tokens SET conditions = ? WHERE id = ?').run(json, id);
   broadcastFiltered(campaign.id, 'token:conditions_updated', { token_id: id, conditions }, () => true);
   res.json({ token_id: id, conditions });
+});
+
+// Set or clear a token's visual aura (range ring shown on the canvas).
+router.patch('/:id/aura', (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const token = db.prepare('SELECT t.*, cnpc.category_id FROM tokens t LEFT JOIN campaign_npcs cnpc ON cnpc.id = t.campaign_npc_id WHERE t.id = ?')
+    .get(id) as TokenRow | undefined;
+  if (!token) return res.status(404).json({ error: 'Token not found' });
+
+  const campaign = getCampaignForMap(token.map_id);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  const isDmOrAdmin = req.user!.role === 'admin' || req.user!.id === campaign.dm_id;
+  // PC tokens can be modified by their owner; NPC tokens DM-only.
+  if (!isDmOrAdmin) {
+    if (token.token_type === 'pc' && token.character_id !== null) {
+      const owner = db.prepare('SELECT owner_id FROM characters WHERE id = ?')
+        .get(token.character_id) as { owner_id: number } | undefined;
+      if (owner?.owner_id !== req.user!.id) return res.status(403).json({ error: 'Not authorized' });
+    } else {
+      return res.status(403).json({ error: 'DM access required' });
+    }
+  }
+
+  const { aura_radius, aura_color } = req.body ?? {};
+  // Clear when radius is explicitly null/0 — we don't render an aura with no radius.
+  let radius: number | null = null;
+  let color: string | null = null;
+  if (aura_radius != null) {
+    const n = Number(aura_radius);
+    if (Number.isFinite(n) && n > 0 && n <= 1000) {
+      radius = Math.floor(n);
+      color = typeof aura_color === 'string' && /^#[0-9a-fA-F]{6}$/.test(aura_color) ? aura_color : '#ffd86b';
+    }
+  }
+  db.prepare('UPDATE tokens SET aura_radius = ?, aura_color = ? WHERE id = ?').run(radius, color, id);
+  broadcastFiltered(campaign.id, 'token:aura_updated', { token_id: id, aura_radius: radius, aura_color: color }, () => true);
+  res.json({ token_id: id, aura_radius: radius, aura_color: color });
 });
 
 router.patch('/:id/hidden', (req: AuthRequest, res) => {

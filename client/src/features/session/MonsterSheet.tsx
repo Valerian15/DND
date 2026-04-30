@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getLibraryItem } from '../character/api';
 import { abilityModifier, formatModifier } from '../character/pointBuy';
 import { updateTokenHp } from './tokenApi';
+import { TokenAuraControl } from './TokenAuraControl';
 import { socket } from '../../lib/socket';
 
 interface MonsterData {
@@ -46,6 +47,8 @@ interface Props {
   hpCurrent: number;
   hpMax: number;
   effects?: { name: string; rounds: number }[];
+  auraRadius?: number | null;
+  auraColor?: string | null;
   onHpChange?: (hp: number) => void;
   onClose: () => void;
 }
@@ -59,7 +62,7 @@ const ABILITY_KEYS = [
   { dataKey: 'charisma' as const, saveKey: 'charisma_save' as const, short: 'CHA' },
 ];
 
-export function MonsterSheet({ slug, tokenId, hpCurrent, hpMax, effects = [], onHpChange, onClose }: Props) {
+export function MonsterSheet({ slug, tokenId, hpCurrent, hpMax, effects = [], auraRadius = null, auraColor = null, onHpChange, onClose }: Props) {
   const [monster, setMonster] = useState<MonsterData | null>(null);
   const [newEffectName, setNewEffectName] = useState('');
   const [newEffectRounds, setNewEffectRounds] = useState('10');
@@ -201,6 +204,11 @@ export function MonsterSheet({ slug, tokenId, hpCurrent, hpMax, effects = [], on
                 style={{ padding: '0.25rem 0.55rem', background: newEffectName.trim() ? '#8b0000' : '#ccc', color: '#fff', border: 'none', borderRadius: 3, cursor: newEffectName.trim() ? 'pointer' : 'not-allowed', fontSize: '0.78rem', fontWeight: 700 }}>+</button>
             </div>
           </div>
+        )}
+
+        {/* Aura ring (visible to all players on the map) */}
+        {tokenId !== undefined && (
+          <TokenAuraControl tokenId={tokenId} currentRadius={auraRadius} currentColor={auraColor} />
         )}
 
         <hr style={{ border: 'none', borderTop: '2px solid #8b0000', margin: '0 0 0.75rem' }} />

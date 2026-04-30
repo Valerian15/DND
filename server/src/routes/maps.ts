@@ -18,6 +18,7 @@ interface MapRow {
   grid_offset_y: number;
   fog_enabled: number;
   folder_id: number | null;
+  scene_tag: string;
   created_at: number;
 }
 
@@ -120,6 +121,9 @@ router.patch('/:id', (req: AuthRequest, res) => {
       ? Number(folder_id) : null;
     sets.push('folder_id = ?'); values.push(fid);
   }
+  if (typeof req.body?.scene_tag === 'string') {
+    sets.push('scene_tag = ?'); values.push(req.body.scene_tag.slice(0, 280));
+  }
 
   if (sets.length === 0) return res.status(400).json({ error: 'No valid fields to update' });
 
@@ -127,6 +131,8 @@ router.patch('/:id', (req: AuthRequest, res) => {
   db.prepare(`UPDATE maps SET ${sets.join(', ')} WHERE id = ?`).run(...values);
 
   const updated = db.prepare('SELECT * FROM maps WHERE id = ?').get(id) as MapRow;
+  // Broadcast so player clients update the scene banner / map metadata in realtime
+  broadcastFiltered(row.campaign_id, 'map:updated', updated, () => true);
   res.json({ map: updated });
 });
 

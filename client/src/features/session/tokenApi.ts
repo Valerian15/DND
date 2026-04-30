@@ -47,6 +47,14 @@ export async function setTokenHidden(id: number, hidden: boolean): Promise<{ tok
   });
 }
 
+// Set or clear a token's visual aura ring. Pass null radius to clear.
+export async function setTokenAura(id: number, aura_radius: number | null, aura_color: string | null = null): Promise<{ token_id: number; aura_radius: number | null; aura_color: string | null }> {
+  return apiFetch(`/tokens/${id}/aura`, {
+    method: 'PATCH',
+    body: JSON.stringify({ aura_radius, aura_color }),
+  });
+}
+
 export async function listCampaignNpcs(campaignId: number): Promise<CampaignNpc[]> {
   const res = await apiFetch<{ npcs: CampaignNpc[] }>(`/campaign-npcs?campaign_id=${campaignId}`);
   return res.npcs;
@@ -69,6 +77,7 @@ export async function createCampaignNpc(body: {
   vulnerabilities?: string[];
   immunities?: string[];
   notes?: string;
+  dm_notes?: string;
 }): Promise<CampaignNpc> {
   const res = await apiFetch<{ npc: CampaignNpc }>('/campaign-npcs', {
     method: 'POST',
@@ -93,6 +102,7 @@ export async function updateCampaignNpc(id: number, body: {
   vulnerabilities?: string[];
   immunities?: string[];
   notes?: string;
+  dm_notes?: string;
 }): Promise<CampaignNpc> {
   const res = await apiFetch<{ npc: CampaignNpc }>(`/campaign-npcs/${id}`, {
     method: 'PATCH',

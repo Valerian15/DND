@@ -8,6 +8,7 @@ export interface MapData {
   grid_offset_y: number;
   fog_enabled: number;
   folder_id: number | null;
+  scene_tag: string;
   created_at: number;
 }
 
@@ -37,6 +38,8 @@ export interface TokenData {
   hidden: boolean;
   effects: TokenEffect[];
   monster_slug: string | null;
+  aura_radius: number | null;
+  aura_color: string | null;
   created_at: number;
 }
 
@@ -75,6 +78,8 @@ export interface CampaignNpc {
   vulnerabilities: string[];
   immunities: string[];
   notes: string;
+  /** DM-only — server only includes this field when the requester is admin or the campaign DM. */
+  dm_notes?: string;
   created_at: number;
 }
 
@@ -117,8 +122,21 @@ export interface ChatMessage {
   user_id: number;
   username: string;
   body: string;
-  type: 'chat' | 'roll' | 'action';
-  data?: { expression: string; dice: number[]; modifier: number; total: number; label?: string; rollMode?: 'advantage' | 'disadvantage' };
+  type: 'chat' | 'roll' | 'action' | 'whisper';
+  data?: {
+    expression?: string;
+    dice?: number[];
+    modifier?: number;
+    total?: number;
+    label?: string;
+    rollMode?: 'advantage' | 'disadvantage';
+    /** Whisper recipient metadata — only present when type === 'whisper'. */
+    whisper?: { to_user_id: number; to_name: string };
+    /** Undo metadata baked onto damage/heal rolls by the server's combat resolvers. */
+    target_token_id?: number;
+    prev_hp?: number;
+    undone?: boolean;
+  };
   created_at: number;
 }
 

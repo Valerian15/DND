@@ -1,7 +1,7 @@
 import type { Server, Socket } from 'socket.io';
 import { verifyToken, type AuthUser } from './auth/index.js';
 import { db } from './db/index.js';
-import { broadcastFiltered } from './io.js';
+import { broadcastFiltered, getIo } from './io.js';
 import { canUserSeeToken, hydrateToken, broadcastFogTokenChanges, VALID_CONDITIONS, type TokenRow } from './routes/tokens.js';
 import { computeAndSaveFog, getVisibleSet } from './vision.js';
 
@@ -19,6 +19,8 @@ interface MapRow {
   grid_size: number;
   grid_offset_x: number;
   grid_offset_y: number;
+  fog_enabled?: number;
+  scene_tag?: string;
   created_at: number;
 }
 
@@ -39,8 +41,22 @@ interface ChatMessageOut {
   user_id: number;
   username: string;
   body: string;
-  type: 'chat' | 'roll' | 'action';
-  data?: { expression: string; dice: number[]; modifier: number; total: number; label?: string; rollMode?: 'advantage' | 'disadvantage' };
+  type: 'chat' | 'roll' | 'action' | 'whisper';
+  data?: {
+    // Roll fields
+    expression?: string;
+    dice?: number[];
+    modifier?: number;
+    total?: number;
+    label?: string;
+    rollMode?: 'advantage' | 'disadvantage';
+    // Whisper fields (private chat between sender + named recipient + admins)
+    whisper?: { to_user_id: number; to_name: string };
+    // Damage/heal fields used by the undo system
+    target_token_id?: number;
+    prev_hp?: number;
+    undone?: boolean;
+  };
   created_at: number;
 }
 
@@ -74,12 +90,16 @@ interface ServerToClientEvents {
   }) => void;
   'session:presence': (data: { online: OnlineUser[] }) => void;
   'map:switched': (map: MapRow | null) => void;
+  'map:updated': (map: MapRow) => void;
+  'session:ping': (data: { x: number; y: number; user_id: number; color: string }) => void;
+  'combat:hp_undone': (data: { message_id: number }) => void;
   'token:created': (token: unknown) => void;
   'token:moved': (data: { token_id: number; col: number; row: number }) => void;
   'token:deleted': (data: { token_id: number }) => void;
   'token:hp_updated': (data: { token_id: number; hp_current: number }) => void;
   'token:conditions_updated': (data: { token_id: number; conditions: string[] }) => void;
   'token:effects_updated': (data: { token_id: number; effects: { name: string; rounds: number; indefinite?: boolean }[] }) => void;
+  'token:aura_updated': (data: { token_id: number; aura_radius: number | null; aura_color: string | null }) => void;
   'chat:message': (msg: ChatMessageOut) => void;
   'initiative:updated': (state: InitiativeStateOut) => void;
 }
@@ -141,6 +161,23 @@ interface ClientToServerEvents {
     damage_dice: string;
     damage_type: string;
   }) => void;
+  /**
+   * Healing resolver (Cure Wounds, Healing Word, Mass Healing Word, etc.).
+   * Rolls heal_dice once per target and adds to HP (clamped to hp_max).
+   */
+  'combat:resolve_heal': (data: {
+    caster_token_id: number;
+    target_token_ids: number[];
+    spell_name: string;
+    heal_dice: string;
+  }) => void;
+  /** Map ping — relayed to all clients. Origin is map-canvas pixel coords. */
+  'session:ping': (data: { x: number; y: number }) => void;
+  /**
+   * DM-only — undo a damage/heal applied via a combat:resolve_* handler.
+   * Reads the chat message's `data` JSON for `target_token_id` + `prev_hp` and restores them.
+   */
+  'combat:undo_hp': (data: { message_id: number }) => void;
 }
 
 interface SocketData {
@@ -175,16 +212,24 @@ function getCampaignDm(campaignId: number): number | null {
 function hydrateMessage(row: ChatMessageRow): ChatMessageOut {
   return {
     ...row,
-    type: row.type as 'chat' | 'roll' | 'action',
+    type: row.type as ChatMessageOut['type'],
     data: row.data ? JSON.parse(row.data) : undefined,
   };
 }
 
-function getRecentMessages(campaignId: number): ChatMessageOut[] {
+function getRecentMessages(campaignId: number, viewerUserId: number, viewerRole: string): ChatMessageOut[] {
   const rows = db.prepare(
     'SELECT * FROM chat_messages WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 100'
   ).all(campaignId) as ChatMessageRow[];
-  return rows.reverse().map(hydrateMessage);
+  const all = rows.reverse().map(hydrateMessage);
+  // Filter out whispers the viewer wasn't part of.
+  return all.filter((m) => {
+    if (m.type !== 'whisper') return true;
+    if (viewerRole === 'admin') return true;
+    if (m.user_id === viewerUserId) return true;
+    if (m.data?.whisper?.to_user_id === viewerUserId) return true;
+    return false;
+  });
 }
 
 function getInitiativeEntries(campaignId: number): InitiativeEntryRow[] {
@@ -369,6 +414,20 @@ function damageModifierForToken(
   return { multiplier: 1, label: '' };
 }
 
+/**
+ * Persist a token's new HP and broadcast the change. For PC tokens, also keeps
+ * `characters.hp_current` in sync so the character sheet reflects auto-resolver
+ * damage/heal even after a refresh or for clients that aren't actively listening.
+ */
+function applyTokenHpChange(cid: number, tokenId: number, characterId: number | null, newHp: number) {
+  db.prepare('UPDATE tokens SET hp_current = ? WHERE id = ?').run(newHp, tokenId);
+  if (characterId !== null) {
+    db.prepare("UPDATE characters SET hp_current = ?, updated_at = strftime('%s', 'now') WHERE id = ?")
+      .run(newHp, characterId);
+  }
+  getIo().to(`campaign:${cid}`).emit('token:hp_updated', { token_id: tokenId, hp_current: newHp });
+}
+
 /** Read the AC of any token (PC / library monster / campaign NPC). Defaults to 10 if missing. */
 function computeAcForToken(token: { character_id: number | null; monster_slug: string | null; campaign_npc_id: number | null }): number {
   if (token.character_id) {
@@ -477,7 +536,7 @@ export function setupSession(io: AppServer) {
       socket.emit('session:state', {
         online: onlineList(campaign_id),
         active_map: activeMapNow,
-        chat_history: getRecentMessages(campaign_id),
+        chat_history: getRecentMessages(campaign_id, user.id, user.role),
         initiative: getInitiativeState(campaign_id),
         walls,
         fog_visible: fog.visible,
@@ -566,6 +625,59 @@ export function setupSession(io: AppServer) {
       if (campaign_id == null || !body) return;
       const text = String(body).trim().slice(0, 1000);
       if (!text) return;
+
+      // Whisper: /w <name> <message> — name can be a character name or a username.
+      // Recipients = sender + target user + any role='admin' user in the campaign room.
+      // The campaign DM does NOT see whispers unless they also hold role='admin'.
+      const whisperMatch = text.match(/^\/w\s+(\S+)\s+(.+)$/i);
+      if (whisperMatch) {
+        const targetName = whisperMatch[1];
+        const messageText = whisperMatch[2].trim();
+        if (!messageText) return;
+
+        // Resolve target: check character names in the campaign first, then usernames.
+        const charHit = db.prepare(`
+          SELECT c.owner_id AS user_id, c.name
+          FROM characters c
+          JOIN campaign_members cm ON cm.character_id = c.id
+          WHERE cm.campaign_id = ? AND c.name = ? COLLATE NOCASE
+        `).get(campaign_id, targetName) as { user_id: number; name: string } | undefined;
+        let targetUserId: number | null = charHit?.user_id ?? null;
+        let targetDisplayName: string = charHit?.name ?? targetName;
+        if (!targetUserId) {
+          const userHit = db.prepare('SELECT id, username FROM users WHERE username = ? COLLATE NOCASE').get(targetName) as { id: number; username: string } | undefined;
+          if (userHit) { targetUserId = userHit.id; targetDisplayName = userHit.username; }
+        }
+        if (!targetUserId) {
+          // Unknown recipient — bounce a private system note back to the sender only.
+          socket.emit('chat:message', {
+            id: -Date.now(),
+            campaign_id,
+            user_id: 0,
+            username: 'system',
+            body: `Whisper failed: no character or user named "${targetName}" in this campaign.`,
+            type: 'action',
+            created_at: Math.floor(Date.now() / 1000),
+          });
+          return;
+        }
+
+        const whisperData = JSON.stringify({ whisper: { to_user_id: targetUserId, to_name: targetDisplayName } });
+        const res = db.prepare(
+          'INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(campaign_id, user.id, user.username, messageText, 'whisper', whisperData);
+        const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(res.lastInsertRowid) as ChatMessageRow;
+        const msgOut = hydrateMessage(row);
+
+        // Recipients: sender, target user, and any admin in the room.
+        broadcastFiltered(
+          campaign_id,
+          'chat:message',
+          msgOut,
+          (uid, role) => uid === user.id || uid === targetUserId || role === 'admin',
+        );
+        return;
+      }
 
       let type = 'chat';
       let data: string | null = null;
@@ -951,10 +1063,11 @@ export function setupSession(io: AppServer) {
           damageDealt = Math.floor(damageDealt * dmgMod.multiplier);
         }
 
-        // Post the save roll
+        // Post the save roll. Carry undo metadata when damage will land — DM sees an undo button.
         const saveExpr = `1d20${saveMod >= 0 ? '+' : ''}${saveMod}`;
         const saveLabel = `${target.label} — ${save_ability.toUpperCase()} Save (DC ${save_dc}) ${passed ? '✓ saved' : '✗ failed'}`;
-        const saveData = JSON.stringify({ expression: saveExpr, dice: [saveRoll], modifier: saveMod, total: saveTotal, label: saveLabel });
+        const undoMeta = damageDealt > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
+        const saveData = JSON.stringify({ expression: saveExpr, dice: [saveRoll], modifier: saveMod, total: saveTotal, label: saveLabel, ...undoMeta });
         const sr = insertChat.run(cid, user.id, user.username, `/roll ${saveExpr}`, 'roll', saveData);
         const saveRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(sr.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(saveRow));
@@ -962,8 +1075,7 @@ export function setupSession(io: AppServer) {
         // Apply damage
         if (damageDealt > 0) {
           const newHp = Math.max(0, target.hp_current - damageDealt);
-          db.prepare('UPDATE tokens SET hp_current = ? WHERE id = ?').run(newHp, tid);
-          io.to(`campaign:${cid}`).emit('token:hp_updated', { token_id: tid, hp_current: newHp });
+          applyTokenHpChange(cid, tid, target.character_id, newHp);
           triggerConcentrationSave(cid, tid, damageDealt);
         }
 
@@ -1062,15 +1174,15 @@ export function setupSession(io: AppServer) {
         const adjustedTotal = dmgMod.multiplier === 1 ? dmg.total : Math.floor(dmg.total * dmgMod.multiplier);
         const modSuffix = dmgMod.label ? ` (${dmgMod.label})` : '';
         const dmgLabel = `${target.label} — ${attack_name} ${damage_type || 'damage'}${isCrit ? ' (crit!)' : ''}${modSuffix}`;
-        const dmgData = JSON.stringify({ expression: damage_dice, dice: dmg.rolls, modifier: dmg.modifier, total: adjustedTotal, label: dmgLabel });
+        const undoMeta = adjustedTotal > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
+        const dmgData = JSON.stringify({ expression: damage_dice, dice: dmg.rolls, modifier: dmg.modifier, total: adjustedTotal, label: dmgLabel, ...undoMeta });
         const dr = insertChat.run(cid, user.id, user.username, `/roll ${damage_dice}`, 'roll', dmgData);
         const dmgRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(dr.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(dmgRow));
 
         if (adjustedTotal > 0) {
           const newHp = Math.max(0, target.hp_current - adjustedTotal);
-          db.prepare('UPDATE tokens SET hp_current = ? WHERE id = ?').run(newHp, tid);
-          io.to(`campaign:${cid}`).emit('token:hp_updated', { token_id: tid, hp_current: newHp });
+          applyTokenHpChange(cid, tid, target.character_id, newHp);
           triggerConcentrationSave(cid, tid, adjustedTotal);
         }
         summaries.push(`${target.label}: ${isCrit ? '★ CRIT' : '✓'} ${adjustedTotal}${modSuffix}`);
@@ -1151,14 +1263,14 @@ export function setupSession(io: AppServer) {
 
         const expr = `${rollCount}d${sides}${totalMod !== 0 ? (totalMod > 0 ? '+' + totalMod : totalMod) : ''}`;
         const dmgLabel = `${target.label} — ${attack_name} (${hits} hit${hits > 1 ? 's' : ''}) ${damage_type || 'damage'}${modSuffix}`;
-        const dmgData = JSON.stringify({ expression: expr, dice: rolls, modifier: totalMod, total: adjustedDmg, label: dmgLabel });
+        const undoMeta = adjustedDmg > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
+        const dmgData = JSON.stringify({ expression: expr, dice: rolls, modifier: totalMod, total: adjustedDmg, label: dmgLabel, ...undoMeta });
         const dr = insertChat.run(cid, user.id, user.username, `/roll ${expr}`, 'roll', dmgData);
         const dmgRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(dr.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(dmgRow));
 
         const newHp = Math.max(0, target.hp_current - adjustedDmg);
-        db.prepare('UPDATE tokens SET hp_current = ? WHERE id = ?').run(newHp, tid);
-        io.to(`campaign:${cid}`).emit('token:hp_updated', { token_id: tid, hp_current: newHp });
+        applyTokenHpChange(cid, tid, target.character_id, newHp);
         triggerConcentrationSave(cid, tid, adjustedDmg);
         summaries.push(`${target.label}: ${hits}× → ${adjustedDmg}${modSuffix}`);
       }
@@ -1167,6 +1279,114 @@ export function setupSession(io: AppServer) {
       const sumRes = insertChat.run(cid, user.id, user.username, `/action ${summaryText}`, 'action', null);
       const sumRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(sumRes.lastInsertRowid) as ChatMessageRow;
       io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(sumRow));
+    });
+
+    socket.on('combat:resolve_heal', ({ caster_token_id, target_token_ids, spell_name, heal_dice }) => {
+      const cid = socket.data.campaign_id;
+      if (cid == null) return;
+
+      const campRow = db.prepare('SELECT settings FROM campaigns WHERE id = ?').get(cid) as { settings: string } | undefined;
+      if (!campRow) return;
+      let settings: { combat_automation?: boolean } = {};
+      try { settings = JSON.parse(campRow.settings); } catch { /* default */ }
+      if (!settings.combat_automation) return;
+
+      if (!tokenIsInCampaign(caster_token_id, cid)) return;
+      const validTargets = (target_token_ids ?? []).filter((id) => typeof id === 'number' && tokenIsInCampaign(id, cid));
+      if (validTargets.length === 0) return;
+      if (typeof spell_name !== 'string' || !spell_name.trim()) return;
+      if (typeof heal_dice !== 'string' || !heal_dice.trim()) return;
+
+      const casterToken = db.prepare('SELECT label FROM tokens WHERE id = ?').get(caster_token_id) as { label: string } | undefined;
+      const casterName = casterToken?.label ?? 'Caster';
+
+      const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
+
+      // Cast announcement
+      {
+        const r = insertChat.run(cid, user.id, user.username, `/action ${casterName} casts ${spell_name}.`, 'action', null);
+        const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
+      }
+
+      // Roll heal once per target (each ally gets their own roll)
+      const summaries: string[] = [];
+      for (const tid of validTargets) {
+        const target = db.prepare('SELECT id, label, hp_current, hp_max, character_id FROM tokens WHERE id = ?').get(tid) as { id: number; label: string; hp_current: number; hp_max: number; character_id: number | null } | undefined;
+        if (!target) continue;
+        if (target.hp_current >= target.hp_max) {
+          summaries.push(`${target.label}: full HP`);
+          continue;
+        }
+
+        const heal = rollDiceExpression(heal_dice);
+        const newHp = Math.min(target.hp_max, target.hp_current + heal.total);
+        const actual = newHp - target.hp_current;
+
+        const healLabel = `${target.label} — ${spell_name} (heal)`;
+        const undoMeta = actual > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
+        const healData = JSON.stringify({ expression: heal_dice, dice: heal.rolls, modifier: heal.modifier, total: heal.total, label: healLabel, ...undoMeta });
+        const dr = insertChat.run(cid, user.id, user.username, `/roll ${heal_dice}`, 'roll', healData);
+        const healRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(dr.lastInsertRowid) as ChatMessageRow;
+        io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(healRow));
+
+        if (actual > 0) {
+          applyTokenHpChange(cid, tid, target.character_id, newHp);
+        }
+        summaries.push(`${target.label}: +${actual}`);
+      }
+
+      const summaryText = `${casterName}'s ${spell_name}: ${summaries.join(' · ')}`;
+      const sumRes = insertChat.run(cid, user.id, user.username, `/action ${summaryText}`, 'action', null);
+      const sumRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(sumRes.lastInsertRowid) as ChatMessageRow;
+      io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(sumRow));
+    });
+
+    // Map ping — alt-click on canvas. Relay to all in the campaign room.
+    // Server tags with user_id (so clients can distinguish/colorize) and a deterministic color.
+    socket.on('session:ping', ({ x, y }) => {
+      const cid = socket.data.campaign_id;
+      if (cid == null) return;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      // Hash user id into a hue for a stable per-player color
+      const hue = (user.id * 47) % 360;
+      const color = `hsl(${hue} 80% 55%)`;
+      io.to(`campaign:${cid}`).emit('session:ping', { x, y, user_id: user.id, color });
+    });
+
+    // DM-only — undo damage/heal applied via combat:resolve_*. Reads target_token_id + prev_hp
+    // from the chat message's data JSON and restores HP.
+    socket.on('combat:undo_hp', ({ message_id }) => {
+      const cid = socket.data.campaign_id;
+      if (cid == null) return;
+      // Permission: admin or campaign DM only
+      const camp = db.prepare('SELECT dm_id FROM campaigns WHERE id = ?').get(cid) as { dm_id: number } | undefined;
+      if (!camp) return;
+      if (user.role !== 'admin' && user.id !== camp.dm_id) return;
+
+      const msg = db.prepare('SELECT id, campaign_id, data, type, body FROM chat_messages WHERE id = ?').get(message_id) as { id: number; campaign_id: number; data: string | null; type: string; body: string } | undefined;
+      if (!msg || msg.campaign_id !== cid || !msg.data) return;
+      let parsed: { target_token_id?: number; prev_hp?: number; undone?: boolean; label?: string } = {};
+      try { parsed = JSON.parse(msg.data); } catch { return; }
+      if (parsed.undone) return; // already reverted
+      if (typeof parsed.target_token_id !== 'number' || typeof parsed.prev_hp !== 'number') return;
+
+      const token = db.prepare('SELECT id, label, character_id, hp_current FROM tokens WHERE id = ?').get(parsed.target_token_id) as { id: number; label: string; character_id: number | null; hp_current: number } | undefined;
+      if (!token) return;
+      // Apply restore
+      applyTokenHpChange(cid, token.id, token.character_id, parsed.prev_hp);
+
+      // Mark message as undone in its data JSON so future clicks no-op
+      const updatedData = JSON.stringify({ ...parsed, undone: true });
+      db.prepare('UPDATE chat_messages SET data = ? WHERE id = ?').run(updatedData, msg.id);
+      io.to(`campaign:${cid}`).emit('combat:hp_undone', { message_id: msg.id });
+
+      // Post a small action note for transparency
+      const note = `↶ Undone: ${token.label} HP restored to ${parsed.prev_hp}.`;
+      const r = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(cid, user.id, user.username, `/action ${note}`, 'action', null);
+      const noteRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+      io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(noteRow));
     });
 
     socket.on('disconnect', () => {

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { abilityModifier, formatModifier } from '../character/pointBuy';
-import { updateTokenHp } from './tokenApi';
+import { updateTokenHp, updateCampaignNpc } from './tokenApi';
 import { socket } from '../../lib/socket';
+import { TokenAuraControl } from './TokenAuraControl';
 import type { CampaignNpc } from './types';
 
 interface Props {
@@ -10,6 +11,8 @@ interface Props {
   hpCurrent: number;
   hpMax: number;
   effects?: { name: string; rounds: number }[];
+  auraRadius?: number | null;
+  auraColor?: string | null;
   onHpChange?: (hp: number) => void;
   onClose: () => void;
 }
@@ -44,7 +47,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, effects = [], onHpChange, onClose }: Props) {
+export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, effects = [], auraRadius = null, auraColor = null, onHpChange, onClose }: Props) {
   const [hp, setHp] = useState(hpCurrent);
   const [saving, setSaving] = useState(false);
   const [newEffectName, setNewEffectName] = useState('');
@@ -167,6 +170,11 @@ export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, effects = [], onHpCha
           </div>
         )}
 
+        {/* Aura ring (visible to all players on the map) */}
+        {tokenId !== undefined && (
+          <TokenAuraControl tokenId={tokenId} currentRadius={auraRadius} currentColor={auraColor} />
+        )}
+
         <hr style={{ border: 'none', borderTop: '2px solid #8b0000', margin: '0 0 0.75rem' }} />
 
         {/* Ability scores */}
@@ -271,7 +279,47 @@ export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, effects = [], onHpCha
           </Section>
         )}
 
+        {/* DM-only notes — server only sends `dm_notes` to the campaign DM/admin. */}
+        {npc.dm_notes !== undefined && <DmNotesPane npcId={npc.id} initial={npc.dm_notes} />}
+
       </div>
     </SheetOverlay>
+  );
+}
+
+// Compact, collapsed-by-default DM notes pane. Autosaves on blur.
+function DmNotesPane({ npcId, initial }: { npcId: number; initial: string }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(initial);
+  const [saved, setSaved] = useState(true);
+
+  async function commit() {
+    if (draft === initial && saved) return;
+    try {
+      await updateCampaignNpc(npcId, { dm_notes: draft });
+      setSaved(true);
+    } catch { setSaved(false); }
+  }
+
+  return (
+    <div style={{ marginTop: '0.5rem', borderTop: '1px dashed #ccc', paddingTop: '0.5rem' }}>
+      <div onClick={() => setOpen((o) => !o)}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', userSelect: 'none' }}>
+        <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#7a5500', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          🔒 DM Notes {!saved && <span style={{ color: '#a44', fontSize: '0.6rem', marginLeft: 4 }}>· save failed</span>}
+        </div>
+        <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{open ? '▾' : '▸'}</span>
+      </div>
+      {open && (
+        <textarea
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); setSaved(false); }}
+          onBlur={commit}
+          placeholder="Hidden from players. Motivation, secrets, foreshadowing, hidden HP threshold…"
+          rows={4}
+          style={{ width: '100%', marginTop: 4, padding: '0.4rem', fontSize: '0.78rem', border: '1px solid #d8c898', borderRadius: 3, resize: 'vertical', fontFamily: 'system-ui', background: '#fffbef', boxSizing: 'border-box', outline: 'none' }}
+        />
+      )}
+    </div>
   );
 }

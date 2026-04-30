@@ -22,6 +22,7 @@ export interface NpcFormData {
   vulnerabilities: string[];
   immunities: string[];
   notes: string;
+  dm_notes: string;
 }
 
 function formDataFromNpc(npc: CampaignNpc): NpcFormData {
@@ -40,6 +41,7 @@ function formDataFromNpc(npc: CampaignNpc): NpcFormData {
     vulnerabilities: npc.vulnerabilities ?? [],
     immunities: npc.immunities ?? [],
     notes: npc.notes,
+    dm_notes: npc.dm_notes ?? '',
   };
 }
 
@@ -49,7 +51,7 @@ const EMPTY: NpcFormData = {
   abilities: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
   saving_throws: [], attacks: [], traits: [],
   resistances: [], vulnerabilities: [], immunities: [],
-  notes: '',
+  notes: '', dm_notes: '',
 };
 
 const EMPTY_ATTACK: NpcAttack = { name: '', to_hit: 0, damage: '1d6', damage_type: 'slashing' };
@@ -272,6 +274,10 @@ export function NpcForm({ initial, onSave, onCancel, submitting }: Props) {
       {/* Notes */}
       <div style={sectionHeadStyle}>Notes</div>
       <textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={3} placeholder="Any additional notes…" style={{ ...fieldStyle, width: '100%', resize: 'vertical' }} />
+
+      {/* DM-only notes — never shown to players */}
+      <div style={{ ...sectionHeadStyle, color: '#7a5500' }}>🔒 DM Notes (hidden from players)</div>
+      <textarea value={form.dm_notes} onChange={(e) => setForm((f) => ({ ...f, dm_notes: e.target.value }))} rows={3} placeholder="Motivation, secrets, foreshadowing, hidden HP threshold…" style={{ ...fieldStyle, width: '100%', resize: 'vertical', background: '#fffbef', borderColor: '#d8c898' }} />
 
       {/* Actions */}
       <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>

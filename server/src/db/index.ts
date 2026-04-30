@@ -521,6 +521,14 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_map_drawings_map ON map_drawings(map_id);
   `);
 
+  // QoL batch: per-map scene tag (italic banner shown above chat)
+  try { db.exec("ALTER TABLE maps ADD COLUMN scene_tag TEXT NOT NULL DEFAULT ''"); } catch { /* exists */ }
+  // QoL batch: DM-only notes per campaign NPC (hidden pane, only visible to DM/admin)
+  try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN dm_notes TEXT NOT NULL DEFAULT ''"); } catch { /* exists */ }
+  // QoL batch: per-token aura ring (radius in feet, hex color). Both nullable = no aura.
+  try { db.exec('ALTER TABLE tokens ADD COLUMN aura_radius INTEGER'); } catch { /* exists */ }
+  try { db.exec('ALTER TABLE tokens ADD COLUMN aura_color TEXT'); } catch { /* exists */ }
+
   // Multiclassing: characters have a `classes` JSON array with one entry per class.
   // The legacy class_slug/subclass_slug/level/hit_dice_used columns are mirrors of classes[0]
   // and stay in sync during migration so old code keeps working.

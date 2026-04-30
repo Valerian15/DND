@@ -12,6 +12,14 @@ export interface OnlineUser {
   role: string;
 }
 
+export interface MapPing {
+  id: number;
+  x: number;
+  y: number;
+  user_id: number;
+  color: string;
+}
+
 export function useSession(campaignId: number) {
   const [online, setOnline] = useState<OnlineUser[]>([]);
   const [connected, setConnected] = useState(false);
@@ -24,6 +32,7 @@ export function useSession(campaignId: number) {
   const [drawings, setDrawings] = useState<MapDrawing[]>([]);
   const [fogVisible, setFogVisible] = useState<[number, number][]>([]);
   const [fogExplored, setFogExplored] = useState<[number, number][]>([]);
+  const [pings, setPings] = useState<MapPing[]>([]);
 
   const fetchTokens = useCallback((mapId: number) => {
     listTokens(mapId).then(setTokens).catch(() => {});
@@ -176,6 +185,30 @@ export function useSession(campaignId: number) {
       setActiveMap((prev) => prev && prev.id === data.map_id ? { ...prev, fog_enabled: data.fog_enabled } : prev);
     }
 
+    function onMapUpdated(map: MapData) {
+      setActiveMap((prev) => prev && prev.id === map.id ? { ...prev, ...map } : prev);
+    }
+
+    function onTokenAuraUpdated(data: { token_id: number; aura_radius: number | null; aura_color: string | null }) {
+      setTokens((prev) =>
+        prev.map((t) => t.id === data.token_id ? { ...t, aura_radius: data.aura_radius, aura_color: data.aura_color } : t)
+      );
+    }
+
+    function onPing(p: { x: number; y: number; user_id: number; color: string }) {
+      const id = Date.now() + Math.random();
+      setPings((prev) => [...prev, { id, ...p }]);
+      // Auto-remove after 2 seconds
+      setTimeout(() => setPings((prev) => prev.filter((x) => x.id !== id)), 2000);
+    }
+
+    function onHpUndone(data: { message_id: number }) {
+      // Mark the matching chat message as undone so the UI can render it that way
+      setMessages((prev) => prev.map((m) =>
+        m.id === data.message_id && m.data ? { ...m, data: { ...m.data, undone: true } } : m
+      ));
+    }
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('session:state', onState);
@@ -201,6 +234,10 @@ export function useSession(campaignId: number) {
     socket.on('drawing:cleared', onDrawingCleared);
     socket.on('fog:update', onFogUpdate);
     socket.on('map:fog_toggled', onFogToggled);
+    socket.on('map:updated', onMapUpdated);
+    socket.on('token:aura_updated', onTokenAuraUpdated);
+    socket.on('session:ping', onPing);
+    socket.on('combat:hp_undone', onHpUndone);
 
     socket.connect();
 
@@ -230,6 +267,10 @@ export function useSession(campaignId: number) {
       socket.off('drawing:cleared', onDrawingCleared);
       socket.off('fog:update', onFogUpdate);
       socket.off('map:fog_toggled', onFogToggled);
+      socket.off('map:updated', onMapUpdated);
+      socket.off('token:aura_updated', onTokenAuraUpdated);
+      socket.off('session:ping', onPing);
+      socket.off('combat:hp_undone', onHpUndone);
       socket.disconnect();
     };
   }, [campaignId, fetchTokens, fetchWallsAndFog]);
@@ -240,5 +281,6 @@ export function useSession(campaignId: number) {
     tokens, setTokens,
     messages, initiative,
     walls, templates, drawings, fogVisible, fogExplored,
+    pings,
   };
 }

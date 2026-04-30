@@ -7,7 +7,8 @@ import type { CasterConfig } from '../character/casters';
 import { SKILLS } from '../character/skills';
 import { ABILITY_ORDER, ABILITY_NAMES } from '../character/types';
 import type { Character, ClassResource, TimedEffect } from '../character/types';
-import { parseSpellDurationRounds, getSpellConditions } from './spellEffects';
+import { parseSpellDurationRounds, getSpellConditions, isHealingSpell, buildHealDice } from './spellEffects';
+import { TokenAuraControl } from './TokenAuraControl';
 import { isWeaponProficient } from '../character/weaponProficiency';
 import { parseSpellForAttack, scaleCantripDice } from '../character/attackUtils';
 import { updateTokenHp } from './tokenApi';
@@ -76,6 +77,8 @@ interface Props {
   selectedTargetIds: number[];
   /** When true, casting save-based damage spells routes to the server's auto-resolver. */
   combatAutomation: boolean;
+  auraRadius?: number | null;
+  auraColor?: string | null;
   onConditionsChange: (conditions: string[]) => Promise<void>;
   onTargetConditionsChange?: (tokenId: number, conditions: string[]) => void;
   getTokenConditions?: (tokenId: number) => string[];
@@ -101,7 +104,7 @@ function buildCastDice(baseDice: string, hl: string | undefined, baseLevel: numb
   return baseDice;
 }
 
-export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions, conditions, effects, currentRound, selectedTargetIds, combatAutomation, onConditionsChange, onTargetConditionsChange, getTokenConditions, onClose }: Props) {
+export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions, conditions, effects, currentRound, selectedTargetIds, combatAutomation, auraRadius = null, auraColor = null, onConditionsChange, onTargetConditionsChange, getTokenConditions, onClose }: Props) {
   const [character, setCharacter] = useState<Character | null>(null);
   const [loading, setLoading] = useState(true);
   const [hpCurrent, setHpCurrent] = useState(0);
@@ -248,6 +251,16 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   useEffect(() => {
     if (character) setHpCurrent(character.hp_current);
   }, [character?.hp_current]);
+
+  // Reflect HP changes pushed by combat auto-resolvers (damage / heal) on this token
+  useEffect(() => {
+    if (!tokenId) return;
+    function onHp(data: { token_id: number; hp_current: number }) {
+      if (data.token_id === tokenId) setHpCurrent(data.hp_current);
+    }
+    socket.on('token:hp_updated', onHp);
+    return () => { socket.off('token:hp_updated', onHp); };
+  }, [tokenId]);
 
   // Detect concentration removal — send chat notification naming the spell
   useEffect(() => {
@@ -910,6 +923,11 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
               Auto-decrements when initiative round advances during combat. 10 rounds = 1 minute.
             </div>
           </Section>
+
+          {/* Aura ring (visible to all on the map). PC owner can set their own. */}
+          {tokenId > 0 && (
+            <TokenAuraControl tokenId={tokenId} currentRadius={auraRadius} currentColor={auraColor} />
+          )}
 
           {/* Combat */}
           <Section title="Combat">
@@ -1613,6 +1631,20 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
 
                   const castNonAttack = async (castLevel: number) => {
                     const lvlSuffix = castLevel > level ? ` (${slotLabel(castLevel)})` : '';
+                    if (combatAutomation && isHealingSpell(slug) && selectedTargetIds.length > 0) {
+                      const spellMod = abilityModifier(character.abilities[config.ability]);
+                      const healDice = buildHealDice(slug, castLevel, level, spellMod);
+                      if (healDice) {
+                        socket.emit('combat:resolve_heal', {
+                          caster_token_id: casterTokenId,
+                          target_token_ids: selectedTargetIds,
+                          spell_name: `${meta!.name}${lvlSuffix}`,
+                          heal_dice: healDice,
+                        });
+                        setUpcastPicker(null);
+                        return;
+                      }
+                    }
                     socket.emit('chat:send', { body: `/action ${character.name} casts ${meta!.name}${lvlSuffix}.` });
                     if (meta?.concentration) {
                       if (conditions.includes('concentration') && _concentratingOn) {

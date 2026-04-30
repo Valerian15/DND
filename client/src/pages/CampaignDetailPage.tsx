@@ -135,6 +135,7 @@ export default function CampaignDetailPage() {
         immunities: data.immunities,
         portrait_url: data.portrait_url,
         notes: data.notes,
+        dm_notes: data.dm_notes,
       });
       setNpcs((prev) => [...prev, npc]);
       setAddingNpcCatId(null);
@@ -162,6 +163,7 @@ export default function CampaignDetailPage() {
         immunities: data.immunities,
         portrait_url: data.portrait_url,
         notes: data.notes,
+        dm_notes: data.dm_notes,
       });
       setNpcs((prev) => prev.map((n) => n.id === updated.id ? updated : n));
       setEditingNpcId(null);
