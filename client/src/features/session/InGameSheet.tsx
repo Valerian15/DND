@@ -366,9 +366,37 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     catch { setSlotsUsed(slotsUsed); }
   }
 
-  async function rollHitDie(hitDie: number, conMod: number, totalHD: number) {
-    if (!character || hitDiceUsed >= totalHD) return;
-    const roll = Math.floor(Math.random() * hitDie) + 1;
+  /**
+   * Roll one hit die. `classSlug` picks which class's pool to spend from (matters for multiclass).
+   * Falls back to the character's primary class for legacy single-class.
+   */
+  async function rollHitDie(classSlug: string) {
+    if (!character) return;
+    const die = HIT_DIE_BY_CLASS[classSlug] ?? 8;
+    const conMod = abilityModifier(character.abilities.con);
+
+    const cls = character.classes ?? [];
+    if (cls.length > 0) {
+      const target = cls.find((c) => c.slug === classSlug);
+      if (!target || target.hit_dice_used >= target.level) return;
+      const roll = Math.floor(Math.random() * die) + 1;
+      const heal = Math.max(1, roll + conMod);
+      const nextHp = Math.min(character.hp_max, hpCurrent + heal);
+      const nextClasses = cls.map((c) => c.slug === classSlug ? { ...c, hit_dice_used: c.hit_dice_used + 1 } : c);
+      setHpCurrent(nextHp);
+      socket.emit('chat:send', { body: `/action ${character.name} uses a ${classSlug} Hit Die: rolls ${roll}${conMod !== 0 ? formatModifier(conMod) : ''} = +${heal} HP.` });
+      try {
+        await updateCharacter(character.id, { hp_current: nextHp, classes: nextClasses });
+        if (tokenId > 0) await updateTokenHp(tokenId, nextHp);
+      } catch { /* ignore */ }
+      // Mirror the legacy single-class counter for backward-compat consumers.
+      if (classSlug === (cls[0]?.slug ?? '')) setHitDiceUsed(target.hit_dice_used + 1);
+      return;
+    }
+    // Legacy single-class path
+    const totalHD = character.level;
+    if (hitDiceUsed >= totalHD) return;
+    const roll = Math.floor(Math.random() * die) + 1;
     const heal = Math.max(1, roll + conMod);
     const nextHp = Math.min(character.hp_max, hpCurrent + heal);
     const nextUsed = hitDiceUsed + 1;
@@ -576,6 +604,10 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     const nextSlotsUsed: Record<string, number> = {};
     const nextHDUsed = 0;
     const nextResources = localResources.map((r) => ({ ...r, current: r.max }));
+    // Per-class hit-dice reset (multiclass aware). Falls through harmlessly if classes[] is empty.
+    const nextClasses = character.classes && character.classes.length > 0
+      ? character.classes.map((c) => ({ ...c, hit_dice_used: 0 }))
+      : undefined;
     setHpCurrent(nextHp);
     setSlotsUsed(nextSlotsUsed);
     setHitDiceUsed(nextHDUsed);
@@ -587,6 +619,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
       await updateCharacter(character.id, {
         hp_current: nextHp, spell_slots_used: nextSlotsUsed,
         hit_dice_used: nextHDUsed, resources: nextResources,
+        ...(nextClasses ? { classes: nextClasses } : {}),
         death_saves_success: 0, death_saves_failure: 0,
       });
       if (tokenId > 0) await updateTokenHp(tokenId, nextHp);
@@ -974,22 +1007,56 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
           </Section>
 
 
-          {/* Hit Dice Tracker */}
+          {/* Hit Dice Tracker — per-class for multiclass, single-row for legacy */}
           <Section title="Hit Dice">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.85rem', color: '#444' }}>
-                d{hitDie} · <strong>{remainingHitDice}</strong> / {totalHitDice} remaining
-              </span>
-              <button disabled={remainingHitDice === 0} onClick={() => rollHitDie(hitDie, conMod, totalHitDice)}
-                style={{
-                  padding: '0.25rem 0.6rem', fontSize: '0.8rem', border: '1px solid #ccc', borderRadius: 4,
-                  cursor: remainingHitDice === 0 ? 'not-allowed' : 'pointer',
-                  background: remainingHitDice === 0 ? '#f5f5f5' : '#fff',
-                  color: remainingHitDice === 0 ? '#bbb' : '#333', fontWeight: 600,
-                }}>
-                Roll HD
-              </button>
-            </div>
+            {(() => {
+              const cls = character.classes ?? [];
+              if (cls.length > 0) {
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    {cls.map((c) => {
+                      const die = HIT_DIE_BY_CLASS[c.slug] ?? 8;
+                      const remaining = Math.max(0, c.level - c.hit_dice_used);
+                      return (
+                        <div key={c.slug} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.3rem 0.5rem', background: '#fafafa', border: '1px solid #eee', borderRadius: 5 }}>
+                          <span style={{ flex: 1, fontSize: '0.85rem', color: '#444' }}>
+                            <strong style={{ textTransform: 'capitalize' }}>{c.slug}</strong>
+                            <span style={{ color: '#888' }}> · d{die} · </span>
+                            <strong>{remaining}</strong> / {c.level}
+                          </span>
+                          <button disabled={remaining === 0} onClick={() => rollHitDie(c.slug)}
+                            style={{
+                              padding: '0.2rem 0.55rem', fontSize: '0.78rem', border: '1px solid #ccc', borderRadius: 4,
+                              cursor: remaining === 0 ? 'not-allowed' : 'pointer',
+                              background: remaining === 0 ? '#f5f5f5' : '#fff',
+                              color: remaining === 0 ? '#bbb' : '#333', fontWeight: 600,
+                            }}>
+                            Roll d{die}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              }
+              // Legacy single-class fallback
+              return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.85rem', color: '#444' }}>
+                    d{hitDie} · <strong>{remainingHitDice}</strong> / {totalHitDice} remaining
+                  </span>
+                  <button disabled={remainingHitDice === 0} onClick={() => rollHitDie(character.class_slug ?? '')}
+                    style={{
+                      padding: '0.25rem 0.6rem', fontSize: '0.8rem', border: '1px solid #ccc', borderRadius: 4,
+                      cursor: remainingHitDice === 0 ? 'not-allowed' : 'pointer',
+                      background: remainingHitDice === 0 ? '#f5f5f5' : '#fff',
+                      color: remainingHitDice === 0 ? '#bbb' : '#333', fontWeight: 600,
+                    }}>
+                    Roll HD
+                  </button>
+                </div>
+              );
+            })()}
           </Section>
 
           {/* Class Resource Tracker */}

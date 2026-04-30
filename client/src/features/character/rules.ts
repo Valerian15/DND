@@ -1,4 +1,4 @@
-import type { Abilities, AbilityKey, Character } from './types';
+import type { Abilities, AbilityKey, Character, ClassEntry } from './types';
 import { abilityModifier } from './pointBuy';
 
 /** 5e proficiency bonus by character level */
@@ -111,9 +111,30 @@ export function recomputeDerived(
   hitDieSize: number,
 ): Partial<Character> {
   const conMod = abilityModifier(character.abilities.con);
-  const hpMax = computeMaxHp(character.level, hitDieSize, conMod);
   const ac = baseAc(character.abilities);
-  const slots = computeSpellSlots(character.class_slug, character.level);
+  const classes = character.classes ?? [];
+
+  // Multiclass path: classes[] populated with at least one entry → use multiclass math.
+  // Single-class path (legacy): fall back to class_slug + level.
+  let hpMax: number;
+  let slots: Record<string, number>;
+  if (classes.length > 0) {
+    hpMax = computeMulticlassHp(classes, conMod);
+    slots = computeMulticlassSpellSlots(classes);
+    // Warlock pact slots merge in (separate pool but stored together for now).
+    // If a class entry is warlock, add its pact slots on top of multiclass slots.
+    const warlockEntry = classes.find((c) => c.slug === 'warlock');
+    if (warlockEntry) {
+      const pact = computeWarlockPactSlots(warlockEntry.level);
+      for (const [lvl, count] of Object.entries(pact)) {
+        slots[lvl] = (slots[lvl] ?? 0) + count;
+      }
+    }
+  } else {
+    hpMax = computeMaxHp(character.level, hitDieSize, conMod);
+    slots = computeSpellSlots(character.class_slug, character.level);
+  }
+
   const hpCurrent = character.hp_current === 0 ? hpMax : Math.min(character.hp_current, hpMax);
   return {
     hp_max: hpMax,
@@ -138,6 +159,150 @@ export const CLASS_SAVE_PROFICIENCIES: Record<string, AbilityKey[]> = {
   warlock: ['wis', 'cha'],
   wizard: ['int', 'wis'],
 };
+
+/* ============================================================================
+ * MULTICLASSING (5e 2014 PHB ch.6)
+ * ============================================================================ */
+
+/** Hit die size per class (the d-something each class rolls for HP per level). */
+export const HIT_DIE_BY_CLASS: Record<string, number> = {
+  barbarian: 12,
+  fighter: 10, paladin: 10, ranger: 10,
+  bard: 8, cleric: 8, druid: 8, monk: 8, rogue: 8, warlock: 8,
+  sorcerer: 6, wizard: 6,
+};
+
+export function hitDieFor(classSlug: string): number {
+  return HIT_DIE_BY_CLASS[classSlug] ?? 8;
+}
+
+/**
+ * 5e PHB multiclass prereqs. To take a level in a class you must meet ALL of its
+ * required ability scores. (Fighter is "STR 13 OR DEX 13" — handled with `oneOf`.)
+ *
+ * Note: prereqs apply when ADDING a class. Your starting class has no prereq.
+ */
+export interface MulticlassPrereq {
+  /** All of these abilities must be ≥ 13. */
+  all?: AbilityKey[];
+  /** Any one of these abilities must be ≥ 13. */
+  oneOf?: AbilityKey[];
+}
+
+export const MULTICLASS_PREREQS: Record<string, MulticlassPrereq> = {
+  barbarian: { all: ['str'] },
+  bard: { all: ['cha'] },
+  cleric: { all: ['wis'] },
+  druid: { all: ['wis'] },
+  fighter: { oneOf: ['str', 'dex'] },
+  monk: { all: ['dex', 'wis'] },
+  paladin: { all: ['str', 'cha'] },
+  ranger: { all: ['dex', 'wis'] },
+  rogue: { all: ['dex'] },
+  sorcerer: { all: ['cha'] },
+  warlock: { all: ['cha'] },
+  wizard: { all: ['int'] },
+};
+
+/** Returns true if the character's abilities meet the multiclass prereq for a class. */
+export function meetsMulticlassPrereqs(classSlug: string, abilities: Abilities): boolean {
+  const req = MULTICLASS_PREREQS[classSlug];
+  if (!req) return true; // no prereq registered (homebrew, etc.)
+  if (req.all && !req.all.every((k) => (abilities[k] ?? 0) >= 13)) return false;
+  if (req.oneOf && !req.oneOf.some((k) => (abilities[k] ?? 0) >= 13)) return false;
+  return true;
+}
+
+/** Returns the unmet prereq abilities (for showing the user what's missing). */
+export function missingMulticlassPrereqs(classSlug: string, abilities: Abilities): AbilityKey[] {
+  const req = MULTICLASS_PREREQS[classSlug];
+  if (!req) return [];
+  const missing: AbilityKey[] = [];
+  if (req.all) {
+    for (const k of req.all) if ((abilities[k] ?? 0) < 13) missing.push(k);
+  }
+  if (req.oneOf) {
+    if (!req.oneOf.some((k) => (abilities[k] ?? 0) >= 13)) missing.push(...req.oneOf);
+  }
+  return missing;
+}
+
+/**
+ * Multiclass HP (PHB p.164):
+ *  - First class taken: full hit die value + Con mod at level 1
+ *  - All subsequent levels (any class): per-class average + Con mod
+ *
+ * We don't know which class was taken first historically, so we use `classes[0]`
+ * as the starting class. The wizard step that adds a class should preserve order.
+ */
+export function computeMulticlassHp(classes: ClassEntry[], conMod: number): number {
+  if (classes.length === 0) return 1;
+  const first = classes[0];
+  const firstHitDie = hitDieFor(first.slug);
+  let hp = firstHitDie + conMod;
+  // Remaining levels in the first class
+  hp += Math.max(0, first.level - 1) * (hpAverageForHitDie(firstHitDie) + conMod);
+  // Every level of subsequent classes uses that class's average (no level-1 bonus)
+  for (let i = 1; i < classes.length; i++) {
+    const c = classes[i];
+    const die = hitDieFor(c.slug);
+    hp += c.level * (hpAverageForHitDie(die) + conMod);
+  }
+  return Math.max(1, hp);
+}
+
+/**
+ * Multiclass spell slot computation (PHB p.164):
+ *   caster level = sum of (full caster levels) + floor(half-caster levels / 2)
+ *                  + floor(third-caster levels / 3)
+ * Then look up that total in the FULL_CASTER_SLOTS table.
+ *
+ * Warlock levels do NOT contribute to multiclass slots — pact magic is separate.
+ *
+ * Subclass-aware: fighter/rogue only count as third-casters if they're an
+ * Eldritch Knight or Arcane Trickster.
+ */
+export function multiclassCasterLevel(classes: ClassEntry[]): number {
+  let total = 0;
+  for (const c of classes) {
+    const t = casterTypeForClass(c.slug);
+    if (t === 'full') total += c.level;
+    else if (t === 'half') total += Math.floor(c.level / 2);
+    else if (t === 'none') {
+      // Third caster check — fighter EK / rogue AT
+      if ((c.slug === 'fighter' && c.subclass_slug === 'eldritch-knight')
+        || (c.slug === 'rogue' && c.subclass_slug === 'arcane-trickster')) {
+        total += Math.floor(c.level / 3);
+      }
+    }
+    // warlock is excluded (pact magic uses its own slot pool)
+  }
+  return total;
+}
+
+export function computeMulticlassSpellSlots(classes: ClassEntry[]): Record<string, number> {
+  const cl = multiclassCasterLevel(classes);
+  if (cl === 0) {
+    // No multiclass-shared slots. But a single half-caster at level 1 still has none,
+    // and a single full caster's slots are picked up by the cl=1 path above.
+    return {};
+  }
+  const arr = FULL_CASTER_SLOTS[cl] ?? [];
+  const out: Record<string, number> = {};
+  arr.forEach((count, idx) => { if (count > 0) out[String(idx + 1)] = count; });
+  return out;
+}
+
+/**
+ * Warlock pact slots — separate from multiclass spell slots.
+ * Returns the pact slot pool keyed by slot level.
+ * `warlockLevel` is the character's warlock-class level (0 if not a warlock).
+ */
+export function computeWarlockPactSlots(warlockLevel: number): Record<string, number> {
+  if (warlockLevel <= 0) return {};
+  const w = WARLOCK_SLOTS[warlockLevel];
+  return w ? { [String(w.level)]: w.count } : {};
+}
 
 /** Parse Open5e's background skill_proficiencies string into skill keys. */
 export function parseBackgroundSkillProficiencies(raw: string | undefined): string[] {

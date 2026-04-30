@@ -1,19 +1,42 @@
-import { useState } from 'react';
-import type { Abilities, AbilityKey, Character } from './types';
+import { useEffect, useMemo, useState } from 'react';
+import type { Abilities, AbilityKey, Character, ClassEntry } from './types';
 import { ABILITY_NAMES, ABILITY_ORDER } from './types';
 import { abilityModifier, formatModifier } from './pointBuy';
 import { applyAsi, isAsiLevel, previewLevelUp, type AsiChoice } from './levelUp';
+import { hitDieFor } from './rules';
 
 interface Props {
   character: Character;
+  /** Legacy: hit die for the primary class. Used as fallback when picking that class to level. */
   hitDieSize: number;
-  onConfirm: (updatedAbilities: Abilities, newLevel: number, newHpMax: number, newHpCurrent: number) => Promise<void>;
+  /**
+   * Confirm callback. Receives the updated classes[] (with the chosen class's level bumped),
+   * abilities (post-ASI), new total level, and HP totals.
+   */
+  onConfirm: (updatedClasses: ClassEntry[], updatedAbilities: Abilities, newLevel: number, newHpMax: number, newHpCurrent: number) => Promise<void>;
   onCancel: () => void;
 }
 
 export default function LevelUpDialog({ character, hitDieSize, onConfirm, onCancel }: Props) {
-  const preview = previewLevelUp(character, hitDieSize);
-  const requiresAsi = isAsiLevel(character.class_slug, preview.newLevel);
+  // Source of truth: classes[] if populated, else legacy single-class.
+  const classes: ClassEntry[] = useMemo(() => character.classes && character.classes.length > 0
+    ? character.classes
+    : (character.class_slug
+      ? [{ slug: character.class_slug, subclass_slug: character.subclass_slug, level: character.level || 1, hit_dice_used: 0 }]
+      : []), [character.classes, character.class_slug, character.subclass_slug, character.level]);
+
+  const [targetClass, setTargetClass] = useState<string>(classes[0]?.slug ?? '');
+  useEffect(() => {
+    // If the dialog opens after a class change, keep target valid.
+    if (!classes.some((c) => c.slug === targetClass)) {
+      setTargetClass(classes[0]?.slug ?? '');
+    }
+  }, [classes, targetClass]);
+
+  // Compute hit die for the target class (uses the rules.ts map; falls back to prop for legacy single-class).
+  const effectiveHitDie = targetClass ? hitDieFor(targetClass) : hitDieSize;
+  const preview = previewLevelUp(character, effectiveHitDie, targetClass);
+  const requiresAsi = preview.asiRequired;
 
   const [asiMode, setAsiMode] = useState<AsiChoice['mode']>('plus-two');
   const [firstAbility, setFirstAbility] = useState<AbilityKey>('str');
@@ -29,17 +52,27 @@ export default function LevelUpDialog({ character, hitDieSize, onConfirm, onCanc
       setError('Invalid ASI choice. Pick two different abilities if using +1/+1.');
       return;
     }
+    if (!targetClass) {
+      setError('Pick a class to level up.');
+      return;
+    }
     setSubmitting(true);
     try {
       const finalAbilities = projectedAbilities ?? character.abilities;
-      // Recompute HP max from scratch to account for potential CON bump from ASI.
       const newConMod = abilityModifier(finalAbilities.con);
       const conDelta = newConMod - abilityModifier(character.abilities.con);
-      // Every existing level also benefits retroactively from a CON bump.
       const newHpMax = preview.newHpMax + conDelta * character.level + conDelta;
       const newHpCurrent = Math.min(character.hp_current + preview.hpGain + conDelta, newHpMax);
 
-      await onConfirm(finalAbilities, preview.newLevel, newHpMax, newHpCurrent);
+      // Bump the target class's level (or append it if somehow missing).
+      let updatedClasses: ClassEntry[];
+      if (classes.some((c) => c.slug === targetClass)) {
+        updatedClasses = classes.map((c) => c.slug === targetClass ? { ...c, level: c.level + 1 } : c);
+      } else {
+        updatedClasses = [...classes, { slug: targetClass, subclass_slug: null, level: 1, hit_dice_used: 0 }];
+      }
+
+      await onConfirm(updatedClasses, finalAbilities, preview.newLevel, newHpMax, newHpCurrent);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Level up failed');
     } finally {
@@ -52,11 +85,33 @@ export default function LevelUpDialog({ character, hitDieSize, onConfirm, onCanc
       <div style={dialogStyle}>
         <h2 style={{ marginTop: 0 }}>Level up to {preview.newLevel}</h2>
 
+        {classes.length > 1 && (
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.4rem' }}>Which class are you levelling?</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+              {classes.map((c) => {
+                const isActive = c.slug === targetClass;
+                return (
+                  <button key={c.slug} onClick={() => setTargetClass(c.slug)}
+                    style={{
+                      padding: '0.4rem 0.75rem', borderRadius: 4,
+                      border: isActive ? '2px solid #333' : '1px solid #ccc',
+                      background: isActive ? '#fafafa' : '#fff', cursor: 'pointer',
+                      fontWeight: isActive ? 700 : 400, fontSize: '0.85rem',
+                    }}>
+                    {capitalize(c.slug)} <span style={{ color: '#888', fontWeight: 400 }}>L{c.level} → L{c.level + 1}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div style={{ background: '#f5f5f5', padding: '0.75rem', borderRadius: 6, marginBottom: '1rem', fontSize: '0.95rem' }}>
-          <div><strong>HP gain:</strong> +{preview.hpGain} (fixed average)</div>
+          <div><strong>Class:</strong> {capitalize(targetClass)} L{preview.newClassLevel}</div>
+          <div><strong>HP gain:</strong> +{preview.hpGain} (fixed average d{effectiveHitDie})</div>
           <div><strong>New HP max:</strong> {preview.newHpMax}</div>
-          <div><strong>Hit die:</strong> d{hitDieSize}</div>
-          {requiresAsi && <div style={{ color: '#a60', marginTop: '0.5rem' }}>⚡ This level grants an Ability Score Improvement.</div>}
+          {requiresAsi && <div style={{ color: '#a60', marginTop: '0.5rem' }}>⚡ This {capitalize(targetClass)} level grants an Ability Score Improvement.</div>}
         </div>
 
         {requiresAsi && (
@@ -178,6 +233,10 @@ const dialogStyle: React.CSSProperties = {
   width: '100%',
   boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
 };
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 function btnStyle(primary: boolean): React.CSSProperties {
   return {

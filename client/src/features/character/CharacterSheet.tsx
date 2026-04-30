@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import type { Abilities, Character } from './types';
+import type { Abilities, Character, ClassEntry } from './types';
 import { ABILITY_NAMES, ABILITY_ORDER } from './types';
 import { getCharacter, getLibraryItem, updateCharacter } from './api';
 import { abilityModifier, formatModifier } from './pointBuy';
@@ -33,6 +33,8 @@ export default function CharacterSheet() {
   const [hitDieSize, setHitDieSize] = useState(8);
   const [className, setClassName] = useState<string>('');
   const [subclassName, setSubclassName] = useState<string>('');
+  const [classNames, setClassNames] = useState<Record<string, string>>({});
+  const [subclassNames, setSubclassNames] = useState<Record<string, string>>({});
   const [raceName, setRaceName] = useState<string>('');
   const [backgroundName, setBackgroundName] = useState<string>('');
   const [spellNames, setSpellNames] = useState<Record<string, { name: string; level: number; school?: string; desc?: string }>>({});
@@ -84,6 +86,37 @@ export default function CharacterSheet() {
       getLibraryItem<{ name: string }>('backgrounds', character.background_slug).then((r) => setBackgroundName(r.name)).catch(() => {});
     }
   }, [character?.class_slug, character?.subclass_slug, character?.race_slug, character?.background_slug]);
+
+  // Multiclass: load display names for every class and subclass in classes[]
+  useEffect(() => {
+    if (!character?.classes) return;
+    const classSlugs = character.classes.map((c) => c.slug);
+    const subSlugs = character.classes.map((c) => c.subclass_slug).filter((s): s is string => !!s);
+    const missingClasses = classSlugs.filter((s) => !classNames[s]);
+    const missingSubs = subSlugs.filter((s) => !subclassNames[s]);
+    if (missingClasses.length > 0) {
+      Promise.all(missingClasses.map((slug) =>
+        getLibraryItem<{ name: string }>('classes', slug).then((r) => ({ slug, name: r.name })).catch(() => null),
+      )).then((results) => {
+        setClassNames((prev) => {
+          const next = { ...prev };
+          for (const r of results) if (r) next[r.slug] = r.name;
+          return next;
+        });
+      });
+    }
+    if (missingSubs.length > 0) {
+      Promise.all(missingSubs.map((slug) =>
+        getLibraryItem<{ name: string }>('subclasses', slug).then((r) => ({ slug, name: r.name })).catch(() => null),
+      )).then((results) => {
+        setSubclassNames((prev) => {
+          const next = { ...prev };
+          for (const r of results) if (r) next[r.slug] = r.name;
+          return next;
+        });
+      });
+    }
+  }, [character?.classes, classNames, subclassNames]);
 
   useEffect(() => {
     if (!character) return;
@@ -162,9 +195,10 @@ export default function CharacterSheet() {
     setTimeout(() => setRecomputeMsg(null), 2000);
   }
 
-  async function applyLevelUp(abilities: Abilities, newLevel: number, newHpMax: number, newHpCurrent: number) {
+  async function applyLevelUp(updatedClasses: ClassEntry[], abilities: Abilities, newLevel: number, newHpMax: number, newHpCurrent: number) {
     if (!character) return;
     let updated = await updateCharacter(character.id, {
+      classes: updatedClasses,
       abilities,
       level: newLevel,
       hp_max: newHpMax,
@@ -210,8 +244,25 @@ export default function CharacterSheet() {
           <div style={{ color: '#666' }}>
             Level {character.level}
             {raceName && ` · ${raceName}`}
-            {className && ` · ${className}`}
-            {subclassName && ` (${subclassName})`}
+            {(() => {
+              // Multiclass: render "Fighter 3 (Battle Master) / Wizard 2 (Evoker)"
+              const cls = character.classes ?? [];
+              if (cls.length > 0) {
+                const parts = cls.map((c) => {
+                  const name = classNames[c.slug] ?? c.slug;
+                  const sub = c.subclass_slug ? subclassNames[c.subclass_slug] : null;
+                  return `${name} ${c.level}${sub ? ` (${sub})` : ''}`;
+                });
+                return ` · ${parts.join(' / ')}`;
+              }
+              // Legacy fallback
+              return (
+                <>
+                  {className && ` · ${className}`}
+                  {subclassName && ` (${subclassName})`}
+                </>
+              );
+            })()}
             {backgroundName && ` · ${backgroundName}`}
             {desc.alignment && ` · ${desc.alignment}`}
           </div>

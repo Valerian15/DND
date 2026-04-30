@@ -34,6 +34,7 @@ interface CharacterRow {
   feats: string;
   personality: string;
   effects: string;
+  classes: string;
   features: string;
   notes: string;
   description: string;
@@ -62,6 +63,7 @@ function hydrate(row: CharacterRow) {
     feats: JSON.parse(row.feats || '[]'),
     personality: JSON.parse(row.personality || '{"traits":"","ideals":"","bonds":"","flaws":""}'),
     effects: JSON.parse(row.effects || '[]'),
+    classes: JSON.parse(row.classes || '[]'),
     features: JSON.parse(row.features),
     description: JSON.parse(row.description),
   };
@@ -141,6 +143,7 @@ const UPDATABLE_JSON = new Set([
   'feats',
   'personality',
   'effects',
+  'classes',
   'features',
   'description',
 ]);
@@ -165,6 +168,19 @@ router.patch('/:id', (req: AuthRequest, res) => {
       sets.push(`${k} = ?`);
       values.push(JSON.stringify(v));
     }
+  }
+
+  // Multiclass migration helper: when `classes` is updated, mirror its first entry
+  // into the legacy single-class columns so old code/UI keeps reading the right values.
+  // The total `level` column becomes the sum across classes; `hit_dice_used` mirrors classes[0].
+  if (Array.isArray(body.classes) && body.classes.length > 0) {
+    const first = body.classes[0] as { slug?: string; subclass_slug?: string | null; level?: number; hit_dice_used?: number };
+    const totalLevel = (body.classes as Array<{ level?: number }>)
+      .reduce((sum, c) => sum + (typeof c.level === 'number' ? c.level : 0), 0);
+    if (typeof first.slug === 'string') { sets.push('class_slug = ?'); values.push(first.slug); }
+    sets.push('subclass_slug = ?'); values.push(typeof first.subclass_slug === 'string' ? first.subclass_slug : null);
+    if (totalLevel > 0) { sets.push('level = ?'); values.push(totalLevel); }
+    if (typeof first.hit_dice_used === 'number') { sets.push('hit_dice_used = ?'); values.push(first.hit_dice_used); }
   }
 
   if (sets.length === 0) {

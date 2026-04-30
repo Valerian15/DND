@@ -27,6 +27,18 @@ export interface ClassResource {
   reset: 'long' | 'short';
 }
 
+/**
+ * Multiclass entry. Each class a character has is one entry in `Character.classes`.
+ * For single-class characters this array has one entry that mirrors the legacy
+ * top-level fields (class_slug, subclass_slug, level, hit_dice_used).
+ */
+export interface ClassEntry {
+  slug: string;
+  subclass_slug: string | null;
+  level: number;
+  hit_dice_used: number;
+}
+
 export interface TimedEffect {
   name: string;
   rounds: number;
@@ -36,8 +48,13 @@ export interface Character {
   id: number;
   owner_id: number;
   name: string;
+  /** Total level across all classes. Computed = sum of classes[].level. */
   level: number;
+  /** Multiclass entries. classes[0] mirrors legacy class_slug/subclass_slug for backwards compat. */
+  classes: ClassEntry[];
+  /** @deprecated mirror of classes[0].slug — kept for backwards compatibility during multiclass rollout */
   class_slug: string | null;
+  /** @deprecated mirror of classes[0].subclass_slug */
   subclass_slug: string | null;
   race_slug: string | null;
   background_slug: string | null;

@@ -513,5 +513,24 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_map_drawings_map ON map_drawings(map_id);
   `);
 
+  // Multiclassing: characters have a `classes` JSON array with one entry per class.
+  // The legacy class_slug/subclass_slug/level/hit_dice_used columns are mirrors of classes[0]
+  // and stay in sync during migration so old code keeps working.
+  try { db.exec("ALTER TABLE characters ADD COLUMN classes TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+
+  // Backfill: for any character with a class_slug but empty classes array,
+  // populate classes from the legacy single-class fields.
+  const charsToBackfill = db.prepare(
+    "SELECT id, class_slug, subclass_slug, level, hit_dice_used FROM characters WHERE class_slug IS NOT NULL AND classes = '[]'"
+  ).all() as { id: number; class_slug: string; subclass_slug: string | null; level: number; hit_dice_used: number }[];
+  if (charsToBackfill.length > 0) {
+    const updateStmt = db.prepare('UPDATE characters SET classes = ? WHERE id = ?');
+    for (const c of charsToBackfill) {
+      const entry = [{ slug: c.class_slug, subclass_slug: c.subclass_slug, level: c.level, hit_dice_used: c.hit_dice_used ?? 0 }];
+      updateStmt.run(JSON.stringify(entry), c.id);
+    }
+    console.log(`  ↳ Backfilled classes[] on ${charsToBackfill.length} character(s)`);
+  }
+
   console.log('✅ Database schema ready');
 }
