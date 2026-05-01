@@ -2,6 +2,7 @@ import type { Server, Socket } from 'socket.io';
 import { verifyToken, type AuthUser } from './auth/index.js';
 import { db } from './db/index.js';
 import { broadcastFiltered, getIo } from './io.js';
+import { offerReaction, resolveReaction, cancelOffers } from './reactions.js';
 import { canUserSeeToken, hydrateToken, broadcastFogTokenChanges, VALID_CONDITIONS, type TokenRow } from './routes/tokens.js';
 import { computeAndSaveFog, getVisibleSet } from './vision.js';
 
@@ -56,6 +57,10 @@ interface ChatMessageOut {
     target_token_id?: number;
     prev_hp?: number;
     undone?: boolean;
+    // Spell summary metadata used by the post-hoc condition picker (DM-only UI).
+    failed_target_ids?: number[];
+    spell_name?: string;
+    conditions_applied?: string[];
   };
   created_at: number;
 }
@@ -100,8 +105,17 @@ interface ServerToClientEvents {
   'token:conditions_updated': (data: { token_id: number; conditions: string[] }) => void;
   'token:effects_updated': (data: { token_id: number; effects: { name: string; rounds: number; indefinite?: boolean }[] }) => void;
   'token:aura_updated': (data: { token_id: number; aura_radius: number | null; aura_color: string | null }) => void;
+  'token:slots_updated': (data: { token_id: number; spell_slots_used: Record<string, number> }) => void;
   'chat:message': (msg: ChatMessageOut) => void;
   'initiative:updated': (state: InitiativeStateOut) => void;
+  /** A character's per-turn flags (action/bonus/reaction) were just reset server-side. */
+  'character:turn_reset': (data: { character_id: number }) => void;
+  /** Sent after a DM applies post-hoc conditions via the spell-summary picker. */
+  'combat:summary_conditions_applied': (data: { message_id: number; conditions: string[] }) => void;
+  /** Player-targeted reaction prompt (Shield, Counterspell). Filtered to the eligible user. */
+  'reaction:offer': (data: { offer_id: string; deadline: number; kind: 'shield' | 'counterspell'; prompt: string; detail?: string }) => void;
+  /** Tells the client to close a reaction chip when another player resolved the trigger first. */
+  'reaction:cancelled': (data: { offer_id: string }) => void;
 }
 
 interface ClientToServerEvents {
@@ -178,6 +192,14 @@ interface ClientToServerEvents {
    * Reads the chat message's `data` JSON for `target_token_id` + `prev_hp` and restores them.
    */
   'combat:undo_hp': (data: { message_id: number }) => void;
+  /**
+   * DM-only — apply chosen condition(s) to the failed-save targets recorded on a spell-summary
+   * chat message. The message's `data` is updated to include `conditions_applied` so the picker
+   * doesn't reappear after the fact.
+   */
+  'combat:apply_summary_conditions': (data: { message_id: number; conditions: string[] }) => void;
+  /** Player response to a Shield / Counterspell offer. */
+  'reaction:respond': (data: { offer_id: string; accept: boolean }) => void;
 }
 
 interface SocketData {
@@ -419,6 +441,138 @@ function damageModifierForToken(
  * `characters.hp_current` in sync so the character sheet reflects auto-resolver
  * damage/heal even after a refresh or for clients that aren't actively listening.
  */
+// Reaction-eligibility check for a PC token: do they have `spellSlug` prepared (or known),
+// an unspent slot of `minLevel` or higher, and an unused reaction this turn?
+// Returns the character's owner_id (player to prompt) or null if they can't react.
+function checkPcCanReactWith(tokenId: number, spellSlug: string, minLevel: number): { ownerId: number; characterId: number; charName: string } | null {
+  const tok = db.prepare("SELECT character_id, token_type FROM tokens WHERE id = ?").get(tokenId) as { character_id: number | null; token_type: string } | undefined;
+  if (!tok || tok.token_type !== 'pc' || tok.character_id == null) return null;
+  const ch = db.prepare(
+    'SELECT id, owner_id, name, spells_known, spells_prepared, spell_slots, spell_slots_used, reaction_used FROM characters WHERE id = ?'
+  ).get(tok.character_id) as {
+    id: number; owner_id: number; name: string;
+    spells_known: string; spells_prepared: string;
+    spell_slots: string; spell_slots_used: string;
+    reaction_used: number;
+  } | undefined;
+  if (!ch) return null;
+  if (ch.reaction_used) return null;
+
+  // Must have the spell either prepared (prepared casters) or known (sorcerers / warlocks).
+  let known: string[] = [];
+  let prepared: string[] = [];
+  try { known = JSON.parse(ch.spells_known) ?? []; } catch { /* */ }
+  try { prepared = JSON.parse(ch.spells_prepared) ?? []; } catch { /* */ }
+  if (!known.includes(spellSlug) && !prepared.includes(spellSlug)) return null;
+
+  // Must have an unspent slot of at least `minLevel`.
+  let slots: Record<string, number> = {};
+  let used: Record<string, number> = {};
+  try { slots = JSON.parse(ch.spell_slots) ?? {}; } catch { /* */ }
+  try { used = JSON.parse(ch.spell_slots_used) ?? {}; } catch { /* */ }
+  let slotLvl: number | null = null;
+  for (let l = minLevel; l <= 9; l++) {
+    const max = slots[String(l)] ?? 0;
+    const u = used[String(l)] ?? 0;
+    if (max > u) { slotLvl = l; break; }
+  }
+  if (slotLvl == null) return null;
+  return { ownerId: ch.owner_id, characterId: ch.id, charName: ch.name };
+}
+
+// Spend `level` slot + mark reaction_used on a character. Used after Yes on a reaction offer.
+function consumePcReaction(characterId: number, minLevel: number) {
+  const ch = db.prepare('SELECT spell_slots, spell_slots_used FROM characters WHERE id = ?')
+    .get(characterId) as { spell_slots: string; spell_slots_used: string } | undefined;
+  if (!ch) return;
+  let slots: Record<string, number> = {};
+  let used: Record<string, number> = {};
+  try { slots = JSON.parse(ch.spell_slots) ?? {}; } catch { /* */ }
+  try { used = JSON.parse(ch.spell_slots_used) ?? {}; } catch { /* */ }
+  for (let l = minLevel; l <= 9; l++) {
+    const max = slots[String(l)] ?? 0;
+    const u = used[String(l)] ?? 0;
+    if (max > u) { used[String(l)] = u + 1; break; }
+  }
+  db.prepare('UPDATE characters SET spell_slots_used = ?, reaction_used = 1 WHERE id = ?')
+    .run(JSON.stringify(used), characterId);
+}
+
+// All PC tokens within `rangeFt` (Chebyshev / king's-move) of the caster on the same map.
+// Returns [tokenId, ownerId, characterId, charName] for those eligible to Counterspell.
+function findCounterspellCandidates(casterTokenId: number, rangeFt: number, casterSpellLevel: number): Array<{ tokenId: number; ownerId: number; characterId: number; charName: string }> {
+  const caster = db.prepare('SELECT map_id, col, row FROM tokens WHERE id = ?').get(casterTokenId) as { map_id: number; col: number; row: number } | undefined;
+  if (!caster) return [];
+  const map = db.prepare('SELECT grid_size FROM maps WHERE id = ?').get(caster.map_id) as { grid_size: number } | undefined;
+  if (!map) return [];
+  // 5e grid: 1 cell = 5 ft.
+  const rangeCells = Math.ceil(rangeFt / 5);
+  const candidates = db.prepare(
+    "SELECT id, character_id, col, row FROM tokens WHERE map_id = ? AND token_type = 'pc' AND id != ?"
+  ).all(caster.map_id, casterTokenId) as { id: number; character_id: number | null; col: number; row: number }[];
+  const out: Array<{ tokenId: number; ownerId: number; characterId: number; charName: string }> = [];
+  for (const c of candidates) {
+    const dist = Math.max(Math.abs(c.col - caster.col), Math.abs(c.row - caster.row));
+    if (dist > rangeCells) continue;
+    const elig = checkPcCanReactWith(c.id, 'counterspell', Math.max(3, Math.min(9, casterSpellLevel)));
+    if (elig) out.push({ tokenId: c.id, ownerId: elig.ownerId, characterId: elig.characterId, charName: elig.charName });
+  }
+  return out;
+}
+
+// Run Counterspell offers for one incoming spell. Returns true if the spell was negated.
+async function maybeCounterspell(cid: number, casterTokenId: number, spellName: string, spellLevel: number, _insertChat?: unknown): Promise<boolean> {
+  const candidates = findCounterspellCandidates(casterTokenId, 60, spellLevel);
+  if (candidates.length === 0) return false;
+  const casterTok = db.prepare('SELECT label FROM tokens WHERE id = ?').get(casterTokenId) as { label: string } | undefined;
+  const casterLabel = casterTok?.label ?? 'caster';
+
+  type O = { offerId: string; promise: Promise<boolean>; characterId: number; charName: string };
+  const offers: O[] = candidates.map((c) => {
+    const o = offerReaction(cid, c.ownerId, {
+      kind: 'counterspell',
+      prompt: `Counterspell ${casterLabel}'s ${spellName}?`,
+      detail: `Spend a 3rd-level (or higher) slot to negate.`,
+    });
+    return { offerId: o.offerId, promise: o.promise, characterId: c.characterId, charName: c.charName };
+  });
+
+  // Wait for the first Yes. Promise.race resolves with the first true; any false is ignored
+  // by tracking via a custom wait that returns `null` on all-false / all-timeout.
+  const winner = await new Promise<O | null>((resolve) => {
+    let pending = offers.length;
+    let settled = false;
+    for (const o of offers) {
+      o.promise.then((accept) => {
+        if (settled) return;
+        if (accept) {
+          settled = true;
+          resolve(o);
+        } else if (--pending === 0) {
+          settled = true;
+          resolve(null);
+        }
+      });
+    }
+  });
+
+  if (!winner) return false;
+
+  // Cancel any other still-pending offers.
+  cancelOffers(offers.filter((o) => o.offerId !== winner.offerId).map((o) => o.offerId));
+
+  // Spend slot + reaction.
+  consumePcReaction(winner.characterId, 3);
+
+  // Chat note.
+  const note = `${winner.charName} casts Counterspell — ${casterLabel}'s ${spellName} is negated.`;
+  const r = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(cid, 0, 'system', `/action ${note}`, 'action', null);
+  const noteRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+  getIo().to(`campaign:${cid}`).emit('chat:message', hydrateMessage(noteRow));
+  return true;
+}
+
 function applyTokenHpChange(cid: number, tokenId: number, characterId: number | null, newHp: number) {
   db.prepare('UPDATE tokens SET hp_current = ? WHERE id = ?').run(newHp, tokenId);
   if (characterId !== null) {
@@ -804,6 +958,19 @@ export function setupSession(io: AppServer) {
       const roundIncremented = (nextRound > state.round) && state.round > 0;
       setInitiativeTurn(campaign_id, state.entries[nextIdx].id, nextRound || 1);
 
+      // Reset action economy flags for the PC whose turn just started — they get a fresh
+      // Action / Bonus Action / Reaction at the start of their turn (5e basic rule).
+      const startingEntry = state.entries[nextIdx];
+      if (startingEntry?.token_id != null) {
+        const tokRow = db.prepare('SELECT character_id FROM tokens WHERE id = ?')
+          .get(startingEntry.token_id) as { character_id: number | null } | undefined;
+        if (tokRow?.character_id != null) {
+          db.prepare('UPDATE characters SET action_used = 0, bonus_used = 0, reaction_used = 0 WHERE id = ?')
+            .run(tokRow.character_id);
+          io.to(`campaign:${campaign_id}`).emit('character:turn_reset', { character_id: tokRow.character_id });
+        }
+      }
+
       // Decrement effect timers on every token in this campaign whose round just advanced
       if (roundIncremented) {
         const tokenRows = db.prepare(
@@ -1003,7 +1170,7 @@ export function setupSession(io: AppServer) {
       }
     });
 
-    socket.on('combat:resolve_spell', ({ caster_token_id, target_token_ids, spell_name, save_ability, save_dc, damage_dice, damage_type, half_on_save, conditions_on_fail }) => {
+    socket.on('combat:resolve_spell', async ({ caster_token_id, target_token_ids, spell_name, save_ability, save_dc, damage_dice, damage_type, half_on_save, conditions_on_fail }) => {
       const cid = socket.data.campaign_id;
       if (cid == null) return;
 
@@ -1026,11 +1193,18 @@ export function setupSession(io: AppServer) {
       const casterToken = db.prepare('SELECT label FROM tokens WHERE id = ?').get(caster_token_id) as { label: string } | undefined;
       const casterName = casterToken?.label ?? 'Caster';
 
+      const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
+
+      // Counterspell offer — any nearby PC with Counterspell prepared + L3+ slot can negate.
+      // Spell level: client doesn't pass it explicitly, infer from damage_dice or default 1.
+      // Counterspell auto-negates spells of L3 or lower; higher levels would normally need a DC
+      // check (DM can rule manually if it matters).
+      const negated = await maybeCounterspell(cid, caster_token_id, spell_name, 1, insertChat);
+      if (negated) return;
+
       // Roll shared damage once (5e: AOE save spells share one damage roll across all targets)
       const dmg = rollDiceExpression(damage_dice);
       if (dmg.total === 0 && dmg.rolls.length === 0) return;
-
-      const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
 
       // Post the damage roll once
       {
@@ -1049,6 +1223,7 @@ export function setupSession(io: AppServer) {
 
       // Per-target: roll save, apply damage
       const summaries: string[] = [];
+      const failedTargetIds: number[] = []; // for the manual condition picker on the summary
       for (const tid of validTargets) {
         const target = db.prepare('SELECT id, label, hp_current, hp_max, character_id, monster_slug, campaign_npc_id FROM tokens WHERE id = ?').get(tid) as { id: number; label: string; hp_current: number; hp_max: number; character_id: number | null; monster_slug: string | null; campaign_npc_id: number | null } | undefined;
         if (!target) continue;
@@ -1094,16 +1269,22 @@ export function setupSession(io: AppServer) {
 
         const modSuffix = dmgMod.label ? ` (${dmgMod.label})` : '';
         summaries.push(`${target.label}: ${passed ? '✓' : '✗'} ${damageDealt}${modSuffix}`);
+        if (!passed) failedTargetIds.push(tid);
       }
 
-      // Final summary action
+      // Final summary action — carries failed_target_ids so DMs/admins can apply a condition
+      // post-hoc for spells whose entry in the curated map didn't include one (Slow, Banishment,
+      // Bestow Curse, etc.).
       const summaryText = `${casterName}'s ${spell_name}: ${summaries.join(' · ')}`;
-      const sumRes = insertChat.run(cid, user.id, user.username, `/action ${summaryText}`, 'action', null);
+      const summaryData = failedTargetIds.length > 0
+        ? JSON.stringify({ failed_target_ids: failedTargetIds, spell_name })
+        : null;
+      const sumRes = insertChat.run(cid, user.id, user.username, `/action ${summaryText}`, 'action', summaryData);
       const sumRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(sumRes.lastInsertRowid) as ChatMessageRow;
       io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(sumRow));
     });
 
-    socket.on('combat:resolve_attack', ({ caster_token_id, target_token_ids, attack_name, attack_bonus, damage_dice, damage_type, is_spell, roll_mode }) => {
+    socket.on('combat:resolve_attack', async ({ caster_token_id, target_token_ids, attack_name, attack_bonus, damage_dice, damage_type, is_spell, roll_mode }) => {
       const cid = socket.data.campaign_id;
       if (cid == null) return;
 
@@ -1127,6 +1308,16 @@ export function setupSession(io: AppServer) {
 
       const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
 
+      // Counterspell offer for spell attacks (Fire Bolt, Disintegrate, etc.). Skipped for
+      // weapons (is_spell falsy) and L0 cantrips can still be counterspelled in 5e (Counterspell
+      // RAW: any spell at any level <= caster's slot). For weapon attacks, no counterspell.
+      if (is_spell) {
+        // We don't know the spell's level here (caller didn't say) — assume level 1 minimum so
+        // any 3rd-level Counterspell auto-negates. DM can rule on edge cases.
+        const negated = await maybeCounterspell(cid, caster_token_id, attack_name, 1, insertChat);
+        if (negated) return;
+      }
+
       // Cast announcement
       {
         const r = insertChat.run(cid, user.id, user.username, `/action ${casterName} ${verb} ${attack_name}.`, 'action', null);
@@ -1140,7 +1331,8 @@ export function setupSession(io: AppServer) {
         const target = db.prepare('SELECT id, label, hp_current, hp_max, character_id, monster_slug, campaign_npc_id FROM tokens WHERE id = ?').get(tid) as { id: number; label: string; hp_current: number; hp_max: number; character_id: number | null; monster_slug: string | null; campaign_npc_id: number | null } | undefined;
         if (!target) continue;
 
-        const ac = computeAcForToken(target);
+        const baseAc = computeAcForToken(target);
+        let ac = baseAc;
         // Advantage / disadvantage: roll 2d20 and pick high/low. Normal: roll 1d20.
         const isAdv = roll_mode === 'advantage';
         const isDis = roll_mode === 'disadvantage';
@@ -1151,12 +1343,32 @@ export function setupSession(io: AppServer) {
         const isCrit = atkRoll === 20;
         const isFumble = atkRoll === 1;
         const atkTotal = atkRoll + attack_bonus;
-        const hits = isCrit || (!isFumble && atkTotal >= ac);
+        let hits = isCrit || (!isFumble && atkTotal >= ac);
+        let shieldUsed = false;
+
+        // Shield reaction: if this PC target would be hit, offer them a chance to cast Shield (+5 AC).
+        if (hits && !isCrit) {
+          const elig = checkPcCanReactWith(tid, 'shield', 1);
+          if (elig) {
+            const offer = offerReaction(cid, elig.ownerId, {
+              kind: 'shield',
+              prompt: `${casterName} hits ${elig.charName}! Cast Shield?`,
+              detail: `+5 AC may negate. Rolled ${atkTotal} vs AC ${baseAc}; needs ${atkTotal} vs AC ${baseAc + 5} after Shield.`,
+            });
+            const accepted = await offer.promise;
+            if (accepted) {
+              consumePcReaction(elig.characterId, 1);
+              ac = baseAc + 5;
+              hits = atkTotal >= ac;
+              shieldUsed = true;
+            }
+          }
+        }
 
         // Post the attack roll
         const advSuffix = isAdv ? 'adv' : isDis ? 'dis' : '';
         const atkExpr = `1d20${advSuffix}${attack_bonus >= 0 ? '+' : ''}${attack_bonus}`;
-        const hitLabel = isCrit ? '★ CRIT' : isFumble ? '✗ fumble' : hits ? `✓ hit (AC ${ac})` : `✗ miss (AC ${ac})`;
+        const hitLabel = isCrit ? '★ CRIT' : isFumble ? '✗ fumble' : hits ? `✓ hit (AC ${ac})` : `✗ miss (AC ${ac}${shieldUsed ? ' — Shield' : ''})`;
         const rollModeForData = isAdv ? 'advantage' : isDis ? 'disadvantage' : undefined;
         const atkData = JSON.stringify({ expression: atkExpr, dice: dicePosted, modifier: attack_bonus, total: atkTotal, label: `${target.label} — ${attack_name} ${hitLabel}`, rollMode: rollModeForData });
         const ar = insertChat.run(cid, user.id, user.username, `/roll ${atkExpr}`, 'roll', atkData);
@@ -1164,7 +1376,7 @@ export function setupSession(io: AppServer) {
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(atkRow));
 
         if (!hits) {
-          summaries.push(`${target.label}: ${isCrit ? 'CRIT' : 'miss'}`);
+          summaries.push(`${target.label}: ${shieldUsed ? '🛡 Shield' : isCrit ? 'CRIT' : 'miss'}`);
           continue;
         }
 
@@ -1195,7 +1407,7 @@ export function setupSession(io: AppServer) {
       io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(sumRow));
     });
 
-    socket.on('combat:resolve_auto_hit', ({ caster_token_id, target_token_ids, attack_name, hit_count, damage_dice, damage_type }) => {
+    socket.on('combat:resolve_auto_hit', async ({ caster_token_id, target_token_ids, attack_name, hit_count, damage_dice, damage_type }) => {
       const cid = socket.data.campaign_id;
       if (cid == null) return;
 
@@ -1223,13 +1435,17 @@ export function setupSession(io: AppServer) {
       const casterToken = db.prepare('SELECT label FROM tokens WHERE id = ?').get(caster_token_id) as { label: string } | undefined;
       const casterName = casterToken?.label ?? 'Caster';
 
+      const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
+
+      // Counterspell — Magic Missile is the canonical example, can be counterspelled.
+      const negated = await maybeCounterspell(cid, caster_token_id, attack_name, 1, insertChat);
+      if (negated) return;
+
       // Distribute hits round-robin across the targets
       const hitsPerTarget = new Array(validTargets.length).fill(0);
       for (let i = 0; i < totalHits; i++) {
         hitsPerTarget[i % validTargets.length]++;
       }
-
-      const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
 
       // Cast announcement
       {
@@ -1387,6 +1603,49 @@ export function setupSession(io: AppServer) {
         .run(cid, user.id, user.username, `/action ${note}`, 'action', null);
       const noteRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
       io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(noteRow));
+    });
+
+    // DM-only: apply chosen conditions to the failed-save targets recorded on a spell-summary
+    // chat message. Used by the post-hoc condition picker for spells that the curated map didn't
+    // already auto-apply (Slow, Banishment, Bestow Curse, etc.).
+    socket.on('combat:apply_summary_conditions', ({ message_id, conditions }) => {
+      const cid = socket.data.campaign_id;
+      if (cid == null) return;
+      const camp = db.prepare('SELECT dm_id FROM campaigns WHERE id = ?').get(cid) as { dm_id: number } | undefined;
+      if (!camp) return;
+      if (user.role !== 'admin' && user.id !== camp.dm_id) return;
+
+      const msg = db.prepare('SELECT id, campaign_id, data FROM chat_messages WHERE id = ?').get(message_id) as { id: number; campaign_id: number; data: string | null } | undefined;
+      if (!msg || msg.campaign_id !== cid || !msg.data) return;
+      let parsed: { failed_target_ids?: number[]; spell_name?: string; conditions_applied?: string[] } = {};
+      try { parsed = JSON.parse(msg.data); } catch { return; }
+      const targets = parsed.failed_target_ids ?? [];
+      if (targets.length === 0) return;
+
+      const valid = (conditions ?? []).filter((c) => typeof c === 'string' && VALID_CONDITIONS.has(c));
+      if (valid.length === 0) return;
+
+      // Apply to each failed-save target — merge with existing conditions.
+      for (const tid of targets) {
+        const tokRow = db.prepare('SELECT conditions FROM tokens WHERE id = ?').get(tid) as { conditions: string } | undefined;
+        if (!tokRow) continue;
+        let existing: string[] = [];
+        try { existing = JSON.parse(tokRow.conditions ?? '[]'); } catch { /* ignore */ }
+        const merged = Array.from(new Set([...existing, ...valid]));
+        db.prepare('UPDATE tokens SET conditions = ? WHERE id = ?').run(JSON.stringify(merged), tid);
+        io.to(`campaign:${cid}`).emit('token:conditions_updated', { token_id: tid, conditions: merged });
+      }
+
+      // Mark the summary message so the picker hides on subsequent renders.
+      const updatedData = JSON.stringify({ ...parsed, conditions_applied: [...(parsed.conditions_applied ?? []), ...valid] });
+      db.prepare('UPDATE chat_messages SET data = ? WHERE id = ?').run(updatedData, msg.id);
+      io.to(`campaign:${cid}`).emit('combat:summary_conditions_applied', { message_id: msg.id, conditions: valid });
+    });
+
+    // Player Yes/No on a pending Shield / Counterspell offer.
+    socket.on('reaction:respond', ({ offer_id, accept }) => {
+      if (typeof offer_id !== 'string') return;
+      resolveReaction(offer_id, !!accept);
     });
 
     socket.on('disconnect', () => {

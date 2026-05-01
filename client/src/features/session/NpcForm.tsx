@@ -23,6 +23,10 @@ export interface NpcFormData {
   immunities: string[];
   notes: string;
   dm_notes: string;
+  spells: string[];
+  spell_slots: Record<string, number>;
+  spell_save_dc: number | null;
+  spell_attack_bonus: number | null;
 }
 
 function formDataFromNpc(npc: CampaignNpc): NpcFormData {
@@ -42,6 +46,10 @@ function formDataFromNpc(npc: CampaignNpc): NpcFormData {
     immunities: npc.immunities ?? [],
     notes: npc.notes,
     dm_notes: npc.dm_notes ?? '',
+    spells: npc.spells ?? [],
+    spell_slots: npc.spell_slots ?? {},
+    spell_save_dc: npc.spell_save_dc,
+    spell_attack_bonus: npc.spell_attack_bonus,
   };
 }
 
@@ -52,6 +60,8 @@ const EMPTY: NpcFormData = {
   saving_throws: [], attacks: [], traits: [],
   resistances: [], vulnerabilities: [], immunities: [],
   notes: '', dm_notes: '',
+  spells: [], spell_slots: {},
+  spell_save_dc: null, spell_attack_bonus: null,
 };
 
 const EMPTY_ATTACK: NpcAttack = { name: '', to_hit: 0, damage: '1d6', damage_type: 'slashing' };
@@ -270,6 +280,47 @@ export function NpcForm({ initial, onSave, onCancel, submitting }: Props) {
           </div>
         </div>
       ))}
+
+      {/* Spellcasting — leave DC blank to mark this NPC as a non-caster */}
+      <div style={sectionHeadStyle}>Spellcasting (optional)</div>
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.4rem' }}>
+        <label style={{ flex: 1, fontSize: '0.72rem', color: '#666' }}>
+          <div>Save DC</div>
+          <input type="number" value={form.spell_save_dc ?? ''}
+            onChange={(e) => setForm((f) => ({ ...f, spell_save_dc: e.target.value === '' ? null : Number(e.target.value) || null }))}
+            placeholder="e.g. 13" style={{ ...fieldStyle, width: '100%' }} />
+        </label>
+        <label style={{ flex: 1, fontSize: '0.72rem', color: '#666' }}>
+          <div>Attack bonus</div>
+          <input type="number" value={form.spell_attack_bonus ?? ''}
+            onChange={(e) => setForm((f) => ({ ...f, spell_attack_bonus: e.target.value === '' ? null : Number(e.target.value) || null }))}
+            placeholder="e.g. +5" style={{ ...fieldStyle, width: '100%' }} />
+        </label>
+      </div>
+      <label style={{ fontSize: '0.72rem', color: '#666', display: 'block', marginBottom: '0.3rem' }}>
+        <div>Spell slugs (comma-separated, e.g. <code>fireball, magic-missile, sacred-flame</code>)</div>
+        <textarea value={form.spells.join(', ')}
+          onChange={(e) => setForm((f) => ({ ...f, spells: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) }))}
+          rows={2}
+          placeholder="fireball, magic-missile, cure-wounds"
+          style={{ ...fieldStyle, width: '100%', resize: 'vertical', fontFamily: 'system-ui' }} />
+        <div style={{ fontSize: '0.65rem', color: '#999', marginTop: 2 }}>
+          Use lowercase, hyphenated slugs from the spell library. Cantrips and leveled spells go in the same list — the sheet groups them by level automatically.
+        </div>
+      </label>
+      <label style={{ fontSize: '0.72rem', color: '#666', display: 'block' }}>
+        <div>Slots per level (JSON, e.g. <code>{`{"1":4,"2":3,"3":2}`}</code>)</div>
+        <input type="text"
+          value={Object.keys(form.spell_slots).length > 0 ? JSON.stringify(form.spell_slots) : ''}
+          onChange={(e) => {
+            try {
+              const parsed = e.target.value.trim() === '' ? {} : JSON.parse(e.target.value);
+              if (parsed && typeof parsed === 'object') setForm((f) => ({ ...f, spell_slots: parsed }));
+            } catch { /* ignore invalid JSON until user finishes typing */ }
+          }}
+          placeholder='{"1":4,"2":3}'
+          style={{ ...fieldStyle, width: '100%', fontFamily: 'system-ui' }} />
+      </label>
 
       {/* Notes */}
       <div style={sectionHeadStyle}>Notes</div>

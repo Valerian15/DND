@@ -136,6 +136,10 @@ export default function CampaignDetailPage() {
         portrait_url: data.portrait_url,
         notes: data.notes,
         dm_notes: data.dm_notes,
+        spells: data.spells,
+        spell_slots: data.spell_slots,
+        spell_save_dc: data.spell_save_dc,
+        spell_attack_bonus: data.spell_attack_bonus,
       });
       setNpcs((prev) => [...prev, npc]);
       setAddingNpcCatId(null);
@@ -164,6 +168,10 @@ export default function CampaignDetailPage() {
         portrait_url: data.portrait_url,
         notes: data.notes,
         dm_notes: data.dm_notes,
+        spells: data.spells,
+        spell_slots: data.spell_slots,
+        spell_save_dc: data.spell_save_dc,
+        spell_attack_bonus: data.spell_attack_bonus,
       });
       setNpcs((prev) => prev.map((n) => n.id === updated.id ? updated : n));
       setEditingNpcId(null);

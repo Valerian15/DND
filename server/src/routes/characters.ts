@@ -45,6 +45,9 @@ interface CharacterRow {
   death_saves_success: number;
   death_saves_failure: number;
   inspiration: number;
+  action_used: number;
+  bonus_used: number;
+  reaction_used: number;
   created_at: number;
   updated_at: number;
 }
@@ -133,6 +136,9 @@ const UPDATABLE_SCALAR = new Set([
   'death_saves_failure',
   'inspiration',
   'exhaustion_level',
+  'action_used',
+  'bonus_used',
+  'reaction_used',
 ]);
 const UPDATABLE_JSON = new Set([
   'abilities',

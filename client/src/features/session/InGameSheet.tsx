@@ -120,9 +120,8 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const [newItemQty, setNewItemQty] = useState('1');
   const [newItemDesc, setNewItemDesc] = useState('');
   const [localCurrency, setLocalCurrency] = useState<{ pp: number; gp: number; ep: number; sp: number; cp: number }>({ pp: 0, gp: 0, ep: 0, sp: 0, cp: 0 });
-  const [actionUsed, setActionUsed] = useState(false);
-  const [bonusUsed, setBonusUsed] = useState(false);
-  const [reactionUsed, setReactionUsed] = useState(false);
+  // Action-economy flags now live on the character (DB-backed) so the hotbar and sheet share
+  // a single source of truth and the server can auto-reset them on `initiative:next_turn`.
   const [localFeats, setLocalFeats] = useState<string[]>([]);
   const [localPersonality, setLocalPersonality] = useState<{ traits: string; ideals: string; bonds: string; flaws: string }>({ traits: '', ideals: '', bonds: '', flaws: '' });
   const [featDetails, setFeatDetails] = useState<Record<string, { name: string; desc?: string; prerequisite?: string; effects_desc?: string[] }>>({});
@@ -261,6 +260,16 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     socket.on('token:hp_updated', onHp);
     return () => { socket.off('token:hp_updated', onHp); };
   }, [tokenId]);
+
+  // Refetch character when the server resets per-turn flags so the action-economy chips update.
+  useEffect(() => {
+    function onTurnReset(data: { character_id: number }) {
+      if (data.character_id !== characterId) return;
+      getCharacter(characterId).then(setCharacter).catch(() => {});
+    }
+    socket.on('character:turn_reset', onTurnReset);
+    return () => { socket.off('character:turn_reset', onTurnReset); };
+  }, [characterId]);
 
   // Detect concentration removal — send chat notification naming the spell
   useEffect(() => {
@@ -532,6 +541,23 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     const next = inspiration ? 0 : 1;
     setInspiration(next);
     try { await updateCharacter(character.id, { inspiration: next }); } catch { setInspiration(inspiration); }
+  }
+
+  // Toggle one of the per-turn action-economy flags. Optimistic; rollback on failure.
+  async function toggleEconomy(field: 'action_used' | 'bonus_used' | 'reaction_used') {
+    if (!character) return;
+    const next = character[field] ? 0 : 1;
+    setCharacter({ ...character, [field]: next });
+    try { await updateCharacter(character.id, { [field]: next }); }
+    catch { getCharacter(character.id).then(setCharacter).catch(() => {}); }
+  }
+
+  // Reset all three flags at once (manual override; server already resets on turn start).
+  async function resetEconomy() {
+    if (!character) return;
+    setCharacter({ ...character, action_used: 0, bonus_used: 0, reaction_used: 0 });
+    try { await updateCharacter(character.id, { action_used: 0, bonus_used: 0, reaction_used: 0 }); }
+    catch { getCharacter(character.id).then(setCharacter).catch(() => {}); }
   }
 
   function addEffectToSelf() {
@@ -946,26 +972,29 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             </div>
             <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
               {([
-                { key: 'action', label: 'Action', used: actionUsed, set: setActionUsed },
-                { key: 'bonus', label: 'Bonus', used: bonusUsed, set: setBonusUsed },
-                { key: 'reaction', label: 'Reaction', used: reactionUsed, set: setReactionUsed },
-              ] as const).map((c) => (
-                <button key={c.key} onClick={() => c.set(!c.used)}
-                  title={c.used ? `${c.label} used — click to mark available` : `${c.label} available — click to mark used`}
-                  style={{
-                    flex: 1, padding: '0.3rem 0.4rem', fontSize: '0.72rem', fontWeight: 700,
-                    border: `1px solid ${c.used ? '#bbb' : '#3a8'}`,
-                    borderRadius: 4,
-                    background: c.used ? '#eee' : '#e0f5ec',
-                    color: c.used ? '#bbb' : '#287',
-                    cursor: 'pointer',
-                    textDecoration: c.used ? 'line-through' : 'none',
-                  }}>
-                  {c.used ? '✓ ' : '○ '}{c.label}
-                </button>
-              ))}
-              <button onClick={() => { setActionUsed(false); setBonusUsed(false); setReactionUsed(false); }}
-                title="Reset all (start of new turn)"
+                { key: 'action', label: 'Action', field: 'action_used' as const },
+                { key: 'bonus', label: 'Bonus', field: 'bonus_used' as const },
+                { key: 'reaction', label: 'Reaction', field: 'reaction_used' as const },
+              ] as const).map((c) => {
+                const used = !!character[c.field];
+                return (
+                  <button key={c.key} onClick={() => toggleEconomy(c.field)}
+                    title={used ? `${c.label} used — click to mark available` : `${c.label} available — click to mark used`}
+                    style={{
+                      flex: 1, padding: '0.3rem 0.4rem', fontSize: '0.72rem', fontWeight: 700,
+                      border: `1px solid ${used ? '#bbb' : '#3a8'}`,
+                      borderRadius: 4,
+                      background: used ? '#eee' : '#e0f5ec',
+                      color: used ? '#bbb' : '#287',
+                      cursor: 'pointer',
+                      textDecoration: used ? 'line-through' : 'none',
+                    }}>
+                    {used ? '✓ ' : '○ '}{c.label}
+                  </button>
+                );
+              })}
+              <button onClick={resetEconomy}
+                title="Reset all (auto-runs at the start of your turn)"
                 style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', color: '#666' }}>↻</button>
             </div>
           </Section>

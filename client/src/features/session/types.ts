@@ -40,6 +40,8 @@ export interface TokenData {
   monster_slug: string | null;
   aura_radius: number | null;
   aura_color: string | null;
+  /** DM-only manual slot bubble state for monster/NPC tokens. PCs ignore this field. */
+  spell_slots_used: Record<string, number>;
   created_at: number;
 }
 
@@ -80,6 +82,14 @@ export interface CampaignNpc {
   notes: string;
   /** DM-only — server only includes this field when the requester is admin or the campaign DM. */
   dm_notes?: string;
+  /** Optional structured spell list. Empty array = no spellcasting. */
+  spells: string[];
+  /** Optional spell slot maxima per level (record of level → count). */
+  spell_slots: Record<string, number>;
+  /** Spell save DC. Null = no spellcasting. */
+  spell_save_dc: number | null;
+  /** Spell attack bonus. Null = no spell-attack-style spells. */
+  spell_attack_bonus: number | null;
   created_at: number;
 }
 
@@ -136,6 +146,10 @@ export interface ChatMessage {
     target_token_id?: number;
     prev_hp?: number;
     undone?: boolean;
+    /** Spell-summary metadata used by the post-hoc DM condition picker. */
+    failed_target_ids?: number[];
+    spell_name?: string;
+    conditions_applied?: string[];
   };
   created_at: number;
 }

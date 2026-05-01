@@ -27,6 +27,10 @@ interface NpcRow {
   immunities: string;
   notes: string;
   dm_notes: string;
+  spells: string;
+  spell_slots: string;
+  spell_save_dc: number | null;
+  spell_attack_bonus: number | null;
   created_at: number;
 }
 
@@ -41,6 +45,8 @@ function hydrateNpc(row: NpcRow, viewerIsDm: boolean) {
     resistances: JSON.parse(row.resistances || '[]'),
     vulnerabilities: JSON.parse(row.vulnerabilities || '[]'),
     immunities: JSON.parse(row.immunities || '[]'),
+    spells: JSON.parse(row.spells || '[]'),
+    spell_slots: JSON.parse(row.spell_slots || '{}'),
   };
   if (!viewerIsDm) delete out.dm_notes;
   return out;
@@ -64,7 +70,7 @@ router.get('/', (req: AuthRequest, res) => {
 });
 
 router.post('/', (req: AuthRequest, res) => {
-  const { campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes, dm_notes } = req.body ?? {};
+  const { campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes, dm_notes, spells, spell_slots, spell_save_dc, spell_attack_bonus } = req.body ?? {};
   const campaignId = Number(campaign_id);
   if (!campaignId) return res.status(400).json({ error: 'campaign_id required' });
   if (typeof label !== 'string' || !label.trim()) return res.status(400).json({ error: 'label required' });
@@ -88,10 +94,14 @@ router.post('/', (req: AuthRequest, res) => {
   const notesVal = typeof notes === 'string' ? notes.trim() : '';
   const dmNotesVal = typeof dm_notes === 'string' ? dm_notes.trim() : '';
   const portraitVal = typeof portrait_url === 'string' && portrait_url.trim() ? portrait_url.trim() : null;
+  const spellsVal = Array.isArray(spells) ? JSON.stringify(spells.filter((s: unknown): s is string => typeof s === 'string')) : '[]';
+  const spellSlotsVal = spell_slots && typeof spell_slots === 'object' ? JSON.stringify(spell_slots) : '{}';
+  const dcVal = Number.isInteger(Number(spell_save_dc)) ? Number(spell_save_dc) : null;
+  const atkVal = Number.isInteger(Number(spell_attack_bonus)) ? Number(spell_attack_bonus) : null;
 
   const info = db.prepare(
-    'INSERT INTO campaign_npcs (campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes, dm_notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(campaignId, catId, label.trim(), portraitVal, sizeVal, hpVal, acVal, speedVal, abilitiesVal, savesVal, attacksVal, traitsVal, resVal, vulnVal, immVal, notesVal, dmNotesVal);
+    'INSERT INTO campaign_npcs (campaign_id, category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes, dm_notes, spells, spell_slots, spell_save_dc, spell_attack_bonus) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(campaignId, catId, label.trim(), portraitVal, sizeVal, hpVal, acVal, speedVal, abilitiesVal, savesVal, attacksVal, traitsVal, resVal, vulnVal, immVal, notesVal, dmNotesVal, spellsVal, spellSlotsVal, dcVal, atkVal);
 
   const row = db.prepare('SELECT * FROM campaign_npcs WHERE id = ?').get(info.lastInsertRowid) as NpcRow;
   res.status(201).json({ npc: hydrateNpc(row, true) });
@@ -106,7 +116,7 @@ router.patch('/:id', (req: AuthRequest, res) => {
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   if (!isDmOrAdmin(req, campaign.dm_id)) return res.status(403).json({ error: 'DM access required' });
 
-  const { category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes, dm_notes } = req.body ?? {};
+  const { category_id, label, portrait_url, size, hp_max, ac, speed, abilities, saving_throws, attacks, traits, resistances, vulnerabilities, immunities, notes, dm_notes, spells, spell_slots, spell_save_dc, spell_attack_bonus } = req.body ?? {};
   const sets: string[] = [];
   const values: (string | number | null)[] = [];
 
@@ -126,6 +136,10 @@ router.patch('/:id', (req: AuthRequest, res) => {
   if (Array.isArray(immunities)) { sets.push('immunities = ?'); values.push(JSON.stringify(immunities.filter((s: unknown): s is string => typeof s === 'string'))); }
   if (typeof notes === 'string') { sets.push('notes = ?'); values.push(notes.trim()); }
   if (typeof dm_notes === 'string') { sets.push('dm_notes = ?'); values.push(dm_notes.trim()); }
+  if (Array.isArray(spells)) { sets.push('spells = ?'); values.push(JSON.stringify(spells.filter((s: unknown): s is string => typeof s === 'string'))); }
+  if (spell_slots && typeof spell_slots === 'object') { sets.push('spell_slots = ?'); values.push(JSON.stringify(spell_slots)); }
+  if (spell_save_dc !== undefined) { sets.push('spell_save_dc = ?'); values.push(Number.isInteger(Number(spell_save_dc)) ? Number(spell_save_dc) : null); }
+  if (spell_attack_bonus !== undefined) { sets.push('spell_attack_bonus = ?'); values.push(Number.isInteger(Number(spell_attack_bonus)) ? Number(spell_attack_bonus) : null); }
 
   if (!sets.length) return res.status(400).json({ error: 'No valid fields' });
   values.push(id);

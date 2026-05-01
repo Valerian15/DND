@@ -29,6 +29,7 @@ export interface TokenRow {
   effects: string;
   aura_radius: number | null;
   aura_color: string | null;
+  spell_slots_used: string;
   created_at: number;
 }
 
@@ -38,7 +39,7 @@ export interface TimedEffect {
   indefinite?: boolean;
 }
 
-export interface HydratedToken extends Omit<TokenRow, 'hp_visible' | 'controlled_by' | 'conditions' | 'hidden' | 'effects'> {
+export interface HydratedToken extends Omit<TokenRow, 'hp_visible' | 'controlled_by' | 'conditions' | 'hidden' | 'effects' | 'spell_slots_used'> {
   hp_visible: boolean;
   controlled_by: number[];
   conditions: string[];
@@ -47,6 +48,7 @@ export interface HydratedToken extends Omit<TokenRow, 'hp_visible' | 'controlled
   monster_slug: string | null;
   aura_radius: number | null;
   aura_color: string | null;
+  spell_slots_used: Record<string, number>;
 }
 
 export function hydrateToken(row: TokenRow): HydratedToken {
@@ -57,6 +59,11 @@ export function hydrateToken(row: TokenRow): HydratedToken {
       .filter((e: unknown): e is TimedEffect => !!e && typeof (e as TimedEffect).name === 'string' && typeof (e as TimedEffect).rounds === 'number')
       .map((e) => ({ name: e.name, rounds: e.rounds, ...(e.indefinite ? { indefinite: true } : {}) }));
   } catch { /* default empty */ }
+  let slotsUsed: Record<string, number> = {};
+  try {
+    const parsed = JSON.parse(row.spell_slots_used ?? '{}');
+    if (parsed && typeof parsed === 'object') slotsUsed = parsed as Record<string, number>;
+  } catch { /* default empty */ }
   return {
     ...row,
     hp_visible: row.hp_visible === 1,
@@ -64,6 +71,7 @@ export function hydrateToken(row: TokenRow): HydratedToken {
     conditions: JSON.parse(row.conditions),
     hidden: row.hidden === 1,
     effects,
+    spell_slots_used: slotsUsed,
   };
 }
 
@@ -385,6 +393,36 @@ router.patch('/:id/aura', (req: AuthRequest, res) => {
   db.prepare('UPDATE tokens SET aura_radius = ?, aura_color = ? WHERE id = ?').run(radius, color, id);
   broadcastFiltered(campaign.id, 'token:aura_updated', { token_id: id, aura_radius: radius, aura_color: color }, () => true);
   res.json({ token_id: id, aura_radius: radius, aura_color: color });
+});
+
+// DM-only toggle for visual spell-slot bubble state on a token (monsters / NPCs).
+// PCs continue tracking via characters.spell_slots_used.
+router.patch('/:id/slots', (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const token = db.prepare('SELECT t.*, cnpc.category_id FROM tokens t LEFT JOIN campaign_npcs cnpc ON cnpc.id = t.campaign_npc_id WHERE t.id = ?')
+    .get(id) as TokenRow | undefined;
+  if (!token) return res.status(404).json({ error: 'Token not found' });
+
+  const campaign = getCampaignForMap(token.map_id);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  const isDmOrAdmin = req.user!.role === 'admin' || req.user!.id === campaign.dm_id;
+  if (!isDmOrAdmin) return res.status(403).json({ error: 'DM access required' });
+
+  const slots_used = req.body?.spell_slots_used;
+  if (!slots_used || typeof slots_used !== 'object') return res.status(400).json({ error: 'spell_slots_used required' });
+
+  // Sanitize: keep only integer values keyed by integer-string level.
+  const sanitized: Record<string, number> = {};
+  for (const [k, v] of Object.entries(slots_used)) {
+    const lvl = Number(k);
+    const used = Number(v);
+    if (Number.isInteger(lvl) && lvl >= 1 && lvl <= 9 && Number.isInteger(used) && used >= 0) {
+      sanitized[String(lvl)] = used;
+    }
+  }
+  db.prepare('UPDATE tokens SET spell_slots_used = ? WHERE id = ?').run(JSON.stringify(sanitized), id);
+  broadcastFiltered(campaign.id, 'token:slots_updated', { token_id: id, spell_slots_used: sanitized }, () => true);
+  res.json({ token_id: id, spell_slots_used: sanitized });
 });
 
 router.patch('/:id/hidden', (req: AuthRequest, res) => {

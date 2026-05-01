@@ -3,6 +3,9 @@ import { getLibraryItem } from '../character/api';
 import { abilityModifier, formatModifier } from '../character/pointBuy';
 import { updateTokenHp } from './tokenApi';
 import { TokenAuraControl } from './TokenAuraControl';
+import { CastSpellModal } from './CastSpellModal';
+import { EntitySpellsList } from './EntitySpellsList';
+import { getMonsterSpellcasting } from './monsterSpellcasting';
 import { socket } from '../../lib/socket';
 
 interface MonsterData {
@@ -49,6 +52,11 @@ interface Props {
   effects?: { name: string; rounds: number }[];
   auraRadius?: number | null;
   auraColor?: string | null;
+  /** Targets currently selected on the map — needed for the Cast Spell modal. */
+  selectedTargetIds?: number[];
+  combatAutomation?: boolean;
+  /** Manual slot-bubble state — for the spell tab's clickable visual tracker. */
+  slotsUsed?: Record<string, number>;
   onHpChange?: (hp: number) => void;
   onClose: () => void;
 }
@@ -62,7 +70,8 @@ const ABILITY_KEYS = [
   { dataKey: 'charisma' as const, saveKey: 'charisma_save' as const, short: 'CHA' },
 ];
 
-export function MonsterSheet({ slug, tokenId, hpCurrent, hpMax, effects = [], auraRadius = null, auraColor = null, onHpChange, onClose }: Props) {
+export function MonsterSheet({ slug, tokenId, hpCurrent, hpMax, effects = [], auraRadius = null, auraColor = null, selectedTargetIds = [], combatAutomation = false, slotsUsed = {}, onHpChange, onClose }: Props) {
+  const [castOpen, setCastOpen] = useState(false);
   const [monster, setMonster] = useState<MonsterData | null>(null);
   const [newEffectName, setNewEffectName] = useState('');
   const [newEffectRounds, setNewEffectRounds] = useState('10');
@@ -160,6 +169,37 @@ export function MonsterSheet({ slug, tokenId, hpCurrent, hpMax, effects = [], au
             ))}
           </div>
         </div>
+
+        {/* Spell tab for curated SRD casters (Lich, Archmage, Mage, Priest, Cult Fanatic, Druid, …).
+            For non-curated monsters fall back to the free-form Cast Spell modal. */}
+        {tokenId !== undefined && (() => {
+          const profile = getMonsterSpellcasting(slug);
+          if (profile) {
+            const flatSpells = [
+              ...profile.cantrips,
+              ...Object.values(profile.spells_by_level).flat(),
+            ];
+            return (
+              <EntitySpellsList
+                casterTokenId={tokenId}
+                casterName={monster.name}
+                saveDC={profile.save_dc}
+                attackBonus={profile.attack_bonus}
+                spells={flatSpells}
+                slotsByLevel={profile.slots_by_level}
+                slotsUsed={slotsUsed}
+                selectedTargetIds={selectedTargetIds}
+                combatAutomation={combatAutomation}
+              />
+            );
+          }
+          return (
+            <button onClick={() => setCastOpen(true)}
+              style={{ width: '100%', marginBottom: '0.85rem', padding: '0.4rem', background: '#5a3a7a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>
+              🪄 Cast Spell
+            </button>
+          );
+        })()}
 
         {/* Active timed effects */}
         {tokenId !== undefined && (
@@ -357,6 +397,14 @@ export function MonsterSheet({ slug, tokenId, hpCurrent, hpMax, effects = [], au
           </Section>
         )}
       </div>
+      {castOpen && tokenId !== undefined && (
+        <CastSpellModal
+          casterTokenId={tokenId}
+          selectedTargetIds={selectedTargetIds}
+          combatAutomation={combatAutomation}
+          onClose={() => setCastOpen(false)}
+        />
+      )}
     </SheetOverlay>
   );
 }

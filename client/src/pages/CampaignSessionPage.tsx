@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '../features/session/types';
 
 // ---- wall-editor helpers ------------------------------------------------
@@ -47,9 +47,11 @@ import { listMapFolders, createMapFolder, renameMapFolder, deleteMapFolder } fro
 import { listNotes, createNote, updateNote, deleteNote } from '../features/session/campaignNotesApi';
 import type { CampaignNote } from '../features/session/campaignNotesApi';
 import type { WallSegment, MapTemplate, TemplateShape, MapDrawing } from '../features/session/types';
-import { InGameSheet, CONDITION_COLORS } from '../features/session/InGameSheet';
+import { InGameSheet, CONDITION_COLORS, CONDITIONS } from '../features/session/InGameSheet';
 import { MonsterSheet } from '../features/session/MonsterSheet';
 import { NpcSheet } from '../features/session/NpcSheet';
+import { QuickCastHotbar } from '../features/session/QuickCastHotbar';
+import { ReactionPrompt } from '../features/session/ReactionPrompt';
 import { apiFetch } from '../lib/api';
 import { updateCharacter } from '../features/character/api';
 import { socket } from '../lib/socket';
@@ -533,6 +535,96 @@ function ChatMsgItem({ msg, myUserId, targetCount, isDmOrAdmin, onApply }: { msg
   );
 }
 
+// Inline picker for applying conditions post-hoc to a spell-summary's failed-save targets.
+// DM-only. Renders inside an action message in the floating dice log.
+function SummaryConditionPicker({ messageId, failedCount, spellName }: { messageId: number; failedCount: number; spellName: string }) {
+  const [open, setOpen] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  function toggle(c: string) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(c)) next.delete(c); else next.add(c);
+      return next;
+    });
+  }
+
+  function apply() {
+    if (picked.size === 0) return;
+    socket.emit('combat:apply_summary_conditions', { message_id: messageId, conditions: [...picked] });
+    setPicked(new Set());
+    setOpen(false);
+  }
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)}
+        style={{ marginTop: 3, padding: '0.1rem 0.4rem', fontSize: '0.62rem', border: '1px solid #886', borderRadius: 3, background: 'transparent', color: '#cba', cursor: 'pointer', fontWeight: 600 }}>
+        + Apply condition to {failedCount} failed save{failedCount > 1 ? 's' : ''}
+      </button>
+    );
+  }
+  return (
+    <div style={{ marginTop: 4, padding: 4, border: '1px solid #5a5040', borderRadius: 3, background: 'rgba(40,38,32,0.85)' }}>
+      <div style={{ fontSize: '0.6rem', color: '#aa9', marginBottom: 3 }}>{spellName} → failed-save targets ({failedCount}):</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginBottom: 4 }}>
+        {CONDITIONS.map((c) => {
+          const active = picked.has(c);
+          return (
+            <button key={c} onClick={() => toggle(c)}
+              style={{
+                padding: '0.1rem 0.35rem', fontSize: '0.62rem', borderRadius: 2, cursor: 'pointer',
+                border: `1px solid ${active ? (CONDITION_COLORS[c] ?? '#888') : '#444'}`,
+                background: active ? (CONDITION_COLORS[c] ?? '#666') : 'transparent',
+                color: active ? '#fff' : '#aaa', fontWeight: active ? 700 : 400, textTransform: 'capitalize',
+              }}>
+              {c}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 4 }}>
+        <button onClick={apply} disabled={picked.size === 0}
+          style={{ flex: 1, padding: '0.15rem', fontSize: '0.65rem', border: '1px solid #686', borderRadius: 2, background: picked.size > 0 ? '#345' : 'transparent', color: picked.size > 0 ? '#fff' : '#666', cursor: picked.size > 0 ? 'pointer' : 'not-allowed' }}>
+          Apply
+        </button>
+        <button onClick={() => { setPicked(new Set()); setOpen(false); }}
+          style={{ padding: '0.15rem 0.4rem', fontSize: '0.65rem', border: '1px solid #444', borderRadius: 2, background: 'transparent', color: '#888', cursor: 'pointer' }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Compact row for an on-map NPC/monster token in the DM bar. Click anywhere → opens the
+// token's sheet via the parent's handleTokenClick. Eye + ✕ are stop-propagation.
+function OnMapTokenRow({ token, onOpen, onToggleHidden, onRemove }: {
+  token: TokenData; onOpen: () => void; onToggleHidden: () => void; onRemove: () => void;
+}) {
+  return (
+    <div onClick={onOpen}
+      title="Open sheet"
+      style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.45rem', borderRadius: 5, marginBottom: '0.2rem', cursor: 'pointer', background: '#fff', border: '1px solid #eee' }}>
+      {token.portrait_url ? (
+        <img src={token.portrait_url} alt={token.label} style={{ width: 26, height: 26, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} draggable={false} />
+      ) : (
+        <div style={{ width: 26, height: 26, borderRadius: '50%', background: '#a44', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: '0.78rem', flexShrink: 0 }}>{token.label[0]?.toUpperCase()}</div>
+      )}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: '0.78rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.label}</div>
+        <div style={{ fontSize: '0.68rem', color: '#888' }}>{token.hp_current}/{token.hp_max} HP</div>
+      </div>
+      <button onClick={(e) => { e.stopPropagation(); onToggleHidden(); }}
+        title={token.hidden ? 'Hidden from players — click to reveal' : 'Visible to players — click to hide'}
+        style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', cursor: 'pointer', border: `1px solid ${token.hidden ? '#888' : '#ddd'}`, borderRadius: 3, color: token.hidden ? '#fff' : '#666', background: token.hidden ? '#666' : '#fff' }}>👁</button>
+      <button onClick={(e) => { e.stopPropagation(); onRemove(); }}
+        title="Remove from map"
+        style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>✕</button>
+    </div>
+  );
+}
+
 // Italic scene-tag banner under the top bar. Shows the current map's scene_tag.
 // DM/admin can edit inline; saves on blur or Enter, cancels on Escape.
 function SceneBanner({ map, canEdit, onSave }: { map: MapData; canEdit: boolean; onSave: (next: string) => Promise<void> }) {
@@ -616,7 +708,9 @@ export default function CampaignSessionPage() {
   const [newFolderName, setNewFolderName] = useState('');
 
   const [showLeftPanel, setShowLeftPanel] = useState(false);
-  const [leftTab, setLeftTab] = useState<'maps' | 'monsters' | 'notes'>('maps');
+  const [leftTab, setLeftTab] = useState<'maps' | 'monsters' | 'tokens'>('maps');
+  // Whether the DM Notes panel under the Maps tab is expanded.
+  const [dmNotesExpanded, setDmNotesExpanded] = useState(false);
 
   const [addingMap, setAddingMap] = useState(false);
   const [newMapName, setNewMapName] = useState('');
@@ -634,9 +728,23 @@ export default function CampaignSessionPage() {
   const innerMapRef = useRef<HTMLDivElement>(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [zoom, setZoom] = useState(1);
-  const ZOOM_STEP = 0.25;
-  const ZOOM_MIN = 0.25;
+  // Player-side quick-cast hotbar visibility, persisted across sessions.
+  const [hotbarHidden, setHotbarHidden] = useState(() => localStorage.getItem('dnd_hotbar_hidden') === '1');
+  function toggleHotbar() {
+    setHotbarHidden((h) => {
+      const next = !h;
+      localStorage.setItem('dnd_hotbar_hidden', next ? '1' : '0');
+      return next;
+    });
+  }
+  const ZOOM_STEP = 0.1;
+  // Floor at 0.1 (10%): true 0% would zero out the inner div and divide-by-zero in the centre-preserve math.
+  const ZOOM_MIN = 0.1;
   const ZOOM_MAX = 3;
+  const viewportRef = useRef<HTMLDivElement>(null);
+  // When changing zoom we capture the viewport's pre-zoom center in image coords here, then
+  // restore scroll in a useLayoutEffect so the same point stays centered after the new layout.
+  const pendingCenterRef = useRef<{ cx: number; cy: number } | null>(null);
 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [drag, setDrag] = useState<{ tokenId: number; ghostCol: number; ghostRow: number } | null>(null);
@@ -702,8 +810,17 @@ export default function CampaignSessionPage() {
   const [monsterLibrary, setMonsterLibrary] = useState<MonsterListItem[]>([]);
   const [encounterEntries, setEncounterEntries] = useState<EncounterEntry[]>([]);
 
-  const { online, connected, activeMap, setActiveMap, tokens, messages, initiative, walls, templates, drawings, fogVisible, fogExplored, pings } = useSession(Number(id));
+  const { online, connected, activeMap, setActiveMap, tokens, messages, initiative, walls, templates, drawings, fogVisible, fogExplored, pings, reactionOffers, dismissReactionOffer } = useSession(Number(id));
   const isDmOrAdmin = campaign ? (campaign.dm_id === user!.id || user!.role === 'admin') : false;
+  // Player's own PC token on the active map (drives whether the hotbar can/will render).
+  const viewerOwnToken = !isDmOrAdmin && campaign && activeMap
+    ? (tokens.find((t) => t.token_type === 'pc' && campaign.members?.some((m) => m.character_id === t.character_id && m.owner_id === user!.id)) ?? null)
+    : null;
+  // True when the hotbar will actually render content — used to lift floating overlays above it.
+  const hotbarVisible = !!viewerOwnToken && !hotbarHidden;
+  // Actual rendered height of the hotbar in px — reported by QuickCastHotbar via onHeightChange.
+  // 0 when the bar is hidden / not mounted, ~52px for one row, ~84px for two rows, etc.
+  const [hotbarHeight, setHotbarHeight] = useState(0);
   const previewMap: MapData | null = activeMap
     ? { ...activeMap, grid_size: gridSize, grid_offset_x: gridOffsetX, grid_offset_y: gridOffsetY }
     : null;
@@ -776,6 +893,42 @@ export default function CampaignSessionPage() {
       setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
     }
   }, [activeMap?.id]);
+
+  // Center the map in its viewport when a new map is loaded (or its dimensions become known).
+  useEffect(() => {
+    const v = viewportRef.current;
+    if (!v || imgSize.w === 0) return;
+    v.scrollLeft = Math.max(0, (imgSize.w * zoom - v.clientWidth) / 2);
+    v.scrollTop = Math.max(0, (imgSize.h * zoom - v.clientHeight) / 2);
+  // Only re-center on map / image-size change — not on every zoom (that's handled below).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMap?.id, imgSize.w, imgSize.h]);
+
+  // Preserve viewport center when zoom changes — the point under the centre stays centred.
+  // pendingCenterRef is set by changeZoom() right before we update zoom.
+  useLayoutEffect(() => {
+    const v = viewportRef.current;
+    if (!v || !pendingCenterRef.current) return;
+    const { cx, cy } = pendingCenterRef.current;
+    v.scrollLeft = Math.max(0, cx * zoom - v.clientWidth / 2);
+    v.scrollTop = Math.max(0, cy * zoom - v.clientHeight / 2);
+    pendingCenterRef.current = null;
+  }, [zoom]);
+
+  // Wraps setZoom: captures the viewport's current centre in image coords first, then changes zoom.
+  // The useLayoutEffect above restores scroll so that same image-coord point stays centred.
+  function changeZoom(next: number) {
+    const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +next.toFixed(2)));
+    if (clamped === zoom) return;
+    const v = viewportRef.current;
+    if (v && imgSize.w > 0) {
+      pendingCenterRef.current = {
+        cx: (v.scrollLeft + v.clientWidth / 2) / zoom,
+        cy: (v.scrollTop + v.clientHeight / 2) / zoom,
+      };
+    }
+    setZoom(clamped);
+  }
 
   // Chat auto-scroll
   useEffect(() => {
@@ -1124,9 +1277,10 @@ export default function CampaignSessionPage() {
 
   function handleTokenClick(token: TokenData) {
     if (token.token_type === 'pc' && token.character_id !== null) {
-      const isMyChar = campaign?.members?.some((m) => m.character_id === token.character_id && m.owner_id === user!.id);
-      if (isMyChar || isDmOrAdmin) {
-        setPanel({ type: 'character', characterId: token.character_id, tokenId: token.id, canEdit: !!isMyChar || isDmOrAdmin });
+      // PC tokens: only the DM/admin opens the sheet by clicking the token. Players
+      // open their own (or other party members') sheet via the right-side party list.
+      if (isDmOrAdmin) {
+        setPanel({ type: 'character', characterId: token.character_id, tokenId: token.id, canEdit: true });
       }
     } else if (token.token_type === 'npc' && isDmOrAdmin) {
       if (token.monster_slug) {
@@ -1202,6 +1356,13 @@ export default function CampaignSessionPage() {
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+          {!isDmOrAdmin && (
+            <button onClick={toggleHotbar}
+              title={hotbarHidden ? 'Show quick-cast hotbar' : 'Hide quick-cast hotbar'}
+              style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: `1px solid ${hotbarHidden ? '#ccc' : '#555'}`, borderRadius: 4, background: hotbarHidden ? '#fff' : '#333', color: hotbarHidden ? '#555' : '#fff', fontSize: '0.78rem', fontWeight: 600 }}>
+              ⚡ Hotbar
+            </button>
+          )}
           {activeMap && (
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }} title="Grid colour">
               <label style={{ fontSize: '0.78rem', color: '#555', cursor: 'pointer' }}>
@@ -1407,9 +1568,9 @@ export default function CampaignSessionPage() {
             </div>
 
             <div style={{ display: 'flex', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
-              {(['maps', 'monsters', 'notes'] as const).map((tab) => (
+              {(['maps', 'monsters', 'tokens'] as const).map((tab) => (
                 <button key={tab} onClick={() => setLeftTab(tab)} style={{ flex: 1, padding: '0.6rem', border: 'none', borderBottom: leftTab === tab ? '2px solid #333' : '2px solid transparent', background: 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: leftTab === tab ? 600 : 400, color: leftTab === tab ? '#333' : '#888' }}>
-                  {tab === 'maps' ? 'Maps' : tab === 'monsters' ? 'Monsters' : 'Notes'}
+                  {tab === 'maps' ? 'Maps' : tab === 'monsters' ? 'Monsters' : 'On Map'}
                 </button>
               ))}
             </div>
@@ -1556,6 +1717,78 @@ export default function CampaignSessionPage() {
                     )}
                   </div>
                 )}
+
+                {/* DM Notes — collapsed by default, sits under the map folders. */}
+                <div style={{ borderTop: '1px solid #ddd', flexShrink: 0 }}>
+                  <div onClick={() => setDmNotesExpanded((e) => !e)}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', cursor: 'pointer', background: '#f3f3f3', userSelect: 'none' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#7a5500', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      🔒 DM Notes ({notes.length})
+                    </span>
+                    <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{dmNotesExpanded ? '▼' : '▶'}</span>
+                  </div>
+                  {dmNotesExpanded && (
+                    editingNoteId === null ? (
+                      <div>
+                        <div style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>
+                          <button onClick={async () => {
+                            if (!campaign) return;
+                            const n = await createNote(campaign.id);
+                            setNotes((prev) => [n, ...prev]);
+                            setEditingNoteId(n.id);
+                            setNoteTitle(n.title);
+                            setNoteBody(n.body);
+                          }} style={{ width: '100%', padding: '0.4rem', fontSize: '0.82rem', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', background: '#fff', fontWeight: 600 }}>
+                            + New Note
+                          </button>
+                        </div>
+                        <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                          {notes.length === 0 && <div style={{ padding: '0.75rem', fontSize: '0.8rem', color: '#aaa', fontStyle: 'italic' }}>No notes yet.</div>}
+                          {notes.map((note) => (
+                            <div key={note.id} style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #eee', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}
+                              onClick={() => { setEditingNoteId(note.id); setNoteTitle(note.title); setNoteBody(note.body); }}>
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#333' }}>{note.title || 'Untitled'}</div>
+                                <div style={{ fontSize: '0.7rem', color: '#aaa', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {note.body ? note.body.slice(0, 60) + (note.body.length > 60 ? '…' : '') : 'Empty'}
+                                </div>
+                              </div>
+                              <button onClick={(e) => { e.stopPropagation(); if (!campaign) return; deleteNote(campaign.id, note.id).then(() => setNotes((prev) => prev.filter((n) => n.id !== note.id))); }}
+                                style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff', cursor: 'pointer', marginLeft: '0.5rem' }}>✕</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ padding: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                          <button onClick={() => setEditingNoteId(null)} style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', border: '1px solid #ddd', borderRadius: 3, cursor: 'pointer', background: '#fff', color: '#666' }}>← Back</button>
+                          <input value={noteTitle} onChange={(e) => setNoteTitle(e.target.value)}
+                            onBlur={async () => {
+                              if (!campaign || editingNoteId === null) return;
+                              setNoteSaving(true);
+                              const updated = await updateNote(campaign.id, editingNoteId, { title: noteTitle }).catch(() => null);
+                              if (updated) setNotes((prev) => prev.map((n) => n.id === editingNoteId ? updated : n));
+                              setNoteSaving(false);
+                            }}
+                            style={{ flex: 1, padding: '0.3rem 0.5rem', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.85rem', fontWeight: 600 }} placeholder="Note title" />
+                          {noteSaving && <span style={{ fontSize: '0.7rem', color: '#aaa' }}>saving…</span>}
+                        </div>
+                        <textarea value={noteBody} onChange={(e) => setNoteBody(e.target.value)}
+                          onBlur={async () => {
+                            if (!campaign || editingNoteId === null) return;
+                            setNoteSaving(true);
+                            const updated = await updateNote(campaign.id, editingNoteId, { body: noteBody }).catch(() => null);
+                            if (updated) setNotes((prev) => prev.map((n) => n.id === editingNoteId ? updated : n));
+                            setNoteSaving(false);
+                          }}
+                          rows={10}
+                          style={{ padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.83rem', resize: 'vertical', fontFamily: 'system-ui', lineHeight: 1.5 }}
+                          placeholder="Write your session notes here…" />
+                      </div>
+                    )
+                  )}
+                </div>
               </>
             )}
 
@@ -1733,86 +1966,82 @@ export default function CampaignSessionPage() {
               );
             })()}
 
-            {leftTab === 'notes' && (
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                {editingNoteId === null ? (
-                  <>
-                    <div style={{ padding: '0.5rem', borderBottom: '1px solid #eee', flexShrink: 0 }}>
-                      <button onClick={async () => {
-                        if (!campaign) return;
-                        const n = await createNote(campaign.id);
-                        setNotes((prev) => [n, ...prev]);
-                        setEditingNoteId(n.id);
-                        setNoteTitle(n.title);
-                        setNoteBody(n.body);
-                      }} style={{ width: '100%', padding: '0.4rem', fontSize: '0.82rem', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', background: '#fff', fontWeight: 600 }}>
-                        + New Note
-                      </button>
-                    </div>
-                    <div style={{ flex: 1, overflowY: 'auto' }}>
-                      {notes.length === 0 && <div style={{ padding: '1rem', fontSize: '0.85rem', color: '#aaa' }}>No notes yet.</div>}
-                      {notes.map((note) => (
-                        <div key={note.id} style={{ padding: '0.6rem 0.75rem', borderBottom: '1px solid #eee', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}
-                          onClick={() => { setEditingNoteId(note.id); setNoteTitle(note.title); setNoteBody(note.body); }}>
-                          <div>
-                            <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#333' }}>{note.title || 'Untitled'}</div>
-                            <div style={{ fontSize: '0.72rem', color: '#aaa', marginTop: 2 }}>
-                              {note.body ? note.body.slice(0, 60) + (note.body.length > 60 ? '…' : '') : 'Empty'}
-                            </div>
-                          </div>
-                          <button onClick={(e) => { e.stopPropagation(); if (!campaign) return; deleteNote(campaign.id, note.id).then(() => setNotes((prev) => prev.filter((n) => n.id !== note.id))); }}
-                            style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff', cursor: 'pointer', marginLeft: '0.5rem' }}>✕</button>
+            {/* On-Map tokens tab — DM-only NPC/monster list per category, click to open the sheet. */}
+            {leftTab === 'tokens' && (
+              <div style={{ flex: 1, overflowY: 'auto' }}>
+                {npcCategories.map((cat) => {
+                  const catTokens = tokens.filter((t) => t.token_type === 'npc' && t.category_id === cat.id);
+                  return (
+                    <div key={cat.id} style={{ borderBottom: '1px solid #eee' }}>
+                      <div onClick={() => toggleSection(`cat-${cat.id}`)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', cursor: 'pointer', background: '#f3f3f3', userSelect: 'none' }}>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{cat.name} ({catTokens.length})</span>
+                        <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{collapsedSections.has(`cat-${cat.id}`) ? '▶' : '▼'}</span>
+                      </div>
+                      {!collapsedSections.has(`cat-${cat.id}`) && (
+                        <div style={{ padding: '0.4rem' }}>
+                          {catTokens.length === 0 ? (
+                            <div style={{ fontSize: '0.78rem', color: '#bbb', padding: '0.3rem 0.5rem' }}>No tokens on map.</div>
+                          ) : catTokens.map((token) => (
+                            <OnMapTokenRow key={token.id} token={token}
+                              onOpen={() => handleTokenClick(token)}
+                              onToggleHidden={() => setTokenHidden(token.id, !token.hidden).catch((e: Error) => setError(e.message))}
+                              onRemove={() => handleRemoveToken(token.id)} />
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
-                  </>
-                ) : (
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '0.5rem', gap: '0.4rem' }}>
-                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexShrink: 0 }}>
-                      <button onClick={() => setEditingNoteId(null)} style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', border: '1px solid #ddd', borderRadius: 3, cursor: 'pointer', background: '#fff', color: '#666' }}>← Back</button>
-                      <input value={noteTitle} onChange={(e) => setNoteTitle(e.target.value)}
-                        onBlur={async () => {
-                          if (!campaign || editingNoteId === null) return;
-                          setNoteSaving(true);
-                          const updated = await updateNote(campaign.id, editingNoteId, { title: noteTitle }).catch(() => null);
-                          if (updated) setNotes((prev) => prev.map((n) => n.id === editingNoteId ? updated : n));
-                          setNoteSaving(false);
-                        }}
-                        style={{ flex: 1, padding: '0.3rem 0.5rem', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.85rem', fontWeight: 600 }} placeholder="Note title" />
-                      {noteSaving && <span style={{ fontSize: '0.7rem', color: '#aaa' }}>saving…</span>}
+                  );
+                })}
+
+                {(() => {
+                  const uncatTokens = tokens.filter((t) => t.token_type === 'npc' && t.category_id === null);
+                  if (uncatTokens.length === 0) return null;
+                  return (
+                    <div style={{ borderBottom: '1px solid #eee' }}>
+                      <div onClick={() => toggleSection('uncat')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', cursor: 'pointer', background: '#f3f3f3', userSelect: 'none' }}>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Other ({uncatTokens.length})</span>
+                        <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{collapsedSections.has('uncat') ? '▶' : '▼'}</span>
+                      </div>
+                      {!collapsedSections.has('uncat') && (
+                        <div style={{ padding: '0.4rem' }}>
+                          {uncatTokens.map((token) => (
+                            <OnMapTokenRow key={token.id} token={token}
+                              onOpen={() => handleTokenClick(token)}
+                              onToggleHidden={() => setTokenHidden(token.id, !token.hidden).catch((e: Error) => setError(e.message))}
+                              onRemove={() => handleRemoveToken(token.id)} />
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <textarea value={noteBody} onChange={(e) => setNoteBody(e.target.value)}
-                      onBlur={async () => {
-                        if (!campaign || editingNoteId === null) return;
-                        setNoteSaving(true);
-                        const updated = await updateNote(campaign.id, editingNoteId, { body: noteBody }).catch(() => null);
-                        if (updated) setNotes((prev) => prev.map((n) => n.id === editingNoteId ? updated : n));
-                        setNoteSaving(false);
-                      }}
-                      style={{ flex: 1, padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4, fontSize: '0.83rem', resize: 'none', fontFamily: 'system-ui', lineHeight: 1.5 }}
-                      placeholder="Write your session notes here…" />
+                  );
+                })()}
+
+                {tokens.filter((t) => t.token_type === 'npc').length === 0 && (
+                  <div style={{ fontSize: '0.78rem', color: '#aaa', padding: '1rem', textAlign: 'center', fontStyle: 'italic' }}>
+                    No NPCs / monsters on the active map.
                   </div>
                 )}
               </div>
             )}
+
           </div>
           )}
           </div>
         )}
 
+        {/* Map area: a positioned wrapper so the zoom control overlay can sit absolute-positioned
+            within it. The viewport is `inset: 0` rather than `flex: 1` to avoid the flex-with-
+            scrolling-child quirk where overflow content forces the wrapper to grow at high zoom. */}
+        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
         {/* Map viewport */}
         <div
-          style={{ flex: 1, background: '#e8e8e8', overflow: 'auto', position: 'relative' }}
+          ref={viewportRef}
+          style={{ position: 'absolute', inset: 0, background: '#e8e8e8', overflow: 'auto' }}
           onPointerMove={handleViewportPointerMove}
           onPointerUp={handleViewportPointerUp}
         >
           {previewMap ? (
             <>
-              <div style={{ position: 'sticky', bottom: 12, left: 12, zIndex: 10, display: 'inline-flex', alignItems: 'center', gap: '0.25rem', background: 'rgba(255,255,255,0.92)', border: '1px solid #ccc', borderRadius: 6, padding: '0.25rem 0.4rem', boxShadow: '0 1px 4px rgba(0,0,0,0.15)', marginLeft: 12, marginBottom: 12 }}>
-                <button onClick={() => setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2)))} disabled={zoom <= ZOOM_MIN} style={{ width: 26, height: 26, border: 'none', background: 'none', cursor: zoom <= ZOOM_MIN ? 'not-allowed' : 'pointer', fontSize: '1rem', color: zoom <= ZOOM_MIN ? '#bbb' : '#333', lineHeight: 1 }}>−</button>
-                <button onClick={() => setZoom(1)} title="Reset to 100%" style={{ minWidth: 44, height: 26, border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.78rem', color: '#555', fontWeight: 500 }}>{Math.round(zoom * 100)}%</button>
-                <button onClick={() => setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2)))} disabled={zoom >= ZOOM_MAX} style={{ width: 26, height: 26, border: 'none', background: 'none', cursor: zoom >= ZOOM_MAX ? 'not-allowed' : 'pointer', fontSize: '1rem', color: zoom >= ZOOM_MAX ? '#bbb' : '#333', lineHeight: 1 }}>+</button>
-              </div>
 
               <div style={{ width: imgSize.w * zoom || '100%', height: imgSize.h * zoom || '100%', position: 'relative', minWidth: imgSize.w ? undefined : '100%', minHeight: imgSize.h ? undefined : '100%' }}>
                 {targetIds.size > 0 && (
@@ -1996,6 +2225,21 @@ export default function CampaignSessionPage() {
             </div>
           )}
         </div>
+
+        {/* Zoom control — overlay top-right, oriented vertically. Stays visible at any zoom level. */}
+        {previewMap && (
+          <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 11, display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '0.3rem', background: 'rgba(255,255,255,0.94)', border: '1px solid #ccc', borderRadius: 6, padding: '0.4rem 0.3rem', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}>
+            <button onClick={() => changeZoom(zoom + ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} title="Zoom in" style={{ width: 26, height: 26, border: 'none', background: 'none', cursor: zoom >= ZOOM_MAX ? 'not-allowed' : 'pointer', fontSize: '1.1rem', color: zoom >= ZOOM_MAX ? '#bbb' : '#333', lineHeight: 1 }}>+</button>
+            {/* Vertical slider — writingMode + RTL so high zoom is at the top. */}
+            <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_STEP} value={zoom}
+              onChange={(e) => changeZoom(Number(e.target.value))}
+              title="Drag to zoom"
+              style={{ writingMode: 'vertical-lr' as const, direction: 'rtl', height: 120, width: 22, accentColor: '#446', cursor: 'pointer' }} />
+            <button onClick={() => changeZoom(zoom - ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} title="Zoom out" style={{ width: 26, height: 26, border: 'none', background: 'none', cursor: zoom <= ZOOM_MIN ? 'not-allowed' : 'pointer', fontSize: '1.1rem', color: zoom <= ZOOM_MIN ? '#bbb' : '#333', lineHeight: 1 }}>−</button>
+            <button onClick={() => changeZoom(1)} title="Reset to 100%" style={{ minWidth: 38, height: 22, border: '1px solid #eee', background: '#fff', cursor: 'pointer', fontSize: '0.7rem', color: '#555', fontWeight: 500, borderRadius: 3, padding: 0 }}>{Math.round(zoom * 100)}%</button>
+          </div>
+        )}
+        </div>{/* end map-area wrapper */}
 
         {/* Right sidebar */}
         <div style={{ width: 240, background: '#fff', borderLeft: '1px solid #ddd', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }}>
@@ -2201,73 +2445,6 @@ export default function CampaignSessionPage() {
             </div>
           </div>
 
-          {/* NPC sections (DM only) */}
-          {isDmOrAdmin && npcCategories.map((cat) => {
-            const catTokens = tokens.filter((t) => t.token_type === 'npc' && t.category_id === cat.id);
-            return (
-              <div key={cat.id} style={{ borderTop: '1px solid #eee' }}>
-                <div onClick={() => toggleSection(`cat-${cat.id}`)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.6rem 1rem', cursor: 'pointer', background: '#fafafa', userSelect: 'none' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{cat.name} ({catTokens.length})</span>
-                  <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{collapsedSections.has(`cat-${cat.id}`) ? '▶' : '▼'}</span>
-                </div>
-                {!collapsedSections.has(`cat-${cat.id}`) && (
-                  <div style={{ padding: '0.5rem' }}>
-                    {catTokens.length === 0 ? (
-                      <div style={{ fontSize: '0.82rem', color: '#bbb', padding: '0.3rem 0.5rem' }}>No tokens on map.</div>
-                    ) : catTokens.map((token) => (
-                      <div key={token.id} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.4rem 0.5rem', borderRadius: 6, marginBottom: '0.2rem' }}>
-                        {token.portrait_url ? (
-                          <img src={token.portrait_url} alt={token.label} style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
-                        ) : (
-                          <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#a44', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}>{token.label[0]?.toUpperCase()}</div>
-                        )}
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontSize: '0.82rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.label}</div>
-                          <div style={{ fontSize: '0.72rem', color: '#888' }}>{token.hp_current}/{token.hp_max} HP</div>
-                        </div>
-                        <button onClick={() => setTokenHidden(token.id, !token.hidden).catch((e: Error) => setError(e.message))}
-                          title={token.hidden ? 'Hidden from players — click to reveal' : 'Visible to players — click to hide'}
-                          style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', cursor: 'pointer', border: `1px solid ${token.hidden ? '#888' : '#ddd'}`, borderRadius: 3, color: token.hidden ? '#fff' : '#666', background: token.hidden ? '#666' : '#fff' }}>👁</button>
-                        <button onClick={() => handleRemoveToken(token.id)} style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>✕</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          {/* Uncategorized NPC tokens (DM only) */}
-          {isDmOrAdmin && (() => {
-            const uncatTokens = tokens.filter((t) => t.token_type === 'npc' && t.category_id === null);
-            if (uncatTokens.length === 0) return null;
-            return (
-              <div style={{ borderTop: '1px solid #eee' }}>
-                <div onClick={() => toggleSection('uncat')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.6rem 1rem', cursor: 'pointer', background: '#fafafa', userSelect: 'none' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Other ({uncatTokens.length})</span>
-                  <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{collapsedSections.has('uncat') ? '▶' : '▼'}</span>
-                </div>
-                {!collapsedSections.has('uncat') && (
-                  <div style={{ padding: '0.5rem' }}>
-                    {uncatTokens.map((token) => (
-                      <div key={token.id} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.4rem 0.5rem', borderRadius: 6, marginBottom: '0.2rem' }}>
-                        <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#a44', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}>{token.label[0]?.toUpperCase()}</div>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontSize: '0.82rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.label}</div>
-                          <div style={{ fontSize: '0.72rem', color: '#888' }}>{token.hp_current}/{token.hp_max} HP</div>
-                        </div>
-                        <button onClick={() => setTokenHidden(token.id, !token.hidden).catch((e: Error) => setError(e.message))}
-                          title={token.hidden ? 'Hidden from players — click to reveal' : 'Visible to players — click to hide'}
-                          style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', cursor: 'pointer', border: `1px solid ${token.hidden ? '#888' : '#ddd'}`, borderRadius: 3, color: token.hidden ? '#fff' : '#666', background: token.hidden ? '#666' : '#fff' }}>👁</button>
-                        <button onClick={() => handleRemoveToken(token.id)} style={{ flexShrink: 0, padding: '0.1rem 0.3rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, color: 'crimson', background: '#fff' }}>✕</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
         </div>{/* end scrollable section */}
 
           {/* Chat mini-window — fixed at bottom of sidebar */}
@@ -2312,7 +2489,7 @@ export default function CampaignSessionPage() {
         if (logEntries.length === 0) return null;
         const recent = logEntries.slice(-8);
         return (
-          <div style={{ position: 'fixed', bottom: 12, right: panel?.type === 'character' ? 388 : 252, zIndex: 50, width: 230, fontFamily: 'system-ui', pointerEvents: 'auto', transition: 'right 0.25s' }}>
+          <div style={{ position: 'fixed', bottom: hotbarHeight > 0 ? hotbarHeight + 12 : 12, right: panel?.type === 'character' ? 388 : 252, zIndex: 50, width: 230, fontFamily: 'system-ui', pointerEvents: 'auto', transition: 'right 0.25s' }}>
             <div
               onClick={() => setDiceLogOpen((o) => !o)}
               style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0.75rem', background: '#2a2a2a', color: '#fff', borderRadius: diceLogOpen ? '6px 6px 0 0' : 6, cursor: 'pointer', userSelect: 'none' }}
@@ -2325,9 +2502,26 @@ export default function CampaignSessionPage() {
                 {recent.map((msg) => {
                   if (msg.type === 'action') {
                     const text = msg.body.replace(/^\/action\s+/, '');
+                    // DM-only post-hoc condition picker for spell-summary messages with failed-save targets.
+                    const failedTargets = msg.data?.failed_target_ids ?? [];
+                    const alreadyApplied = msg.data?.conditions_applied?.length ?? 0;
+                    const ageMin = (Date.now() / 1000 - msg.created_at) / 60;
+                    const showCondPicker = isDmOrAdmin && failedTargets.length > 0 && alreadyApplied === 0 && ageMin < 10;
                     return (
                       <div key={msg.id} style={{ padding: '0.35rem 0.6rem', borderBottom: '1px solid #333' }}>
                         <div style={{ fontSize: '0.72rem', color: '#b8a', fontStyle: 'italic', lineHeight: 1.35 }}>{text}</div>
+                        {showCondPicker && (
+                          <SummaryConditionPicker
+                            messageId={msg.id}
+                            failedCount={failedTargets.length}
+                            spellName={msg.data?.spell_name ?? 'spell'}
+                          />
+                        )}
+                        {(msg.data?.conditions_applied?.length ?? 0) > 0 && (
+                          <div style={{ fontSize: '0.65rem', color: '#7a6', marginTop: 2, fontStyle: 'italic' }}>
+                            ↳ Applied: {msg.data!.conditions_applied!.join(', ')}
+                          </div>
+                        )}
                       </div>
                     );
                   }
@@ -2422,6 +2616,9 @@ export default function CampaignSessionPage() {
             effects={tok?.effects ?? []}
             auraRadius={tok?.aura_radius ?? null}
             auraColor={tok?.aura_color ?? null}
+            selectedTargetIds={[...targetIds]}
+            combatAutomation={!!campaign.settings.combat_automation}
+            slotsUsed={tok?.spell_slots_used ?? {}}
             onHpChange={(hp) => {
               if (panel.encounterUid) {
                 setEncounterEntries((prev) => prev.map((e) => e.uid === panel.encounterUid ? { ...e, hp_current: hp } : e));
@@ -2447,11 +2644,31 @@ export default function CampaignSessionPage() {
             effects={tok?.effects ?? []}
             auraRadius={tok?.aura_radius ?? null}
             auraColor={tok?.aura_color ?? null}
+            selectedTargetIds={[...targetIds]}
+            combatAutomation={!!campaign.settings.combat_automation}
+            slotsUsed={tok?.spell_slots_used ?? {}}
             onHpChange={(hp) => setPanel((p) => p?.type === 'npc' ? { ...p, hp } : p)}
             onClose={() => setPanel(null)}
           />
         );
       })()}
+
+      {/* Pending Shield / Counterspell reaction prompts — top-center, auto-dismiss on response. */}
+      <ReactionPrompt offers={reactionOffers} onResolved={dismissReactionOffer} />
+
+      {/* Quick-cast hotbar — block element at the bottom of the page-flex column. When visible
+          the main-area above shrinks, lifting chat / DM notes / map controls above the bar. */}
+      {viewerOwnToken && viewerOwnToken.character_id != null && (
+        <QuickCastHotbar
+          characterId={viewerOwnToken.character_id}
+          tokenId={viewerOwnToken.id}
+          selectedTargetIds={[...targetIds]}
+          combatAutomation={!!campaign.settings.combat_automation}
+          hidden={hotbarHidden}
+          onToggleHidden={toggleHotbar}
+          onHeightChange={setHotbarHeight}
+        />
+      )}
 
     </div>
   );

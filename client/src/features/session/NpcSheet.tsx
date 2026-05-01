@@ -3,6 +3,8 @@ import { abilityModifier, formatModifier } from '../character/pointBuy';
 import { updateTokenHp, updateCampaignNpc } from './tokenApi';
 import { socket } from '../../lib/socket';
 import { TokenAuraControl } from './TokenAuraControl';
+import { CastSpellModal } from './CastSpellModal';
+import { EntitySpellsList } from './EntitySpellsList';
 import type { CampaignNpc } from './types';
 
 interface Props {
@@ -13,6 +15,10 @@ interface Props {
   effects?: { name: string; rounds: number }[];
   auraRadius?: number | null;
   auraColor?: string | null;
+  selectedTargetIds?: number[];
+  combatAutomation?: boolean;
+  /** Manual slot-bubble state for the spell tab. */
+  slotsUsed?: Record<string, number>;
   onHpChange?: (hp: number) => void;
   onClose: () => void;
 }
@@ -47,11 +53,12 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, effects = [], auraRadius = null, auraColor = null, onHpChange, onClose }: Props) {
+export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, effects = [], auraRadius = null, auraColor = null, selectedTargetIds = [], combatAutomation = false, slotsUsed = {}, onHpChange, onClose }: Props) {
   const [hp, setHp] = useState(hpCurrent);
   const [saving, setSaving] = useState(false);
   const [newEffectName, setNewEffectName] = useState('');
   const [newEffectRounds, setNewEffectRounds] = useState('10');
+  const [castOpen, setCastOpen] = useState(false);
 
   function addEffect() {
     if (tokenId === undefined) return;
@@ -124,6 +131,33 @@ export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, effects = [], auraRad
             ))}
           </div>
         </div>
+
+        {/* Spell tab — shown when the NPC has a spell list defined. Otherwise fall back to the
+            free-form Cast Spell modal so the DM can still cast ad-hoc. */}
+        {tokenId !== undefined && (() => {
+          const hasSpells = npc.spell_save_dc != null && (npc.spells?.length ?? 0) > 0;
+          if (hasSpells) {
+            return (
+              <EntitySpellsList
+                casterTokenId={tokenId}
+                casterName={npc.label}
+                saveDC={npc.spell_save_dc!}
+                attackBonus={npc.spell_attack_bonus ?? 0}
+                spells={npc.spells}
+                slotsByLevel={Object.fromEntries(Object.entries(npc.spell_slots ?? {}).map(([k, v]) => [Number(k), v]))}
+                slotsUsed={slotsUsed}
+                selectedTargetIds={selectedTargetIds}
+                combatAutomation={combatAutomation}
+              />
+            );
+          }
+          return (
+            <button onClick={() => setCastOpen(true)}
+              style={{ width: '100%', marginBottom: '0.85rem', padding: '0.4rem', background: '#5a3a7a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>
+              🪄 Cast Spell
+            </button>
+          );
+        })()}
 
         {/* Active timed effects */}
         {tokenId !== undefined && (
@@ -283,6 +317,14 @@ export function NpcSheet({ npc, tokenId, hpCurrent, hpMax, effects = [], auraRad
         {npc.dm_notes !== undefined && <DmNotesPane npcId={npc.id} initial={npc.dm_notes} />}
 
       </div>
+      {castOpen && tokenId !== undefined && (
+        <CastSpellModal
+          casterTokenId={tokenId}
+          selectedTargetIds={selectedTargetIds}
+          combatAutomation={combatAutomation}
+          onClose={() => setCastOpen(false)}
+        />
+      )}
     </SheetOverlay>
   );
 }

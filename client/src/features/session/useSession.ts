@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { socket } from '../../lib/socket';
 import type { MapData, TokenData, ChatMessage, InitiativeState, WallSegment, MapTemplate, MapDrawing } from './types';
+import type { ReactionOffer } from './ReactionPrompt';
 import { listTokens } from './tokenApi';
 import { listWalls, getFog } from './wallApi';
 import { listTemplates } from './templateApi';
@@ -33,6 +34,14 @@ export function useSession(campaignId: number) {
   const [fogVisible, setFogVisible] = useState<[number, number][]>([]);
   const [fogExplored, setFogExplored] = useState<[number, number][]>([]);
   const [pings, setPings] = useState<MapPing[]>([]);
+  // Pending Shield / Counterspell prompts targeted at this user.
+  const [reactionOffers, setReactionOffers] = useState<ReactionOffer[]>([]);
+
+  // Imperatively dismiss an offer from the local list (used after the user clicks Yes/No or
+  // when the server emits reaction:cancelled).
+  const dismissReactionOffer = useCallback((offer_id: string) => {
+    setReactionOffers((prev) => prev.filter((o) => o.offer_id !== offer_id));
+  }, []);
 
   const fetchTokens = useCallback((mapId: number) => {
     listTokens(mapId).then(setTokens).catch(() => {});
@@ -195,6 +204,12 @@ export function useSession(campaignId: number) {
       );
     }
 
+    function onTokenSlotsUpdated(data: { token_id: number; spell_slots_used: Record<string, number> }) {
+      setTokens((prev) =>
+        prev.map((t) => t.id === data.token_id ? { ...t, spell_slots_used: data.spell_slots_used } : t)
+      );
+    }
+
     function onPing(p: { x: number; y: number; user_id: number; color: string }) {
       const id = Date.now() + Math.random();
       setPings((prev) => [...prev, { id, ...p }]);
@@ -206,6 +221,23 @@ export function useSession(campaignId: number) {
       // Mark the matching chat message as undone so the UI can render it that way
       setMessages((prev) => prev.map((m) =>
         m.id === data.message_id && m.data ? { ...m, data: { ...m.data, undone: true } } : m
+      ));
+    }
+
+    function onReactionOffer(data: ReactionOffer) {
+      setReactionOffers((prev) => [...prev, data]);
+    }
+
+    function onReactionCancelled(data: { offer_id: string }) {
+      setReactionOffers((prev) => prev.filter((o) => o.offer_id !== data.offer_id));
+    }
+
+    function onSummaryConditionsApplied(data: { message_id: number; conditions: string[] }) {
+      // Hide the post-hoc condition picker on the matching summary message after the DM applies.
+      setMessages((prev) => prev.map((m) =>
+        m.id === data.message_id && m.data
+          ? { ...m, data: { ...m.data, conditions_applied: [...(m.data.conditions_applied ?? []), ...data.conditions] } }
+          : m
       ));
     }
 
@@ -236,8 +268,12 @@ export function useSession(campaignId: number) {
     socket.on('map:fog_toggled', onFogToggled);
     socket.on('map:updated', onMapUpdated);
     socket.on('token:aura_updated', onTokenAuraUpdated);
+    socket.on('token:slots_updated', onTokenSlotsUpdated);
     socket.on('session:ping', onPing);
     socket.on('combat:hp_undone', onHpUndone);
+    socket.on('combat:summary_conditions_applied', onSummaryConditionsApplied);
+    socket.on('reaction:offer', onReactionOffer);
+    socket.on('reaction:cancelled', onReactionCancelled);
 
     socket.connect();
 
@@ -269,8 +305,12 @@ export function useSession(campaignId: number) {
       socket.off('map:fog_toggled', onFogToggled);
       socket.off('map:updated', onMapUpdated);
       socket.off('token:aura_updated', onTokenAuraUpdated);
+      socket.off('token:slots_updated', onTokenSlotsUpdated);
       socket.off('session:ping', onPing);
       socket.off('combat:hp_undone', onHpUndone);
+      socket.off('combat:summary_conditions_applied', onSummaryConditionsApplied);
+      socket.off('reaction:offer', onReactionOffer);
+      socket.off('reaction:cancelled', onReactionCancelled);
       socket.disconnect();
     };
   }, [campaignId, fetchTokens, fetchWallsAndFog]);
@@ -282,5 +322,6 @@ export function useSession(campaignId: number) {
     messages, initiative,
     walls, templates, drawings, fogVisible, fogExplored,
     pings,
+    reactionOffers, dismissReactionOffer,
   };
 }

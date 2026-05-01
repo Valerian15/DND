@@ -55,6 +55,14 @@ export async function setTokenAura(id: number, aura_radius: number | null, aura_
   });
 }
 
+// Set the DM-only visual slot-bubble state on a monster / NPC token.
+export async function setTokenSlotsUsed(id: number, spell_slots_used: Record<string, number>): Promise<{ token_id: number; spell_slots_used: Record<string, number> }> {
+  return apiFetch(`/tokens/${id}/slots`, {
+    method: 'PATCH',
+    body: JSON.stringify({ spell_slots_used }),
+  });
+}
+
 export async function listCampaignNpcs(campaignId: number): Promise<CampaignNpc[]> {
   const res = await apiFetch<{ npcs: CampaignNpc[] }>(`/campaign-npcs?campaign_id=${campaignId}`);
   return res.npcs;
@@ -78,6 +86,10 @@ export async function createCampaignNpc(body: {
   immunities?: string[];
   notes?: string;
   dm_notes?: string;
+  spells?: string[];
+  spell_slots?: Record<string, number>;
+  spell_save_dc?: number | null;
+  spell_attack_bonus?: number | null;
 }): Promise<CampaignNpc> {
   const res = await apiFetch<{ npc: CampaignNpc }>('/campaign-npcs', {
     method: 'POST',
@@ -103,6 +115,10 @@ export async function updateCampaignNpc(id: number, body: {
   immunities?: string[];
   notes?: string;
   dm_notes?: string;
+  spells?: string[];
+  spell_slots?: Record<string, number>;
+  spell_save_dc?: number | null;
+  spell_attack_bonus?: number | null;
 }): Promise<CampaignNpc> {
   const res = await apiFetch<{ npc: CampaignNpc }>(`/campaign-npcs/${id}`, {
     method: 'PATCH',

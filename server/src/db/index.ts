@@ -521,6 +521,22 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_map_drawings_map ON map_drawings(map_id);
   `);
 
+  // Phase 7-A.5: per-token spell slot usage (monsters / campaign NPCs only — PCs use
+  // characters.spell_slots_used). Display-only; click-to-toggle visual tracking by the DM.
+  try { db.exec("ALTER TABLE tokens ADD COLUMN spell_slots_used TEXT NOT NULL DEFAULT '{}'"); } catch { /* exists */ }
+
+  // Phase 7-A.5: Campaign NPC spellcasting — DM-built NPCs can have a structured spell list,
+  // save DC, and attack bonus, rendered as a real spell tab on the NpcSheet.
+  try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN spells TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE campaign_npcs ADD COLUMN spell_slots TEXT NOT NULL DEFAULT '{}'"); } catch { /* exists */ }
+  try { db.exec('ALTER TABLE campaign_npcs ADD COLUMN spell_save_dc INTEGER'); } catch { /* exists */ }
+  try { db.exec('ALTER TABLE campaign_npcs ADD COLUMN spell_attack_bonus INTEGER'); } catch { /* exists */ }
+
+  // Phase 7-A: action economy trackers — toggled in InGameSheet/Hotbar, auto-reset on turn start.
+  try { db.exec('ALTER TABLE characters ADD COLUMN action_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  try { db.exec('ALTER TABLE characters ADD COLUMN bonus_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+  try { db.exec('ALTER TABLE characters ADD COLUMN reaction_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+
   // QoL batch: per-map scene tag (italic banner shown above chat)
   try { db.exec("ALTER TABLE maps ADD COLUMN scene_tag TEXT NOT NULL DEFAULT ''"); } catch { /* exists */ }
   // QoL batch: DM-only notes per campaign NPC (hidden pane, only visible to DM/admin)
