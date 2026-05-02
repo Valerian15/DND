@@ -43,6 +43,27 @@ interface SubclassEntry {
   };
 }
 
+interface RaceEntry {
+  slug: string;
+  source: string;
+  data: {
+    name: string;
+    slug: string;
+    desc: string;
+    asi_desc: string;
+    asi: Array<{ attributes: string[]; value: number }>;
+    age?: string;
+    alignment?: string;
+    size_raw?: string;
+    speed?: { walk: number };
+    speed_desc?: string;
+    languages?: string;
+    vision?: string;
+    traits?: string;
+    subraces?: unknown[];
+  };
+}
+
 // ─────────────── Backgrounds ───────────────
 const BACKGROUNDS: BackgroundEntry[] = [
   {
@@ -327,6 +348,35 @@ const FEATS: FeatEntry[] = [
       slug: 'war-caster',
       prerequisite: 'The ability to cast at least one spell',
       desc: 'You have practiced casting spells in the midst of combat, learning techniques that grant you the following benefits:\n\n- You have advantage on Constitution saving throws that you make to maintain your concentration on a spell when you take damage.\n- You can perform the somatic components of spells even when you have weapons or a shield in one or both hands.\n- When a hostile creature\'s movement provokes an opportunity attack from you, you can use your reaction to cast a spell at the creature, rather than making an opportunity attack. The spell must have a casting time of 1 action and must target only that creature.',
+    },
+  },
+];
+
+// ─────────────── Races (non-SRD) ───────────────
+const RACES: RaceEntry[] = [
+  {
+    slug: 'human-variant',
+    source: 'phb-2014',
+    data: {
+      name: 'Variant Human',
+      slug: 'human-variant',
+      desc: `Most worlds have a wide variety of humans. The variant human trades the standard human's broad +1 to all six abilities for narrower bonuses, an extra skill, and a feat at 1st level — making them one of the most flexible starting races in the game.`,
+      asi_desc: '**_Ability Score Increase._** Two different ability scores of your choice each increase by 1.',
+      asi: [
+        { attributes: ['Other'], value: 1 },
+        { attributes: ['Other'], value: 1 },
+      ],
+      age: '**_Age._** Humans reach adulthood in their late teens and live less than a century.',
+      alignment: '**_Alignment._** Humans tend toward no particular alignment. The best and the worst are found among them.',
+      size_raw: 'Medium',
+      speed: { walk: 30 },
+      speed_desc: '**_Speed._** Your base walking speed is 30 feet.',
+      languages: '**_Languages._** You can speak, read, and write Common and one extra language of your choice.',
+      vision: '',
+      traits: `**_Skills._** You gain proficiency in one skill of your choice.
+
+**_Feat._** You gain one feat of your choice at 1st level.`,
+      subraces: [],
     },
   },
 ];
@@ -1704,14 +1754,18 @@ function run() {
   const subStmt = db.prepare(
     `INSERT OR REPLACE INTO subclasses (slug, name, class_slug, data, source) VALUES (?, ?, ?, ?, ?)`,
   );
+  const raceStmt = db.prepare(
+    `INSERT OR REPLACE INTO races (slug, name, data, source) VALUES (?, ?, ?, ?)`,
+  );
 
   db.transaction(() => {
     for (const b of BACKGROUNDS) bgStmt.run(b.slug, b.data.name, JSON.stringify(b.data), b.source);
     for (const f of FEATS) featStmt.run(f.slug, f.data.name, JSON.stringify(f.data), f.source);
     for (const s of SUBCLASSES) subStmt.run(s.slug, s.data.name, s.class_slug, JSON.stringify(s.data), s.source);
+    for (const r of RACES) raceStmt.run(r.slug, r.data.name, JSON.stringify(r.data), r.source);
   })();
 
-  console.log(`✅ Seeded ${BACKGROUNDS.length} backgrounds + ${FEATS.length} feats + ${SUBCLASSES.length} subclasses (source: phb-2014)`);
+  console.log(`✅ Seeded ${BACKGROUNDS.length} backgrounds + ${FEATS.length} feats + ${SUBCLASSES.length} subclasses + ${RACES.length} races (source: phb-2014)`);
 }
 
 run();

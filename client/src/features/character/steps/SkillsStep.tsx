@@ -46,10 +46,10 @@ export default function SkillsStep({ character, onChange }: Props) {
       .map(([k]) => k),
   );
 
-  // Class picks = proficient skills WITHOUT a non-class source (i.e. without source === 'background')
+  // Class picks = proficient skills WITHOUT a tagged source (background/race feats grant them separately).
   const classPicked = new Set(
     Object.entries(skillsMap)
-      .filter(([_, v]) => v?.proficient && v?.source !== 'background')
+      .filter(([_, v]) => v?.proficient && v?.source !== 'background' && v?.source !== 'race')
       .map(([k]) => k),
   );
 
@@ -59,13 +59,19 @@ export default function SkillsStep({ character, onChange }: Props) {
       .map(([k]) => k),
   );
 
+  const raceGranted = new Set(
+    Object.entries(skillsMap)
+      .filter(([_, v]) => v?.proficient && v?.source === 'race')
+      .map(([k]) => k),
+  );
+
   function toggle(skillKey: string) {
     const entry = skillsMap[skillKey];
     const isProf = !!entry?.proficient;
-    const isBackgroundGranted = entry?.source === 'background';
+    const isExternal = entry?.source === 'background' || entry?.source === 'race';
 
-    // Background-granted skills can't be toggled off here (they come from the background, not from the player's choice)
-    if (isBackgroundGranted) return;
+    // Background- and race-granted skills can't be toggled off here.
+    if (isExternal) return;
 
     const next = { ...skillsMap };
     if (isProf) {
@@ -113,6 +119,11 @@ export default function SkillsStep({ character, onChange }: Props) {
             (+{backgroundGranted.size} from background)
           </span>
         )}
+        {raceGranted.size > 0 && (
+          <span style={{ marginLeft: '1rem', color: '#2a7' }}>
+            (+{raceGranted.size} from race)
+          </span>
+        )}
         {hasOrphans && (
           <span style={{ marginLeft: '1rem', color: '#a60' }}>
             Some class picks are outside your current class's list — marked below, click to remove.
@@ -125,13 +136,14 @@ export default function SkillsStep({ character, onChange }: Props) {
           const isAllowed = allowedSkills.includes(skill.key);
           const isProf = proficient.has(skill.key);
           const isBg = backgroundGranted.has(skill.key);
+          const isRace = raceGranted.has(skill.key);
           const isClassPick = classPicked.has(skill.key);
           const isOrphan = isClassPick && !isAllowed;
 
-          // Clickable: background skills are NOT clickable here (immutable)
-          //            class picks already on can always be unselected
-          //            otherwise need to be in the allowed list
-          const clickable = !isBg && (isClassPick || isAllowed);
+          // Background- and race-granted skills are not clickable here.
+          // Class picks already on can always be unselected.
+          // Otherwise need to be in the allowed list.
+          const clickable = !isBg && !isRace && (isClassPick || isAllowed);
 
           const abilityMod = abilityModifier(character.abilities[skill.ability]);
           const total = abilityMod + (isProf ? profBonus : 0);
@@ -143,6 +155,7 @@ export default function SkillsStep({ character, onChange }: Props) {
               disabled={!clickable}
               title={
                 isBg ? 'Granted by background — change in the Background step'
+                : isRace ? 'Granted by race — change in the Race step'
                 : isOrphan ? 'Not offered by your current class — click to remove'
                 : undefined
               }
@@ -154,13 +167,15 @@ export default function SkillsStep({ character, onChange }: Props) {
                 borderRadius: 4,
                 border: isBg
                   ? '2px solid #6cf'
+                  : isRace
+                  ? '2px solid #6c6'
                   : isOrphan
                   ? '2px dashed #a60'
                   : isClassPick
                   ? '2px solid #333'
                   : '1px solid #ddd',
-                background: isProf ? '#fafafa' : !isAllowed && !isBg ? '#f5f5f5' : '#fff',
-                color: !clickable && !isBg ? '#999' : '#333',
+                background: isProf ? '#fafafa' : !isAllowed && !isBg && !isRace ? '#f5f5f5' : '#fff',
+                color: !clickable && !isBg && !isRace ? '#999' : '#333',
                 cursor: clickable ? 'pointer' : 'not-allowed',
                 textAlign: 'left',
               }}
@@ -169,6 +184,7 @@ export default function SkillsStep({ character, onChange }: Props) {
                 <strong>{skill.name}</strong>{' '}
                 <span style={{ fontSize: '0.8rem', color: '#888' }}>({ABILITY_NAMES[skill.ability].slice(0, 3)})</span>
                 {isBg && <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#27a' }}>background</span>}
+                {isRace && <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#2a7' }}>race</span>}
               </span>
               <span style={{ fontSize: '0.9rem' }}>
                 {formatModifier(total)}

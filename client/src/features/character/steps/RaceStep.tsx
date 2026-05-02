@@ -3,6 +3,7 @@ import type { Abilities, AbilityKey, Character, LibraryItem } from '../types';
 import { ABILITY_NAMES, ABILITY_ORDER } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
 import { MD } from '../../library/Statblock';
+import { SKILLS } from '../skills';
 
 interface Props {
   character: Character;
@@ -82,6 +83,11 @@ interface AppliedAsis {
   floating?: AbilityKey[];
 }
 
+/** Races that grant +1 skill of choice at character creation. */
+const RACES_WITH_SKILL_GRANT: Record<string, true> = {
+  'human-variant': true,
+};
+
 export default function RaceStep({ character, onChange }: Props) {
   const [races, setRaces] = useState<LibraryItem[]>([]);
   const [selected, setSelected] = useState<RaceData | null>(null);
@@ -153,15 +159,34 @@ export default function RaceStep({ character, onChange }: Props) {
     try {
       const r = await getLibraryItem<{ data: RaceData; darkvision?: number }>('races', slug);
       const patch = buildAsiPatch({ nextRace: r.data, nextSubrace: null, nextFloating: [] });
+      // If switching away from a race-skill-grant race, drop the prior race-granted skill.
+      const skills = { ...((character.skills ?? {}) as Record<string, { proficient?: boolean; source?: string }>) };
+      const prevRaceSkill = (description as Record<string, any>).race_skill_grant as string | undefined;
+      if (prevRaceSkill && skills[prevRaceSkill]?.source === 'race') delete skills[prevRaceSkill];
+      const nextDesc = { ...(patch.description as Record<string, unknown>) };
+      delete (nextDesc as any).race_skill_grant;
       onChange({
         race_slug: slug,
         subrace_slug: null,
         darkvision: (r as any).darkvision ?? 0,
         ...patch,
+        skills,
+        description: nextDesc,
       });
     } catch {
       onChange({ race_slug: slug });
     }
+  }
+
+  function setRaceSkill(skillKey: string) {
+    const skills = { ...((character.skills ?? {}) as Record<string, { proficient?: boolean; source?: string }>) };
+    const prev = (description as Record<string, any>).race_skill_grant as string | undefined;
+    if (prev && skills[prev]?.source === 'race') delete skills[prev];
+    if (skillKey) skills[skillKey] = { proficient: true, source: 'race' };
+    const nextDesc = { ...(description as Record<string, any>) };
+    if (skillKey) nextDesc.race_skill_grant = skillKey;
+    else delete nextDesc.race_skill_grant;
+    onChange({ skills, description: nextDesc });
   }
 
   function selectSubrace(slug: string | null) {
@@ -271,6 +296,23 @@ export default function RaceStep({ character, onChange }: Props) {
           )}
         </div>
       )}
+
+      {character.race_slug && RACES_WITH_SKILL_GRANT[character.race_slug] && (() => {
+        const current = (description as Record<string, any>).race_skill_grant as string | undefined;
+        return (
+          <div style={{ marginTop: '1.5rem', background: '#e7f7ec', padding: '0.85rem 1rem', borderRadius: 6, border: '1px solid #c2e7d0' }}>
+            <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>Bonus skill (Variant Human)</h3>
+            <p style={{ fontSize: '0.85rem', color: '#666', margin: '0 0 0.5rem' }}>
+              Pick one skill to gain proficiency in. (You also gain a feat at level 1 — pick it in the Feats step.)
+            </p>
+            <select value={current ?? ''} onChange={(e) => setRaceSkill(e.target.value)}
+              style={{ padding: '0.4rem', border: '1px solid #ccc', borderRadius: 4, minWidth: 220 }}>
+              <option value="">— pick a skill —</option>
+              {SKILLS.map((s) => (<option key={s.key} value={s.key}>{s.name}</option>))}
+            </select>
+          </div>
+        );
+      })()}
 
       {totalFloatingNeeded > 0 && (
         <div style={{ marginTop: '1.5rem', background: '#fff8e1', padding: '0.85rem 1rem', borderRadius: 6, border: '1px solid #ecd87a' }}>
