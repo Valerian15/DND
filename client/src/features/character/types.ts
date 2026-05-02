@@ -87,6 +87,7 @@ export interface Character {
   death_saves_failure: number;
   inspiration: number;
   lucky_used: number;
+  speed_walk: number;
   exhaustion_level: number;
   action_used: number;
   bonus_used: number;

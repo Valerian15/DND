@@ -499,6 +499,9 @@ export function initSchema() {
   // Lucky feat point tracker (0..3). Resets on long rest.
   try { db.exec('ALTER TABLE characters ADD COLUMN lucky_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
 
+  // Walking speed in feet (race + feat modifiers). Default 30 covers most Medium races.
+  try { db.exec('ALTER TABLE characters ADD COLUMN speed_walk INTEGER NOT NULL DEFAULT 30'); } catch { /* exists */ }
+
   // AOE spell templates on maps
   db.exec(`
     CREATE TABLE IF NOT EXISTS map_templates (

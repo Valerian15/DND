@@ -88,6 +88,47 @@ const RACES_WITH_SKILL_GRANT: Record<string, true> = {
   'human-variant': true,
 };
 
+const KNOWN_LANGUAGES = [
+  'Common', 'Dwarvish', 'Elvish', 'Giant', 'Gnomish', 'Goblin', 'Halfling', 'Orc',
+  'Abyssal', 'Celestial', 'Deep Speech', 'Draconic', 'Infernal', 'Primordial',
+  'Sylvan', 'Undercommon', 'Auran', 'Aquan', 'Ignan', 'Terran', 'Druidic',
+];
+
+const DAMAGE_TYPES_FOR_PARSE = ['acid', 'bludgeoning', 'cold', 'fire', 'force', 'lightning', 'necrotic', 'piercing', 'poison', 'psychic', 'radiant', 'slashing', 'thunder'];
+
+interface RaceGrants {
+  languages: string[];
+  resistances: string[];
+  speed: number;
+}
+
+/**
+ * Extract auto-applicable race grants (languages, damage resistances, speed) from race data.
+ * Heuristics over the markdown text — catches the common cases (tiefling fire, dwarf poison,
+ * etc.) and silently skips anything it doesn't recognise. The player can fix-up via Details.
+ */
+function parseRaceGrants(race: { speed?: { walk?: number }; languages?: string; traits?: string }): RaceGrants {
+  const grants: RaceGrants = { languages: [], resistances: [], speed: 30 };
+  if (typeof race.speed?.walk === 'number') grants.speed = race.speed.walk;
+
+  const langText = (race.languages ?? '').toLowerCase();
+  for (const lang of KNOWN_LANGUAGES) {
+    if (langText.includes(lang.toLowerCase())) grants.languages.push(lang);
+  }
+
+  const traitsText = race.traits ?? '';
+  // Match "resistance to <type> damage" or "resistance against <type> damage".
+  const resRe = /resistance\s+(?:to|against)\s+(\w+)\s*damage/gi;
+  let m;
+  while ((m = resRe.exec(traitsText)) !== null) {
+    const dt = m[1].toLowerCase();
+    if (DAMAGE_TYPES_FOR_PARSE.includes(dt) && !grants.resistances.includes(dt)) {
+      grants.resistances.push(dt);
+    }
+  }
+  return grants;
+}
+
 export default function RaceStep({ character, onChange }: Props) {
   const [races, setRaces] = useState<LibraryItem[]>([]);
   const [selected, setSelected] = useState<RaceData | null>(null);
@@ -159,16 +200,36 @@ export default function RaceStep({ character, onChange }: Props) {
     try {
       const r = await getLibraryItem<{ data: RaceData; darkvision?: number }>('races', slug);
       const patch = buildAsiPatch({ nextRace: r.data, nextSubrace: null, nextFloating: [] });
+
       // If switching away from a race-skill-grant race, drop the prior race-granted skill.
       const skills = { ...((character.skills ?? {}) as Record<string, { proficient?: boolean; source?: string }>) };
       const prevRaceSkill = (description as Record<string, any>).race_skill_grant as string | undefined;
       if (prevRaceSkill && skills[prevRaceSkill]?.source === 'race') delete skills[prevRaceSkill];
+
+      // Diff race-granted languages / resistances / speed against the previous grant snapshot
+      // and overwrite cleanly so character.languages and .resistances don't drift.
+      const prevGrants = ((description as Record<string, any>).applied_race_grants ?? { languages: [], resistances: [], speed: 30 }) as RaceGrants;
+      const nextGrants = parseRaceGrants(r.data);
+      const languages = [
+        ...((character.languages ?? []) as string[]).filter((l) => !prevGrants.languages.includes(l)),
+        ...nextGrants.languages,
+      ];
+      const resistances = [
+        ...((character.resistances ?? []) as string[]).filter((dt) => !prevGrants.resistances.includes(dt)),
+        ...nextGrants.resistances,
+      ];
+
       const nextDesc = { ...(patch.description as Record<string, unknown>) };
       delete (nextDesc as any).race_skill_grant;
+      (nextDesc as any).applied_race_grants = nextGrants;
+
       onChange({
         race_slug: slug,
         subrace_slug: null,
         darkvision: (r as any).darkvision ?? 0,
+        speed_walk: nextGrants.speed,
+        languages: Array.from(new Set(languages)),
+        resistances: Array.from(new Set(resistances)),
         ...patch,
         skills,
         description: nextDesc,

@@ -339,6 +339,7 @@ export default function CharacterSheet() {
               <BigStat label="Initiative">{formatModifier(init)}</BigStat>
               <BigStat label="Proficiency">{formatModifier(prof)}</BigStat>
               <BigStat label="Passive Perception">{passive}</BigStat>
+              <BigStat label="Speed">{character.speed_walk ?? 30} ft</BigStat>
             </div>
           </Card>
 
