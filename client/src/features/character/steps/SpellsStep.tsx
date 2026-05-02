@@ -3,6 +3,7 @@ import type { Character } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
 import { getCasterConfig, maxSpellLevelFor, preparedCount } from '../casters';
 import { abilityModifier } from '../pointBuy';
+import { MD } from '../../library/Statblock';
 
 interface Props {
   character: Character;
@@ -351,11 +352,11 @@ export default function SpellsStep({ character, onChange }: Props) {
             {selectedDetail.material && <p style={{ fontSize: '0.9rem', color: '#666' }}>Material: {selectedDetail.material}</p>}
             {selectedDetail.duration && <p><strong>Duration:</strong> {selectedDetail.duration}</p>}
             {selectedDetail.desc && (
-              <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem', fontSize: '0.9rem' }}>{selectedDetail.desc}</div>
+              <div style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}><MD text={selectedDetail.desc} /></div>
             )}
             {selectedDetail.higher_level && (
               <div style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}>
-                <strong>At higher levels:</strong> {selectedDetail.higher_level}
+                <strong>At higher levels:</strong> <MD text={selectedDetail.higher_level} />
               </div>
             )}
           </div>

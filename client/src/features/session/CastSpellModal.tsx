@@ -44,6 +44,9 @@ export function CastSpellModal({ casterTokenId, selectedTargetIds, combatAutomat
   const [damageType, setDamageType] = useState('fire');
   const [halfOnSave, setHalfOnSave] = useState(true);
   const [conditions, setConditions] = useState<Set<string>>(new Set());
+  // Slot level the spell is cast at — used by Counterspell (DC 10 + level for L4+ spells).
+  // Cantrips cast at L0 internally; we store 0 for them. Default 1 for leveled spells.
+  const [castLevel, setCastLevel] = useState(1);
 
   function toggleCondition(c: string) {
     setConditions((prev) => {
@@ -67,6 +70,7 @@ export function CastSpellModal({ casterTokenId, selectedTargetIds, combatAutomat
         damage_dice: damageDice.trim(),
         damage_type: damageType,
         is_spell: true,
+        cast_level: castLevel,
       });
     } else if (mode === 'save') {
       socket.emit('combat:resolve_spell', {
@@ -79,6 +83,7 @@ export function CastSpellModal({ casterTokenId, selectedTargetIds, combatAutomat
         damage_type: damageType,
         half_on_save: halfOnSave,
         conditions_on_fail: [...conditions],
+        cast_level: castLevel,
       });
     } else if (mode === 'auto_hit') {
       socket.emit('combat:resolve_auto_hit', {
@@ -88,6 +93,7 @@ export function CastSpellModal({ casterTokenId, selectedTargetIds, combatAutomat
         hit_count: Math.max(1, hitCount),
         damage_dice: damageDice.trim(),
         damage_type: damageType,
+        cast_level: castLevel,
       });
     } else if (mode === 'heal') {
       socket.emit('combat:resolve_heal', {
@@ -125,14 +131,21 @@ export function CastSpellModal({ casterTokenId, selectedTargetIds, combatAutomat
             style={fieldStyle} />
         </Field>
 
-        <Field label="Mode">
-          <select value={mode} onChange={(e) => setMode(e.target.value as CastMode)} style={fieldStyle}>
-            <option value="save">Save (DC) — Fireball, Hold Person, etc.</option>
-            <option value="attack">Spell attack — Disintegrate, Ray of Frost, etc.</option>
-            <option value="auto_hit">Auto-hit — Magic Missile, etc.</option>
-            <option value="heal">Heal — Cure Wounds, etc.</option>
-          </select>
-        </Field>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <Field label="Mode" flex={3}>
+            <select value={mode} onChange={(e) => setMode(e.target.value as CastMode)} style={fieldStyle}>
+              <option value="save">Save (DC) — Fireball, Hold Person, etc.</option>
+              <option value="attack">Spell attack — Disintegrate, Ray of Frost, etc.</option>
+              <option value="auto_hit">Auto-hit — Magic Missile, etc.</option>
+              <option value="heal">Heal — Cure Wounds, etc.</option>
+            </select>
+          </Field>
+          <Field label="Slot lvl" flex={1}>
+            <input type="number" min={0} max={9} value={castLevel}
+              onChange={(e) => setCastLevel(Math.max(0, Math.min(9, Number(e.target.value) || 0)))}
+              style={fieldStyle} />
+          </Field>
+        </div>
 
         {mode === 'save' && (
           <div style={{ display: 'flex', gap: '0.5rem' }}>

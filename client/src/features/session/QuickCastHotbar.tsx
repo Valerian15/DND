@@ -218,6 +218,15 @@ export function QuickCastHotbar({ characterId, tokenId, selectedTargetIds, comba
     catch { getCharacter(character.id).then(setCharacter).catch(() => {}); }
   }
 
+  // Reset all three flags at once. Useful outside combat where the server-side per-turn reset
+  // never fires, so a player who used Shield once would never recover their reaction otherwise.
+  async function resetEconomy() {
+    if (!character) return;
+    setCharacter({ ...character, action_used: 0, bonus_used: 0, reaction_used: 0 });
+    try { await updateCharacter(character.id, { action_used: 0, bonus_used: 0, reaction_used: 0 }); }
+    catch { getCharacter(character.id).then(setCharacter).catch(() => {}); }
+  }
+
   // Persist a resource change (Rage, Bardic Inspiration, etc.). Optimistic + rollback on failure.
   async function changeResource(idx: number, delta: number) {
     if (!character) return;
@@ -304,6 +313,7 @@ export function QuickCastHotbar({ characterId, tokenId, selectedTargetIds, comba
         hit_count: dartCount,
         damage_dice: finalDice,
         damage_type: parsed?.damageType ?? 'force',
+        cast_level: castLevel,
       });
       emitted = true;
     }
@@ -318,6 +328,7 @@ export function QuickCastHotbar({ characterId, tokenId, selectedTargetIds, comba
         damage_type: parsed.damageType ?? '',
         is_spell: true,
         roll_mode: mode,
+        cast_level: castLevel,
       });
       emitted = true;
     }
@@ -333,6 +344,7 @@ export function QuickCastHotbar({ characterId, tokenId, selectedTargetIds, comba
         damage_dice: finalDice,
         damage_type: parsed.damageType ?? '',
         half_on_save: true,
+        cast_level: castLevel,
       });
       emitted = true;
     }
@@ -427,6 +439,9 @@ export function QuickCastHotbar({ characterId, tokenId, selectedTargetIds, comba
                 </button>
               );
             })}
+            <button onClick={resetEconomy}
+              title="Reset all action-economy flags (auto-runs at the start of your turn during combat; click here for out-of-combat reactions)"
+              style={{ width: 22, height: 22, padding: 0, fontSize: '0.78rem', cursor: 'pointer', border: '1px solid #4a4538', borderRadius: 3, background: 'transparent', color: '#888' }}>↺</button>
             {resources.length > 0 && <span style={{ width: 1, height: 16, background: '#3a342b', margin: '0 0.2rem' }} />}
             {resources.map((r, idx) => (
               <div key={r.name} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', padding: '0.1rem 0.35rem', borderRadius: 3, border: '1px solid #4a4538', background: r.current === 0 ? '#2a1818' : '#1f1c18', flexShrink: 0 }}>

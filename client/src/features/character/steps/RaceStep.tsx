@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Character, LibraryItem } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
+import { MD } from '../../library/Statblock';
 
 interface Props {
   character: Character;
@@ -94,22 +95,28 @@ export default function RaceStep({ character, onChange }: Props) {
         <div style={{ background: '#f9f9f9', padding: '1rem', borderRadius: 6, border: '1px solid #eee' }}>
           <h3 style={{ marginTop: 0 }}>{selected.name}</h3>
           {selected.asi_desc && (
-            <p><strong>Ability Score Increase:</strong> {selected.asi_desc}</p>
+            <div style={{ fontSize: '0.9rem', marginBottom: '0.4rem' }}><MD text={selected.asi_desc} /></div>
           )}
           {selected.size_raw && <p><strong>Size:</strong> {selected.size_raw}</p>}
-          {selected.speed_desc && <p><strong>Speed:</strong> {selected.speed_desc}</p>}
-          {selected.languages && <p><strong>Languages:</strong> {selected.languages}</p>}
-          {selected.vision && <p><strong>Vision:</strong> {selected.vision}</p>}
+          {selected.speed_desc && (
+            <div style={{ fontSize: '0.9rem', marginBottom: '0.4rem' }}><MD text={selected.speed_desc} /></div>
+          )}
+          {selected.languages && (
+            <div style={{ fontSize: '0.9rem', marginBottom: '0.4rem' }}><MD text={selected.languages} /></div>
+          )}
+          {selected.vision && (
+            <div style={{ fontSize: '0.9rem', marginBottom: '0.4rem' }}><MD text={selected.vision} /></div>
+          )}
           {selected.traits && (
             <details style={{ marginTop: '0.5rem' }}>
               <summary style={{ cursor: 'pointer' }}>Traits</summary>
-              <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem', fontSize: '0.9rem' }}>{selected.traits}</div>
+              <div style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}><MD text={selected.traits} /></div>
             </details>
           )}
           {selected.desc && (
             <details style={{ marginTop: '0.5rem' }}>
               <summary style={{ cursor: 'pointer' }}>Description</summary>
-              <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem', fontSize: '0.9rem' }}>{selected.desc}</div>
+              <div style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}><MD text={selected.desc} /></div>
             </details>
           )}
         </div>

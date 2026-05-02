@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listLibrary, getLibraryItem } from '../api';
 import type { Character, LibraryItem } from '../types';
+import { MD } from '../../library/Statblock';
 
 interface FeatData {
   name: string;
@@ -95,7 +96,7 @@ export default function FeatsStep({ character, onChange }: Props) {
                 {feat && (
                   <div style={{ fontSize: '0.85rem', color: '#444', lineHeight: 1.5 }}>
                     {feat.prerequisite && <div style={{ fontStyle: 'italic', color: '#888', marginBottom: '0.4rem' }}>Prerequisite: {feat.prerequisite}</div>}
-                    {feat.desc && <div style={{ whiteSpace: 'pre-wrap', marginBottom: feat.effects_desc?.length ? '0.5rem' : 0 }}>{feat.desc}</div>}
+                    {feat.desc && <div style={{ marginBottom: feat.effects_desc?.length ? '0.5rem' : 0 }}><MD text={feat.desc} /></div>}
                     {feat.effects_desc && feat.effects_desc.length > 0 && (
                       <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
                         {feat.effects_desc.map((e, i) => <li key={i} style={{ marginBottom: '0.25rem' }}>{e}</li>)}

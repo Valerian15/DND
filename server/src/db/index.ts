@@ -521,6 +521,20 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_map_drawings_map ON map_drawings(map_id);
   `);
 
+  // Library tags — DM-defined free-form tags applied to library entries.
+  // Indexed by (type, slug, tag) for direct row uniqueness; (type, tag) for filter lookups.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS library_tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_library_tags_unique ON library_tags(type, slug, tag);
+    CREATE INDEX IF NOT EXISTS idx_library_tags_lookup ON library_tags(type, tag);
+  `);
+
   // Phase 7-A.5: per-token spell slot usage (monsters / campaign NPCs only — PCs use
   // characters.spell_slots_used). Display-only; click-to-toggle visual tracking by the DM.
   try { db.exec("ALTER TABLE tokens ADD COLUMN spell_slots_used TEXT NOT NULL DEFAULT '{}'"); } catch { /* exists */ }

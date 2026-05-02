@@ -1549,6 +1549,7 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                         hit_count: dartCount,
                         damage_dice: finalDice,
                         damage_type: parsed!.damageType ?? 'force',
+                        cast_level: castLevel,
                       });
                       setUpcastPicker(null);
                       return;
@@ -1572,6 +1573,7 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                         damage_type: parsed!.damageType ?? '',
                         is_spell: true,
                         roll_mode: rollMode,
+                        cast_level: castLevel,
                       });
                       if (rollMode !== 'normal') clearRollMode();
                       if (meta?.concentration) {
@@ -1611,6 +1613,7 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                         damage_type: parsed!.damageType ?? '',
                         half_on_save: true, // most 5e save-based damage spells halve on save; per-spell overrides could come later
                         conditions_on_fail: conditionsOnFail,
+                        cast_level: castLevel,
                       });
                       // Concentration + timer effect still apply client-side
                       if (meta?.concentration) {

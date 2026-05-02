@@ -78,12 +78,15 @@ router.get('/:type', (req, res) => {
   const type = getLibraryType(req.params.type, res);
   if (!type) return;
 
-  if (type === 'subclasses' && typeof req.query.class === 'string') {
-    const rows = db
-      .prepare(
-        `SELECT id, slug, name, class_slug, source FROM subclasses WHERE class_slug = ? ORDER BY name`,
-      )
-      .all(req.query.class);
+  // Each type returns the scalars LibraryPage needs to render rich cards (CR badges, spell level
+  // chips, rarity tags, etc.) without a per-card detail fetch. JSON-extract pulls fields out of
+  // the seeded `data` blob for properties that don't have their own column.
+
+  if (type === 'subclasses') {
+    const klass = typeof req.query.class === 'string' ? req.query.class : null;
+    const rows = klass
+      ? db.prepare('SELECT id, slug, name, class_slug, source FROM subclasses WHERE class_slug = ? ORDER BY name').all(klass)
+      : db.prepare('SELECT id, slug, name, class_slug, source FROM subclasses ORDER BY name').all();
     return res.json({ items: rows, count: rows.length });
   }
 
@@ -96,13 +99,73 @@ router.get('/:type', (req, res) => {
 
   if (type === 'monsters') {
     const rows = db.prepare(`
-      SELECT slug, name, cr,
+      SELECT id, slug, name, cr,
         type AS monster_type,
         CAST(COALESCE(json_extract(data, '$.hit_points'), 0) AS INTEGER) AS hp_max,
         CAST(COALESCE(json_extract(data, '$.armor_class'), 0) AS INTEGER) AS ac,
         json_extract(data, '$.size') AS size,
+        json_extract(data, '$.img_main') AS image,
         source
       FROM monsters ORDER BY name
+    `).all();
+    return res.json({ items: rows, count: rows.length });
+  }
+
+  if (type === 'spells') {
+    const rows = db.prepare(`
+      SELECT id, slug, name, level, school,
+        json_extract(data, '$.casting_time') AS casting_time,
+        json_extract(data, '$.range') AS range,
+        json_extract(data, '$.concentration') AS concentration,
+        json_extract(data, '$.ritual') AS ritual,
+        json_extract(data, '$.dnd_class') AS classes,
+        source
+      FROM spells ORDER BY level, name
+    `).all();
+    return res.json({ items: rows, count: rows.length });
+  }
+
+  if (type === 'items') {
+    const rows = db.prepare(`
+      SELECT id, slug, name, item_type, rarity,
+        json_extract(data, '$.requires_attunement') AS requires_attunement,
+        source
+      FROM items ORDER BY name
+    `).all();
+    return res.json({ items: rows, count: rows.length });
+  }
+
+  if (type === 'classes') {
+    const rows = db.prepare(`
+      SELECT id, slug, name,
+        json_extract(data, '$.hit_die') AS hit_die,
+        json_extract(data, '$.hd') AS hd_alt,
+        json_extract(data, '$.spellcasting_ability') AS spellcasting_ability,
+        source
+      FROM classes ORDER BY name
+    `).all();
+    return res.json({ items: rows, count: rows.length });
+  }
+
+  if (type === 'feats') {
+    const rows = db.prepare(`
+      SELECT id, slug, name,
+        json_extract(data, '$.prerequisite') AS prerequisite,
+        source
+      FROM feats ORDER BY name
+    `).all();
+    return res.json({ items: rows, count: rows.length });
+  }
+
+  if (type === 'races') {
+    // Open5e nests speed under .speed.walk (object) and stores a clean enum in .size_raw,
+    // separate from the long markdown blurb in .size. Pull the clean fields.
+    const rows = db.prepare(`
+      SELECT id, slug, name,
+        COALESCE(json_extract(data, '$.size_raw'), json_extract(data, '$.size')) AS size,
+        json_extract(data, '$.speed.walk') AS speed,
+        source
+      FROM races ORDER BY name
     `).all();
     return res.json({ items: rows, count: rows.length });
   }
@@ -281,6 +344,56 @@ router.delete('/:type/:slug', requireAdmin, (req, res) => {
   }
 
   db.prepare(`DELETE FROM ${type} WHERE slug = ?`).run(slug);
+  // Tags follow the entry — clean them up too.
+  db.prepare('DELETE FROM library_tags WHERE type = ? AND slug = ?').run(type, slug);
+  res.json({ ok: true });
+});
+
+// ──────────────────────────── Tags ────────────────────────────
+// Endpoints:
+//   GET  /:type/tags                 → all tags + counts for that content type
+//   GET  /:type/:slug/tags           → tags currently on this entry
+//   POST /:type/:slug/tags  body{tag}→ add a tag (admin only)
+//   DELETE /:type/:slug/tags/:tag    → remove a tag (admin only)
+
+router.get('/:type/tags', (req, res) => {
+  const type = getLibraryType(req.params.type, res);
+  if (!type) return;
+  const rows = db.prepare(
+    'SELECT tag, COUNT(*) AS count FROM library_tags WHERE type = ? GROUP BY tag ORDER BY tag',
+  ).all(type);
+  res.json({ tags: rows });
+});
+
+router.get('/:type/:slug/tags', (req, res) => {
+  const type = getLibraryType(req.params.type, res);
+  if (!type) return;
+  const slug = req.params.slug;
+  const rows = db.prepare(
+    'SELECT tag FROM library_tags WHERE type = ? AND slug = ? ORDER BY tag',
+  ).all(type, slug) as { tag: string }[];
+  res.json({ tags: rows.map((r) => r.tag) });
+});
+
+router.post('/:type/:slug/tags', requireAdmin, (req, res) => {
+  const type = getLibraryType(req.params.type, res);
+  if (!type) return;
+  const slug = req.params.slug;
+  const tag = String(req.body?.tag ?? '').trim().toLowerCase().slice(0, 40);
+  if (!tag) return res.status(400).json({ error: 'tag required' });
+  // Verify the entry actually exists in its content table.
+  const exists = db.prepare(`SELECT 1 FROM ${type} WHERE slug = ?`).get(slug);
+  if (!exists) return res.status(404).json({ error: 'entry not found' });
+  db.prepare('INSERT OR IGNORE INTO library_tags (type, slug, tag) VALUES (?, ?, ?)').run(type, slug, tag);
+  res.json({ ok: true, tag });
+});
+
+router.delete('/:type/:slug/tags/:tag', requireAdmin, (req, res) => {
+  const type = getLibraryType(req.params.type, res);
+  if (!type) return;
+  const slug = req.params.slug;
+  const tag = String(req.params.tag).toLowerCase();
+  db.prepare('DELETE FROM library_tags WHERE type = ? AND slug = ? AND tag = ?').run(type, slug, tag);
   res.json({ ok: true });
 });
 

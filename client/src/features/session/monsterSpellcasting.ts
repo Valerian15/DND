@@ -112,6 +112,18 @@ export const MONSTER_SPELLCASTING: Record<string, MonsterSpellcastingProfile> = 
     },
     slots_by_level: { 1: 4, 2: 3 },
   },
+
+  // --- Basic divine ---
+  'acolyte': {
+    ability: 'wis',
+    save_dc: 12,
+    attack_bonus: 4,
+    cantrips: ['light', 'sacred-flame', 'thaumaturgy'],
+    spells_by_level: {
+      1: ['bless', 'cure-wounds', 'sanctuary'],
+    },
+    slots_by_level: { 1: 3 },
+  },
 };
 
 export function getMonsterSpellcasting(slug: string | null): MonsterSpellcastingProfile | null {

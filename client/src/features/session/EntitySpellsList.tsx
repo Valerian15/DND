@@ -144,6 +144,7 @@ export function EntitySpellsList({
         hit_count: dartCount,
         damage_dice: finalDice,
         damage_type: parsed?.damageType ?? 'force',
+        cast_level: castLevel,
       });
       return;
     }
@@ -158,6 +159,7 @@ export function EntitySpellsList({
         damage_dice: finalDice,
         damage_type: parsed.damageType ?? '',
         is_spell: true,
+        cast_level: castLevel,
       });
       return;
     }
@@ -174,6 +176,7 @@ export function EntitySpellsList({
         damage_dice: finalDice,
         damage_type: parsed.damageType ?? '',
         half_on_save: true,
+        cast_level: castLevel,
       });
       return;
     }

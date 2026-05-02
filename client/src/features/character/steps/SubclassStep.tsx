@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Character, ClassEntry, LibraryItem } from '../types';
 import { getLibraryItem, listSubclassesFor } from '../api';
+import { MD } from '../../library/Statblock';
 import { isSubclassUnlocked, unlockLevelFor } from '../subclassUnlock';
 
 interface Props {
@@ -120,8 +121,8 @@ function SubclassPickerForClass({ entry, onSelect }: { entry: ClassEntry; onSele
               {selected.desc && (
                 <details style={{ marginTop: '0.4rem' }}>
                   <summary style={{ cursor: 'pointer', fontSize: '0.8rem', color: '#666' }}>Features</summary>
-                  <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.4rem', fontSize: '0.82rem', maxHeight: 300, overflowY: 'auto' }}>
-                    {selected.desc}
+                  <div style={{ marginTop: '0.4rem', fontSize: '0.82rem', maxHeight: 300, overflowY: 'auto' }}>
+                    <MD text={selected.desc} />
                   </div>
                 </details>
               )}

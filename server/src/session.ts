@@ -145,6 +145,8 @@ interface ClientToServerEvents {
     half_on_save: boolean;
     /** Conditions to apply to targets that fail their save. */
     conditions_on_fail?: string[];
+    /** Slot level the spell is cast at — used by Counterspell to gauge auto-counter vs DC contest. */
+    cast_level?: number;
   }) => void;
   /**
    * Attack-vs-AC resolver — used for spell attacks (Fire Bolt etc.) AND weapon attacks.
@@ -161,6 +163,8 @@ interface ClientToServerEvents {
     /** True for spell attacks (just affects chat label). */
     is_spell?: boolean;
     roll_mode?: 'advantage' | 'normal' | 'disadvantage';
+    /** Slot level the spell is cast at (when is_spell=true) — for Counterspell DC contests. */
+    cast_level?: number;
   }) => void;
   /**
    * Auto-hit damage resolver (Magic Missile and similar).
@@ -174,6 +178,8 @@ interface ClientToServerEvents {
     hit_count: number;
     damage_dice: string;
     damage_type: string;
+    /** Slot level for Counterspell DC contests. */
+    cast_level?: number;
   }) => void;
   /**
    * Healing resolver (Cure Wounds, Healing Word, Mass Healing Word, etc.).
@@ -520,9 +526,37 @@ function findCounterspellCandidates(casterTokenId: number, rangeFt: number, cast
   return out;
 }
 
+// Spellcasting ability used for the Counterspell ability check (5e RAW: your spellcasting modifier).
+// Counterspell-eligible classes only. Defaults to INT for unknown classes.
+function counterspellAbility(classSlug: string | null): 'int' | 'cha' {
+  switch (classSlug) {
+    case 'sorcerer':
+    case 'warlock':
+    case 'bard':
+      return 'cha';
+    case 'wizard':
+    default:
+      return 'int';
+  }
+}
+
+// Compute spellcasting modifier for a PC = ability_mod + proficiency_bonus.
+function spellcastingMod(characterId: number): number {
+  const ch = db.prepare('SELECT class_slug, level, abilities FROM characters WHERE id = ?').get(characterId) as { class_slug: string | null; level: number; abilities: string } | undefined;
+  if (!ch) return 0;
+  const ability = counterspellAbility(ch.class_slug);
+  let abilities: Record<string, number> = {};
+  try { abilities = JSON.parse(ch.abilities) ?? {}; } catch { /* */ }
+  const score = abilities[ability] ?? 10;
+  const abilMod = Math.floor((score - 10) / 2);
+  const profBonus = Math.floor((ch.level - 1) / 4) + 2;
+  return abilMod + profBonus;
+}
+
 // Run Counterspell offers for one incoming spell. Returns true if the spell was negated.
-async function maybeCounterspell(cid: number, casterTokenId: number, spellName: string, spellLevel: number, _insertChat?: unknown): Promise<boolean> {
-  const candidates = findCounterspellCandidates(casterTokenId, 60, spellLevel);
+// `incomingLevel` is the slot level the spell was cast at; used to decide auto-counter vs contest.
+async function maybeCounterspell(cid: number, casterTokenId: number, spellName: string, incomingLevel: number, _insertChat?: unknown): Promise<boolean> {
+  const candidates = findCounterspellCandidates(casterTokenId, 60, 3);
   if (candidates.length === 0) return false;
   const casterTok = db.prepare('SELECT label FROM tokens WHERE id = ?').get(casterTokenId) as { label: string } | undefined;
   const casterLabel = casterTok?.label ?? 'caster';
@@ -531,14 +565,14 @@ async function maybeCounterspell(cid: number, casterTokenId: number, spellName: 
   const offers: O[] = candidates.map((c) => {
     const o = offerReaction(cid, c.ownerId, {
       kind: 'counterspell',
-      prompt: `Counterspell ${casterLabel}'s ${spellName}?`,
-      detail: `Spend a 3rd-level (or higher) slot to negate.`,
+      prompt: `Counterspell ${casterLabel}'s ${spellName} (L${incomingLevel})?`,
+      detail: incomingLevel <= 3
+        ? 'L3+ slot auto-negates.'
+        : `Auto-counters with an L${incomingLevel}+ slot. Otherwise contest: 1d20 + your spellcasting mod vs DC ${10 + incomingLevel}.`,
     });
     return { offerId: o.offerId, promise: o.promise, characterId: c.characterId, charName: c.charName };
   });
 
-  // Wait for the first Yes. Promise.race resolves with the first true; any false is ignored
-  // by tracking via a custom wait that returns `null` on all-false / all-timeout.
   const winner = await new Promise<O | null>((resolve) => {
     let pending = offers.length;
     let settled = false;
@@ -557,20 +591,54 @@ async function maybeCounterspell(cid: number, casterTokenId: number, spellName: 
   });
 
   if (!winner) return false;
-
-  // Cancel any other still-pending offers.
   cancelOffers(offers.filter((o) => o.offerId !== winner.offerId).map((o) => o.offerId));
 
-  // Spend slot + reaction.
+  // Determine the slot the counterspeller will spend — lowest available L3+ slot.
+  const ch = db.prepare('SELECT spell_slots, spell_slots_used FROM characters WHERE id = ?')
+    .get(winner.characterId) as { spell_slots: string; spell_slots_used: string } | undefined;
+  let slots: Record<string, number> = {};
+  let used: Record<string, number> = {};
+  try { slots = JSON.parse(ch?.spell_slots ?? '{}'); } catch { /* */ }
+  try { used = JSON.parse(ch?.spell_slots_used ?? '{}'); } catch { /* */ }
+  let chosenSlot = 0;
+  for (let l = 3; l <= 9; l++) {
+    if ((slots[String(l)] ?? 0) > (used[String(l)] ?? 0)) { chosenSlot = l; break; }
+  }
+  // Always burn the slot + reaction on Yes (5e: you commit even if the contest fails).
   consumePcReaction(winner.characterId, 3);
 
-  // Chat note.
-  const note = `${winner.charName} casts Counterspell — ${casterLabel}'s ${spellName} is negated.`;
-  const r = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(cid, 0, 'system', `/action ${note}`, 'action', null);
-  const noteRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
-  getIo().to(`campaign:${cid}`).emit('chat:message', hydrateMessage(noteRow));
-  return true;
+  const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
+  const postNote = (text: string, data?: object) => {
+    const r = insertChat.run(cid, 0, 'system', `/action ${text}`, 'action', data ? JSON.stringify(data) : null);
+    const noteRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+    getIo().to(`campaign:${cid}`).emit('chat:message', hydrateMessage(noteRow));
+  };
+
+  // Auto-counter: counterspeller's slot ≥ incoming level → no roll needed.
+  if (chosenSlot >= incomingLevel) {
+    postNote(`${winner.charName} casts Counterspell (L${chosenSlot}) — ${casterLabel}'s ${spellName} is negated.`);
+    return true;
+  }
+
+  // Contest: 1d20 + spellcasting modifier vs DC 10 + incomingLevel.
+  const mod = spellcastingMod(winner.characterId);
+  const roll = Math.floor(Math.random() * 20) + 1;
+  const total = roll + mod;
+  const dc = 10 + incomingLevel;
+  const ok = total >= dc;
+
+  // Post the d20 roll itself so it's visible in the dice log.
+  const rollData = { expression: `1d20${mod >= 0 ? '+' : ''}${mod}`, dice: [roll], modifier: mod, total, label: `${winner.charName} — Counterspell check (DC ${dc})` };
+  const rollR = insertChat.run(cid, 0, 'system', `/roll 1d20${mod >= 0 ? '+' : ''}${mod}`, 'roll', JSON.stringify(rollData));
+  const rollRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(rollR.lastInsertRowid) as ChatMessageRow;
+  getIo().to(`campaign:${cid}`).emit('chat:message', hydrateMessage(rollRow));
+
+  if (ok) {
+    postNote(`${winner.charName}'s Counterspell (L${chosenSlot}) — ${total} ≥ DC ${dc}: ${casterLabel}'s ${spellName} is negated.`);
+    return true;
+  }
+  postNote(`${winner.charName}'s Counterspell (L${chosenSlot}) — ${total} < DC ${dc}: ${casterLabel}'s ${spellName} resolves anyway.`);
+  return false;
 }
 
 function applyTokenHpChange(cid: number, tokenId: number, characterId: number | null, newHp: number) {
@@ -1170,7 +1238,7 @@ export function setupSession(io: AppServer) {
       }
     });
 
-    socket.on('combat:resolve_spell', async ({ caster_token_id, target_token_ids, spell_name, save_ability, save_dc, damage_dice, damage_type, half_on_save, conditions_on_fail }) => {
+    socket.on('combat:resolve_spell', async ({ caster_token_id, target_token_ids, spell_name, save_ability, save_dc, damage_dice, damage_type, half_on_save, conditions_on_fail, cast_level }) => {
       const cid = socket.data.campaign_id;
       if (cid == null) return;
 
@@ -1196,10 +1264,8 @@ export function setupSession(io: AppServer) {
       const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
 
       // Counterspell offer — any nearby PC with Counterspell prepared + L3+ slot can negate.
-      // Spell level: client doesn't pass it explicitly, infer from damage_dice or default 1.
-      // Counterspell auto-negates spells of L3 or lower; higher levels would normally need a DC
-      // check (DM can rule manually if it matters).
-      const negated = await maybeCounterspell(cid, caster_token_id, spell_name, 1, insertChat);
+      // Defaults to L1 if the caller didn't pass cast_level (e.g. a free-form modal).
+      const negated = await maybeCounterspell(cid, caster_token_id, spell_name, Math.max(1, Math.min(9, cast_level ?? 1)), insertChat);
       if (negated) return;
 
       // Roll shared damage once (5e: AOE save spells share one damage roll across all targets)
@@ -1284,7 +1350,7 @@ export function setupSession(io: AppServer) {
       io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(sumRow));
     });
 
-    socket.on('combat:resolve_attack', async ({ caster_token_id, target_token_ids, attack_name, attack_bonus, damage_dice, damage_type, is_spell, roll_mode }) => {
+    socket.on('combat:resolve_attack', async ({ caster_token_id, target_token_ids, attack_name, attack_bonus, damage_dice, damage_type, is_spell, roll_mode, cast_level }) => {
       const cid = socket.data.campaign_id;
       if (cid == null) return;
 
@@ -1309,12 +1375,9 @@ export function setupSession(io: AppServer) {
       const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
 
       // Counterspell offer for spell attacks (Fire Bolt, Disintegrate, etc.). Skipped for
-      // weapons (is_spell falsy) and L0 cantrips can still be counterspelled in 5e (Counterspell
-      // RAW: any spell at any level <= caster's slot). For weapon attacks, no counterspell.
+      // weapons (is_spell falsy). Cantrips count as L0 — they can still be Counterspelled.
       if (is_spell) {
-        // We don't know the spell's level here (caller didn't say) — assume level 1 minimum so
-        // any 3rd-level Counterspell auto-negates. DM can rule on edge cases.
-        const negated = await maybeCounterspell(cid, caster_token_id, attack_name, 1, insertChat);
+        const negated = await maybeCounterspell(cid, caster_token_id, attack_name, Math.max(1, Math.min(9, cast_level ?? 1)), insertChat);
         if (negated) return;
       }
 
@@ -1407,7 +1470,7 @@ export function setupSession(io: AppServer) {
       io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(sumRow));
     });
 
-    socket.on('combat:resolve_auto_hit', async ({ caster_token_id, target_token_ids, attack_name, hit_count, damage_dice, damage_type }) => {
+    socket.on('combat:resolve_auto_hit', async ({ caster_token_id, target_token_ids, attack_name, hit_count, damage_dice, damage_type, cast_level }) => {
       const cid = socket.data.campaign_id;
       if (cid == null) return;
 
@@ -1438,7 +1501,7 @@ export function setupSession(io: AppServer) {
       const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
 
       // Counterspell — Magic Missile is the canonical example, can be counterspelled.
-      const negated = await maybeCounterspell(cid, caster_token_id, attack_name, 1, insertChat);
+      const negated = await maybeCounterspell(cid, caster_token_id, attack_name, Math.max(1, Math.min(9, cast_level ?? 1)), insertChat);
       if (negated) return;
 
       // Distribute hits round-robin across the targets

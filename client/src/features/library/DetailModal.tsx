@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { deleteLibraryEntry, getLibraryDetail } from './api';
+import { addEntryTag, deleteLibraryEntry, getEntryTags, getLibraryDetail, removeEntryTag } from './api';
+import { Statblock } from './Statblock';
 import type { ContentType, LibraryDetail } from './types';
 
 interface Props {
@@ -16,6 +17,8 @@ export default function DetailModal({ type, slug, isAdmin, onClose, onEdit, onDe
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [tags, setTags] = useState<string[]>([]);
+  const [newTagInput, setNewTagInput] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -25,8 +28,25 @@ export default function DetailModal({ type, slug, isAdmin, onClose, onEdit, onDe
       .then((data) => { if (!cancelled) setEntry(data); })
       .catch((err) => { if (!cancelled) setError(err.message ?? 'Failed to load'); })
       .finally(() => { if (!cancelled) setLoading(false); });
+    getEntryTags(type, slug).then((t) => { if (!cancelled) setTags(t); }).catch(() => {});
     return () => { cancelled = true; };
   }, [type, slug]);
+
+  async function addTag() {
+    const t = newTagInput.trim().toLowerCase();
+    if (!t) return;
+    if (tags.includes(t)) { setNewTagInput(''); return; }
+    setTags((prev) => [...prev, t].sort());
+    setNewTagInput('');
+    try { await addEntryTag(type, slug, t); }
+    catch { setTags((prev) => prev.filter((x) => x !== t)); }
+  }
+
+  async function removeTag(t: string) {
+    setTags((prev) => prev.filter((x) => x !== t));
+    try { await removeEntryTag(type, slug, t); }
+    catch { setTags((prev) => [...prev, t].sort()); }
+  }
 
   async function handleDelete() {
     if (!entry) return;
@@ -72,18 +92,32 @@ export default function DetailModal({ type, slug, isAdmin, onClose, onEdit, onDe
         )}
 
         {entry && (
-          <pre style={{
-            background: '#f7f7f7',
-            padding: '1rem',
-            borderRadius: 6,
-            overflow: 'auto',
-            maxHeight: '60vh',
-            fontSize: '0.8rem',
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            margin: 0,
-          }}>
-            {JSON.stringify(entry.data, null, 2)}
-          </pre>
+          <>
+            {/* Tags row — admins can add/remove; everyone sees the chips. */}
+            <div style={{ marginBottom: '0.6rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.7rem', color: '#888', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tags</span>
+              {tags.map((t) => (
+                <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '0.15rem 0.45rem', background: '#eef0f5', border: '1px solid #d8dde6', borderRadius: 12, fontSize: '0.72rem', color: '#446' }}>
+                  #{t}
+                  {isAdmin && (
+                    <button onClick={() => removeTag(t)} title="Remove tag"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#88a', padding: 0, fontSize: '0.8rem', lineHeight: 1 }}>×</button>
+                  )}
+                </span>
+              ))}
+              {isAdmin && (
+                <input value={newTagInput} onChange={(e) => setNewTagInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } }}
+                  placeholder="+ tag"
+                  style={{ padding: '0.15rem 0.4rem', fontSize: '0.72rem', border: '1px solid #ccc', borderRadius: 12, width: 90, outline: 'none' }} />
+              )}
+              {!isAdmin && tags.length === 0 && <span style={{ fontSize: '0.72rem', color: '#bbb', fontStyle: 'italic' }}>No tags.</span>}
+            </div>
+
+            <div style={{ maxHeight: '55vh', overflow: 'auto' }}>
+              <Statblock type={type} name={entry.name} data={entry.data ?? {}} />
+            </div>
+          </>
         )}
 
         <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem', alignItems: 'center' }}>

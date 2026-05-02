@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Character, LibraryItem } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
+import { MD } from '../../library/Statblock';
 import { parseBackgroundSkillProficiencies } from '../rules';
 
 interface Props {
@@ -106,11 +107,15 @@ export default function BackgroundStep({ character, onChange }: Props) {
           {selected.tool_proficiencies && <p><strong>Tool proficiencies:</strong> {selected.tool_proficiencies}</p>}
           {selected.languages && <p><strong>Languages:</strong> {selected.languages}</p>}
           {selected.equipment && <p><strong>Equipment:</strong> {selected.equipment}</p>}
-          {selected.feature && <p><strong>Feature — {selected.feature}:</strong> {selected.feature_desc}</p>}
+          {selected.feature && (
+            <div style={{ marginTop: '0.4rem', fontSize: '0.9rem' }}>
+              <strong>Feature — {selected.feature}:</strong> <MD text={selected.feature_desc ?? ''} />
+            </div>
+          )}
           {selected.desc && (
             <details style={{ marginTop: '0.5rem' }}>
               <summary style={{ cursor: 'pointer' }}>Description</summary>
-              <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem', fontSize: '0.9rem' }}>{selected.desc}</div>
+              <div style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}><MD text={selected.desc} /></div>
             </details>
           )}
         </div>

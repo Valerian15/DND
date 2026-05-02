@@ -15,7 +15,7 @@
 - Self-hosted on my PC (later deployed to office Dell, exposed via Cloudflare Tunnel). No cloud DB. No Supabase.
 - Username + password auth only. No email. Admin manually resets passwords.
 - Admin (me) adds content via admin panel; players cannot add homebrew.
-- Free content only: SRD 5.1 seed from Open5e; I hand-add official content from books I legally own.
+- Content is private to my self-hosted instance — add 5e content (monsters, spells, items, classes, etc.) as needed for gameplay regardless of source. Tag entries with an appropriate `source` field (e.g. 'srd-2014', 'mm-2014', 'mtof-2018', 'homebrew-X') so the read-only lock at `source = 'srd-2014'` still applies only to SRD entries.
 - No PDF/JSON character import.
 - No AI portrait gen — paste URL or upload.
 

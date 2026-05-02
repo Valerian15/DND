@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Character } from '../types';
 import { getLibraryItem } from '../api';
+import { MD } from '../../library/Statblock';
 
 interface Props {
   character: Character;
@@ -93,8 +94,8 @@ export default function EquipmentStep({ character, onChange }: Props) {
       {classEquipment && (
         <section style={{ marginBottom: '1.25rem' }}>
           <h3>Class equipment</h3>
-          <div style={{ whiteSpace: 'pre-wrap', background: '#f9f9f9', padding: '0.75rem', borderRadius: 6, fontSize: '0.9rem' }}>
-            {classEquipment}
+          <div style={{ background: '#f9f9f9', padding: '0.75rem', borderRadius: 6, fontSize: '0.9rem' }}>
+            <MD text={classEquipment} />
           </div>
         </section>
       )}
@@ -102,8 +103,8 @@ export default function EquipmentStep({ character, onChange }: Props) {
       {backgroundEquipment && (
         <section style={{ marginBottom: '1.25rem' }}>
           <h3>Background equipment</h3>
-          <div style={{ whiteSpace: 'pre-wrap', background: '#f9f9f9', padding: '0.75rem', borderRadius: 6, fontSize: '0.9rem' }}>
-            {backgroundEquipment}
+          <div style={{ background: '#f9f9f9', padding: '0.75rem', borderRadius: 6, fontSize: '0.9rem' }}>
+            <MD text={backgroundEquipment} />
           </div>
         </section>
       )}
