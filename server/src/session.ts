@@ -492,6 +492,29 @@ function checkPcCanReactWith(tokenId: number, spellSlug: string, minLevel: numbe
   return { ownerId: ch.owner_id, characterId: ch.id, charName: ch.name };
 }
 
+/**
+ * Check if a PC token can use Lucky to force the attacker to reroll.
+ * Returns the owner / character / name + current luck if eligible, null otherwise.
+ */
+function checkPcCanLuckyReroll(tokenId: number): { ownerId: number; characterId: number; charName: string; luckyUsed: number } | null {
+  const tok = db.prepare("SELECT character_id, token_type FROM tokens WHERE id = ?").get(tokenId) as { character_id: number | null; token_type: string } | undefined;
+  if (!tok || tok.token_type !== 'pc' || tok.character_id == null) return null;
+  const ch = db.prepare(
+    'SELECT id, owner_id, name, feats, lucky_used, reaction_used FROM characters WHERE id = ?'
+  ).get(tok.character_id) as { id: number; owner_id: number; name: string; feats: string; lucky_used: number; reaction_used: number } | undefined;
+  if (!ch || ch.reaction_used) return null;
+  let feats: string[] = [];
+  try { feats = JSON.parse(ch.feats) ?? []; } catch { /* */ }
+  if (!feats.includes('lucky')) return null;
+  if (ch.lucky_used >= 3) return null;
+  return { ownerId: ch.owner_id, characterId: ch.id, charName: ch.name, luckyUsed: ch.lucky_used };
+}
+
+/** Burn one luck point and mark reaction_used. */
+function consumeLucky(characterId: number) {
+  db.prepare('UPDATE characters SET lucky_used = lucky_used + 1, reaction_used = 1 WHERE id = ?').run(characterId);
+}
+
 // Spend `level` slot + mark reaction_used on a character. Used after Yes on a reaction offer.
 function consumePcReaction(characterId: number, minLevel: number) {
   const ch = db.prepare('SELECT spell_slots, spell_slots_used FROM characters WHERE id = ?')
@@ -1461,37 +1484,75 @@ export function setupSession(io: AppServer) {
         const r2 = (isAdv || isDis) ? Math.floor(Math.random() * 20) + 1 : null;
         const atkRoll = r2 === null ? r1 : (isAdv ? Math.max(r1, r2) : Math.min(r1, r2));
         const dicePosted = r2 === null ? [r1] : [r1, r2, atkRoll]; // chat client treats [a,b,chosen] as adv/dis display
-        const isCrit = atkRoll === 20;
-        const isFumble = atkRoll === 1;
-        const atkTotal = atkRoll + effectiveAttackBonus;
-        let hits = isCrit || (!isFumble && atkTotal >= ac);
+        let mutAtkRoll = atkRoll;
+        let mutDicePosted = dicePosted.slice();
+        let mutIsCrit = atkRoll === 20;
+        let mutIsFumble = atkRoll === 1;
+        let mutAtkTotal = mutAtkRoll + effectiveAttackBonus;
+        let hits = mutIsCrit || (!mutIsFumble && mutAtkTotal >= ac);
         let shieldUsed = false;
+        let luckyUsedTag = false;
 
-        // Shield reaction: if this PC target would be hit, offer them a chance to cast Shield (+5 AC).
-        if (hits && !isCrit) {
+        // Lucky reaction (defensive): if the target is a PC with the Lucky feat and would be hit
+        // by the current roll, let them spend a luck point to force a reroll. Server rolls a fresh
+        // d20 for the attacker and uses the LOWER of the two (the player would always pick lower
+        // when defending).
+        if (hits) {
+          const elig = checkPcCanLuckyReroll(tid);
+          if (elig) {
+            const offer = offerReaction(cid, elig.ownerId, {
+              kind: 'lucky',
+              prompt: `${casterName} hits ${elig.charName} (rolled ${mutAtkTotal}). Spend luck to force reroll?`,
+              detail: `Luck remaining: ${3 - elig.luckyUsed}/3. Server will keep the lower of the two attacker d20s.`,
+            });
+            const accepted = await offer.promise;
+            if (accepted) {
+              const reroll = Math.floor(Math.random() * 20) + 1;
+              const newRoll = Math.min(mutAtkRoll, reroll);
+              mutDicePosted = [mutAtkRoll, reroll, newRoll];
+              mutAtkRoll = newRoll;
+              mutIsCrit = mutAtkRoll === 20;
+              mutIsFumble = mutAtkRoll === 1;
+              mutAtkTotal = mutAtkRoll + effectiveAttackBonus;
+              hits = mutIsCrit || (!mutIsFumble && mutAtkTotal >= ac);
+              consumeLucky(elig.characterId);
+              luckyUsedTag = true;
+            }
+          }
+        }
+
+        // Shield reaction: only offered if Lucky didn't already burn the reaction.
+        if (hits && !mutIsCrit && !luckyUsedTag) {
           const elig = checkPcCanReactWith(tid, 'shield', 1);
           if (elig) {
             const offer = offerReaction(cid, elig.ownerId, {
               kind: 'shield',
               prompt: `${casterName} hits ${elig.charName}! Cast Shield?`,
-              detail: `+5 AC may negate. Rolled ${atkTotal} vs AC ${baseAc}; needs ${atkTotal} vs AC ${baseAc + 5} after Shield.`,
+              detail: `+5 AC may negate. Rolled ${mutAtkTotal} vs AC ${baseAc}; needs ${mutAtkTotal} vs AC ${baseAc + 5} after Shield.`,
             });
             const accepted = await offer.promise;
             if (accepted) {
               consumePcReaction(elig.characterId, 1);
               ac = baseAc + 5;
-              hits = atkTotal >= ac;
+              hits = mutAtkTotal >= ac;
               shieldUsed = true;
             }
           }
         }
 
+        // Re-bind names for the rest of the resolver
+        const isCrit = mutIsCrit;
+        const isFumble = mutIsFumble;
+        const atkTotal = mutAtkTotal;
+        const dicePosted2 = mutDicePosted;
+
         // Post the attack roll
         const advSuffix = isAdv ? 'adv' : isDis ? 'dis' : '';
         const atkExpr = `1d20${advSuffix}${effectiveAttackBonus >= 0 ? '+' : ''}${effectiveAttackBonus}`;
-        const hitLabel = isCrit ? '★ CRIT' : isFumble ? '✗ fumble' : hits ? `✓ hit (AC ${ac})` : `✗ miss (AC ${ac}${shieldUsed ? ' — Shield' : ''})`;
+        const luckyTag = luckyUsedTag ? ' — Lucky reroll' : '';
+        const hitLabel = isCrit ? '★ CRIT' : isFumble ? '✗ fumble' : hits ? `✓ hit (AC ${ac})${luckyTag}` : `✗ miss (AC ${ac}${shieldUsed ? ' — Shield' : luckyTag})`;
         const rollModeForData = isAdv ? 'advantage' : isDis ? 'disadvantage' : undefined;
-        const atkData = JSON.stringify({ expression: atkExpr, dice: dicePosted, modifier: effectiveAttackBonus, total: atkTotal, label: `${target.label} — ${attack_name} ${hitLabel}`, rollMode: rollModeForData });
+        const atkData = JSON.stringify({ expression: atkExpr, dice: dicePosted2, modifier: effectiveAttackBonus, total: atkTotal, label: `${target.label} — ${attack_name} ${hitLabel}`, rollMode: rollModeForData });
         const ar = insertChat.run(cid, user.id, user.username, `/roll ${atkExpr}`, 'roll', atkData);
         const atkRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(ar.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(atkRow));
