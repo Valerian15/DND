@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listLibrary, getLibraryItem } from '../api';
-import type { Character, LibraryItem } from '../types';
+import type { AbilityKey, Character, LibraryItem } from '../types';
+import { ABILITY_NAMES, ABILITY_ORDER } from '../types';
 import { MD } from '../../library/Statblock';
 
 interface FeatData {
@@ -22,7 +23,13 @@ const AUTOMATED_FEATS: Record<string, string> = {
   'war-caster': 'Advantage on Con concentration saves (auto-applied)',
   'great-weapon-master': '−5/+10 power attack toggle on heavy melee weapons (in-game sheet)',
   'sharpshooter': '−5/+10 power attack toggle on ranged weapons (in-game sheet)',
+  'heavy-armor-master': '−3 to bludgeoning/piercing/slashing damage taken (auto-applied)',
+  'resilient': '+1 to chosen ability and proficiency in its saving throws',
 };
+
+interface FeatGrants {
+  resilient?: { ability: AbilityKey };
+}
 
 export default function FeatsStep({ character, onChange }: Props) {
   const [allFeats, setAllFeats] = useState<LibraryItem[]>([]);
@@ -62,7 +69,46 @@ export default function FeatsStep({ character, onChange }: Props) {
   }
 
   function removeFeat(slug: string) {
-    onChange({ feats: selected.filter((s) => s !== slug) });
+    const patch: Partial<Character> = { feats: selected.filter((s) => s !== slug) };
+    // If removing Resilient, undo its ability +1.
+    if (slug === 'resilient') {
+      const desc = (character.description ?? {}) as Record<string, any>;
+      const grants = (desc.feat_grants ?? {}) as FeatGrants;
+      const prev = grants.resilient?.ability;
+      if (prev) {
+        const abilities = { ...character.abilities };
+        abilities[prev] = Math.max(0, abilities[prev] - 1);
+        const nextGrants = { ...grants };
+        delete nextGrants.resilient;
+        patch.abilities = abilities;
+        patch.description = { ...desc, feat_grants: nextGrants };
+      }
+    }
+    onChange(patch);
+  }
+
+  function setResilientAbility(next: AbilityKey | '') {
+    const desc = (character.description ?? {}) as Record<string, any>;
+    const grants = (desc.feat_grants ?? {}) as FeatGrants;
+    const prev = grants.resilient?.ability;
+    if (prev === next) return;
+
+    const abilities = { ...character.abilities };
+    if (prev) abilities[prev] = Math.max(0, abilities[prev] - 1);
+    if (next) abilities[next] = Math.min(20, abilities[next] + 1);
+
+    const nextGrants: FeatGrants = { ...grants };
+    if (next) nextGrants.resilient = { ability: next };
+    else delete nextGrants.resilient;
+
+    const saves = { ...((character.saves ?? {}) as Record<string, { proficient?: boolean }>) };
+    if (next) saves[next] = { ...(saves[next] ?? {}), proficient: true };
+
+    onChange({
+      abilities,
+      saves,
+      description: { ...desc, feat_grants: nextGrants },
+    });
   }
 
   if (loading) return <p style={{ color: '#666' }}>Loading feats…</p>;
@@ -113,6 +159,23 @@ export default function FeatsStep({ character, onChange }: Props) {
                 {AUTOMATED_FEATS[slug] && (
                   <div style={{ fontSize: '0.78rem', color: '#2a7', marginBottom: '0.4rem' }}>{AUTOMATED_FEATS[slug]}</div>
                 )}
+                {slug === 'resilient' && (() => {
+                  const grants = ((character.description ?? {}) as Record<string, any>).feat_grants as FeatGrants | undefined;
+                  const current = grants?.resilient?.ability ?? '';
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
+                      <span>Ability:</span>
+                      <select value={current} onChange={(e) => setResilientAbility(e.target.value as AbilityKey | '')}
+                        style={{ padding: '0.3rem', border: '1px solid #ccc', borderRadius: 4 }}>
+                        <option value="">— pick —</option>
+                        {ABILITY_ORDER.map((k) => (
+                          <option key={k} value={k}>{ABILITY_NAMES[k]}</option>
+                        ))}
+                      </select>
+                      {current && <span style={{ color: '#2a7', fontSize: '0.8rem' }}>+1 {current.toUpperCase()}, save proficiency</span>}
+                    </div>
+                  );
+                })()}
                 {feat && (
                   <div style={{ fontSize: '0.85rem', color: '#444', lineHeight: 1.5 }}>
                     {feat.prerequisite && <div style={{ fontStyle: 'italic', color: '#888', marginBottom: '0.4rem' }}>Prerequisite: {feat.prerequisite}</div>}

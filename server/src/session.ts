@@ -545,6 +545,27 @@ function counterspellAbility(classSlug: string | null): 'int' | 'cha' {
   }
 }
 
+/**
+ * Heavy Armor Master: -3 damage from bludgeoning/piercing/slashing.
+ * RAW also requires heavy armor + nonmagical source — we apply more loosely (no armor/source
+ * tracking). Returns the adjusted damage (never below 0).
+ */
+function applyHeavyArmorMaster(
+  target: { character_id: number | null },
+  damageType: string,
+  dmg: number,
+): { adjusted: number; reduced: boolean } {
+  if (dmg <= 0 || !target.character_id) return { adjusted: dmg, reduced: false };
+  const dt = (damageType || '').toLowerCase().trim();
+  if (dt !== 'bludgeoning' && dt !== 'piercing' && dt !== 'slashing') {
+    return { adjusted: dmg, reduced: false };
+  }
+  if (!getCharacterFeats(target.character_id).has('heavy-armor-master')) {
+    return { adjusted: dmg, reduced: false };
+  }
+  return { adjusted: Math.max(0, dmg - 3), reduced: true };
+}
+
 /** Add a flat bonus to a "NdM[+X]" damage expression. Returns the original on parse failure. */
 function addToDamageExpression(expr: string, bonus: number): string {
   const m = expr.replace(/\s+/g, '').match(/^(\d+d\d+)([+-]\d+)?$/i);
@@ -1341,10 +1362,13 @@ export function setupSession(io: AppServer) {
         if (damageDealt > 0 && dmgMod.multiplier !== 1) {
           damageDealt = Math.floor(damageDealt * dmgMod.multiplier);
         }
+        const ham = applyHeavyArmorMaster(target, damage_type, damageDealt);
+        damageDealt = ham.adjusted;
 
         // Post the save roll. Carry undo metadata when damage will land — DM sees an undo button.
         const saveExpr = `1d20${saveMod >= 0 ? '+' : ''}${saveMod}`;
-        const saveLabel = `${target.label} — ${save_ability.toUpperCase()} Save (DC ${save_dc}) ${passed ? '✓ saved' : '✗ failed'}`;
+        const hamNote = ham.reduced ? ' (HAM −3)' : '';
+        const saveLabel = `${target.label} — ${save_ability.toUpperCase()} Save (DC ${save_dc}) ${passed ? '✓ saved' : '✗ failed'}${hamNote}`;
         const undoMeta = damageDealt > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
         const saveData = JSON.stringify({ expression: saveExpr, dice: [saveRoll], modifier: saveMod, total: saveTotal, label: saveLabel, ...undoMeta });
         const sr = insertChat.run(cid, user.id, user.username, `/roll ${saveExpr}`, 'roll', saveData);
@@ -1498,8 +1522,10 @@ export function setupSession(io: AppServer) {
         // Damage roll (with crit doubling dice)
         const dmg = isCrit ? rollCritDamage(effectiveDamageDice) : rollDiceExpression(effectiveDamageDice);
         const dmgMod = damageModifierForToken(target, damage_type);
-        const adjustedTotal = dmgMod.multiplier === 1 ? dmg.total : Math.floor(dmg.total * dmgMod.multiplier);
-        const modSuffix = dmgMod.label ? ` (${dmgMod.label})` : '';
+        let adjustedTotal = dmgMod.multiplier === 1 ? dmg.total : Math.floor(dmg.total * dmgMod.multiplier);
+        const ham = applyHeavyArmorMaster(target, damage_type, adjustedTotal);
+        adjustedTotal = ham.adjusted;
+        const modSuffix = (dmgMod.label ? ` (${dmgMod.label})` : '') + (ham.reduced ? ' (HAM −3)' : '');
         const dmgLabel = `${target.label} — ${attack_name} ${damage_type || 'damage'}${isCrit ? ' (crit!)' : ''}${modSuffix}`;
         const undoMeta = adjustedTotal > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
         const dmgData = JSON.stringify({ expression: effectiveDamageDice, dice: dmg.rolls, modifier: dmg.modifier, total: adjustedTotal, label: dmgLabel, ...undoMeta });
@@ -1589,8 +1615,10 @@ export function setupSession(io: AppServer) {
         }
 
         const dmgMod = damageModifierForToken(target, damage_type);
-        const adjustedDmg = dmgMod.multiplier === 1 ? dmgTotal : Math.floor(dmgTotal * dmgMod.multiplier);
-        const modSuffix = dmgMod.label ? ` (${dmgMod.label})` : '';
+        let adjustedDmg = dmgMod.multiplier === 1 ? dmgTotal : Math.floor(dmgTotal * dmgMod.multiplier);
+        const ham = applyHeavyArmorMaster(target, damage_type, adjustedDmg);
+        adjustedDmg = ham.adjusted;
+        const modSuffix = (dmgMod.label ? ` (${dmgMod.label})` : '') + (ham.reduced ? ' (HAM −3)' : '');
 
         const expr = `${rollCount}d${sides}${totalMod !== 0 ? (totalMod > 0 ? '+' + totalMod : totalMod) : ''}`;
         const dmgLabel = `${target.label} — ${attack_name} (${hits} hit${hits > 1 ? 's' : ''}) ${damage_type || 'damage'}${modSuffix}`;

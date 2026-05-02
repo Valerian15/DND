@@ -17,13 +17,18 @@ interface AppliedAsis {
   floating?: AbilityKey[];
 }
 
-/** Combined ASI delta from race + subrace + floating picks. */
-function asiDelta(applied: AppliedAsis): Record<AbilityKey, number> {
+interface FeatGrants {
+  resilient?: { ability: AbilityKey };
+}
+
+/** Combined delta from race ASIs + feat grants. */
+function asiDelta(applied: AppliedAsis, grants: FeatGrants): Record<AbilityKey, number> {
   const out: Record<AbilityKey, number> = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
   for (const m of [applied.race, applied.subrace]) {
     for (const k of ABILITY_ORDER) out[k] += m?.[k] ?? 0;
   }
   for (const k of applied.floating ?? []) out[k] += 1;
+  if (grants.resilient?.ability) out[grants.resilient.ability] += 1;
   return out;
 }
 
@@ -50,8 +55,10 @@ function looksLikeStandardArray(a: Abilities): boolean {
 }
 
 export default function AbilitiesStep({ character, onChange }: Props) {
-  const applied = ((character.description ?? {}) as { applied_asis?: AppliedAsis }).applied_asis ?? {};
-  const delta = useMemo(() => asiDelta(applied), [applied]);
+  const desc = (character.description ?? {}) as { applied_asis?: AppliedAsis; feat_grants?: FeatGrants };
+  const applied = desc.applied_asis ?? {};
+  const grants = desc.feat_grants ?? {};
+  const delta = useMemo(() => asiDelta(applied, grants), [applied, grants]);
   const rawAbilities = useMemo(() => subtract(character.abilities, delta), [character.abilities, delta]);
 
   // Pick starting mode based on what the character currently has (raw, pre-ASI)
@@ -275,7 +282,7 @@ export default function AbilitiesStep({ character, onChange }: Props) {
 
               {bonus > 0 && score > 0 && (
                 <div style={{ fontSize: '0.78rem', color: '#2a7', marginTop: '0.15rem' }}>
-                  +{bonus} race → <strong>{finalScore}</strong>
+                  +{bonus} bonus → <strong>{finalScore}</strong>
                 </div>
               )}
 
