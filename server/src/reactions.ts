@@ -19,7 +19,7 @@ interface Pending {
 const pending = new Map<string, Pending>();
 let nextOfferId = 1;
 
-export type ReactionKind = 'shield' | 'counterspell';
+export type ReactionKind = 'shield' | 'counterspell' | 'gwm-bonus' | 'lucky';
 
 export interface ReactionPayload {
   kind: ReactionKind;

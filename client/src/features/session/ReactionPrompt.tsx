@@ -4,10 +4,17 @@ import { socket } from '../../lib/socket';
 export interface ReactionOffer {
   offer_id: string;
   deadline: number;
-  kind: 'shield' | 'counterspell';
+  kind: 'shield' | 'counterspell' | 'gwm-bonus' | 'lucky';
   prompt: string;
   detail?: string;
 }
+
+const KIND_META: Record<ReactionOffer['kind'], { label: string; colour: string; verb: string }> = {
+  'shield': { label: '🛡 Shield reaction', colour: '#3a76d6', verb: 'cast Shield' },
+  'counterspell': { label: '🌀 Counterspell reaction', colour: '#a04d8c', verb: 'cast Counterspell' },
+  'gwm-bonus': { label: '⚔ Great Weapon Master', colour: '#c84e2c', verb: 'take bonus attack' },
+  'lucky': { label: '🍀 Lucky', colour: '#3a8a3a', verb: 'spend luck point' },
+};
 
 interface Props {
   offers: ReactionOffer[];
@@ -44,7 +51,8 @@ function ReactionChip({ offer, onResolved }: { offer: ReactionOffer; onResolved:
     onResolved();
   }
 
-  const colour = offer.kind === 'shield' ? '#3a76d6' : '#a04d8c';
+  const meta = KIND_META[offer.kind];
+  const colour = meta.colour;
 
   return (
     <div style={{
@@ -54,7 +62,7 @@ function ReactionChip({ offer, onResolved }: { offer: ReactionOffer; onResolved:
     }}>
       <div style={{ padding: '0.5rem 0.75rem' }}>
         <div style={{ fontSize: '0.7rem', fontWeight: 700, color: colour, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>
-          {offer.kind === 'shield' ? '🛡 Shield reaction' : '🌀 Counterspell reaction'}
+          {meta.label}
         </div>
         <div style={{ fontSize: '0.86rem', fontWeight: 600, color: '#222', marginBottom: 2 }}>{offer.prompt}</div>
         {offer.detail && (
@@ -63,7 +71,7 @@ function ReactionChip({ offer, onResolved }: { offer: ReactionOffer; onResolved:
         <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem' }}>
           <button onClick={() => respond(true)}
             style={{ flex: 1, padding: '0.4rem', background: colour, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 700, fontSize: '0.84rem' }}>
-            Yes — cast {offer.kind === 'shield' ? 'Shield' : 'Counterspell'}
+            Yes — {meta.verb}
           </button>
           <button onClick={() => respond(false)}
             style={{ padding: '0.4rem 0.8rem', background: '#fff', color: '#666', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: '0.84rem' }}>

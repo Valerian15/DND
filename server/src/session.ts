@@ -113,7 +113,7 @@ interface ServerToClientEvents {
   /** Sent after a DM applies post-hoc conditions via the spell-summary picker. */
   'combat:summary_conditions_applied': (data: { message_id: number; conditions: string[] }) => void;
   /** Player-targeted reaction prompt (Shield, Counterspell). Filtered to the eligible user. */
-  'reaction:offer': (data: { offer_id: string; deadline: number; kind: 'shield' | 'counterspell'; prompt: string; detail?: string }) => void;
+  'reaction:offer': (data: { offer_id: string; deadline: number; kind: 'shield' | 'counterspell' | 'gwm-bonus' | 'lucky'; prompt: string; detail?: string }) => void;
   /** Tells the client to close a reaction chip when another player resolved the trigger first. */
   'reaction:cancelled': (data: { offer_id: string }) => void;
 }
@@ -1464,6 +1464,9 @@ export function setupSession(io: AppServer) {
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
       }
 
+      // GWM bonus-attack tracker: set true if any target was crit-hit or dropped to 0 HP.
+      let gwmTriggered = false;
+
       // Per-target: roll attack vs AC, on hit roll damage (with crit on nat 20)
       const summaries: string[] = [];
       for (const tid of validTargets) {
@@ -1537,8 +1540,34 @@ export function setupSession(io: AppServer) {
           const newHp = Math.max(0, target.hp_current - adjustedTotal);
           applyTokenHpChange(cid, tid, target.character_id, newHp);
           triggerConcentrationSave(cid, tid, adjustedTotal);
+          // GWM trigger: melee crit OR target dropped to 0 HP. is_spell excluded (ranged
+          // weapon attacks aren't strictly in scope either, but RAW says "with a melee
+          // weapon" — we don't track weapon-type here so the client gates the toggle UI;
+          // we still trigger on any non-spell attack and trust the player.)
+          if (!is_spell && (isCrit || newHp === 0)) gwmTriggered = true;
         }
         summaries.push(`${target.label}: ${isCrit ? '★ CRIT' : '✓'} ${adjustedTotal}${modSuffix}`);
+      }
+
+      // Offer GWM bonus action prompt after all targets resolved.
+      if (gwmTriggered && casterToken?.character_id) {
+        const feats = getCharacterFeats(casterToken.character_id);
+        if (feats.has('great-weapon-master')) {
+          const ownerRow = db.prepare('SELECT owner_id FROM characters WHERE id = ?').get(casterToken.character_id) as { owner_id: number } | undefined;
+          if (ownerRow) {
+            const offer = offerReaction(cid, ownerRow.owner_id, {
+              kind: 'gwm-bonus',
+              prompt: `${casterName} can take a bonus melee attack (GWM)`,
+              detail: 'Triggered by a critical hit or dropping a target to 0 HP. Make the attack manually with your bonus action.',
+            });
+            offer.promise.then((accepted) => {
+              if (!accepted) return;
+              const noteRes = insertChat.run(cid, user.id, user.username, `/action ${casterName} uses Great Weapon Master bonus attack.`, 'action', null);
+              const noteRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(noteRes.lastInsertRowid) as ChatMessageRow;
+              io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(noteRow));
+            });
+          }
+        }
       }
 
       // Final summary
