@@ -64,6 +64,20 @@ interface RaceEntry {
   };
 }
 
+interface SubraceData {
+  name: string;
+  slug: string;
+  desc: string;
+  asi: Array<{ attributes: string[]; value: number }>;
+  asi_desc: string;
+  traits: string;
+}
+
+interface SubraceAugmentation {
+  parentSlug: string;
+  subraces: SubraceData[];
+}
+
 // ─────────────── Backgrounds ───────────────
 const BACKGROUNDS: BackgroundEntry[] = [
   {
@@ -378,6 +392,71 @@ const RACES: RaceEntry[] = [
 **_Feat._** You gain one feat of your choice at 1st level.`,
       subraces: [],
     },
+  },
+];
+
+// ─────────────── Subrace augmentations ───────────────
+// Subraces nest inside the parent race's `data.subraces` array. We patch the existing SRD
+// race rows by merging these in (skipping any that already exist).
+const SUBRACE_AUGMENTATIONS: SubraceAugmentation[] = [
+  {
+    parentSlug: 'elf',
+    subraces: [
+      {
+        name: 'Wood Elf',
+        slug: 'wood-elf',
+        desc: 'As a wood elf, you have keen senses and intuition, and your fleet feet carry you quickly and stealthily through your native forests. Wood elves include the wild and reclusive Kagonesti of Krynn, the haughty Tairnadal and Valenar of Eberron and Khorvaire, and the woodland folk of the Forgotten Realms.',
+        asi: [{ attributes: ['Wisdom'], value: 1 }],
+        asi_desc: '**_Ability Score Increase._** Your Wisdom score increases by 1.',
+        traits: `**_Elf Weapon Training._** You have proficiency with the longsword, shortsword, shortbow, and longbow.
+
+**_Fleet of Foot._** Your base walking speed increases to 35 feet. (Manually update Speed in the Details step until subrace speed is auto-applied.)
+
+**_Mask of the Wild._** You can attempt to hide even when you are only lightly obscured by foliage, heavy rain, falling snow, mist, or other natural phenomena.`,
+      },
+      {
+        name: 'Drow (Dark Elf)',
+        slug: 'drow',
+        desc: 'Descended from an earlier subrace of dark-skinned elves, the drow were banished from the surface world for following the goddess Lolth down the path to evil and corruption. Now they have built their own civilization in the depths of the Underdark, patterned after what they were taught long ago by the Dark Seldarine, the deities who corrupted the elves.',
+        asi: [{ attributes: ['Charisma'], value: 1 }],
+        asi_desc: '**_Ability Score Increase._** Your Charisma score increases by 1.',
+        traits: `**_Superior Darkvision._** Your darkvision has a radius of 120 feet (overriding the elf base).
+
+**_Sunlight Sensitivity._** You have disadvantage on attack rolls and on Wisdom (Perception) checks that rely on sight when you, the target of your attack, or whatever you are trying to perceive is in direct sunlight.
+
+**_Drow Magic._** You know the *dancing lights* cantrip. When you reach 3rd level, you can cast the *faerie fire* spell once with this trait, and you regain the ability to do so when you finish a long rest. When you reach 5th level, you can also cast the *darkness* spell once with this trait, and you regain the ability to do so when you finish a long rest. Charisma is your spellcasting ability for these spells.
+
+**_Drow Weapon Training._** You have proficiency with rapiers, shortswords, and hand crossbows.`,
+      },
+    ],
+  },
+  {
+    parentSlug: 'dwarf',
+    subraces: [
+      {
+        name: 'Mountain Dwarf',
+        slug: 'mountain-dwarf',
+        desc: 'As a mountain dwarf, you\'re strong and hardy, accustomed to a difficult life in rugged terrain. You\'re probably on the tall side (for a dwarf), and tend toward lighter coloration. The shield dwarves of northern Faerûn, as well as the ruling Hylar clan and the noble Daewar clan of Dragonlance, are mountain dwarves.',
+        asi: [{ attributes: ['Strength'], value: 2 }],
+        asi_desc: '**_Ability Score Increase._** Your Strength score increases by 2.',
+        traits: `**_Dwarven Armor Training._** You have proficiency with light and medium armor.`,
+      },
+    ],
+  },
+  {
+    parentSlug: 'gnome',
+    subraces: [
+      {
+        name: 'Forest Gnome',
+        slug: 'forest-gnome',
+        desc: 'As a forest gnome, you have a natural knack for illusion and inherent quickness and stealth. In the worlds of D&D, forest gnomes are rare and secretive. They gather in hidden communities in sylvan forests, using illusions and trickery to conceal themselves from threats or to mask their escape should they be detected. Forest gnomes tend to be friendly with other good-spirited woodland folk, and they regard elves and good fey as their most important allies.',
+        asi: [{ attributes: ['Dexterity'], value: 1 }],
+        asi_desc: '**_Ability Score Increase._** Your Dexterity score increases by 1.',
+        traits: `**_Natural Illusionist._** You know the *minor illusion* cantrip. Intelligence is your spellcasting ability for it.
+
+**_Speak with Small Beasts._** Through sounds and gestures, you can communicate simple ideas with Small or smaller beasts. Forest gnomes love animals and often keep squirrels, badgers, rabbits, moles, woodpeckers, and other creatures as beloved pets.`,
+      },
+    ],
   },
 ];
 
@@ -1758,14 +1837,37 @@ function run() {
     `INSERT OR REPLACE INTO races (slug, name, data, source) VALUES (?, ?, ?, ?)`,
   );
 
+  const selectRace = db.prepare('SELECT data FROM races WHERE slug = ?');
+  const updateRaceData = db.prepare('UPDATE races SET data = ? WHERE slug = ?');
+
+  let augmentedRaces = 0;
+  let augmentedSubraces = 0;
   db.transaction(() => {
     for (const b of BACKGROUNDS) bgStmt.run(b.slug, b.data.name, JSON.stringify(b.data), b.source);
     for (const f of FEATS) featStmt.run(f.slug, f.data.name, JSON.stringify(f.data), f.source);
     for (const s of SUBCLASSES) subStmt.run(s.slug, s.data.name, s.class_slug, JSON.stringify(s.data), s.source);
     for (const r of RACES) raceStmt.run(r.slug, r.data.name, JSON.stringify(r.data), r.source);
+
+    // Merge new subraces into existing parent race entries (idempotent: skip slugs that already exist).
+    for (const aug of SUBRACE_AUGMENTATIONS) {
+      const row = selectRace.get(aug.parentSlug) as { data: string } | undefined;
+      if (!row) continue;
+      const data = JSON.parse(row.data) as { subraces?: Array<{ slug: string }> };
+      const existing = (data.subraces ?? []) as Array<{ slug: string }>;
+      const existingSlugs = new Set(existing.map((s) => s.slug));
+      const additions = aug.subraces.filter((s) => !existingSlugs.has(s.slug));
+      if (additions.length === 0) continue;
+      data.subraces = [...existing, ...additions];
+      updateRaceData.run(JSON.stringify(data), aug.parentSlug);
+      augmentedRaces += 1;
+      augmentedSubraces += additions.length;
+    }
   })();
 
   console.log(`✅ Seeded ${BACKGROUNDS.length} backgrounds + ${FEATS.length} feats + ${SUBCLASSES.length} subclasses + ${RACES.length} races (source: phb-2014)`);
+  if (augmentedSubraces > 0) {
+    console.log(`✅ Added ${augmentedSubraces} subrace${augmentedSubraces > 1 ? 's' : ''} across ${augmentedRaces} race${augmentedRaces > 1 ? 's' : ''}`);
+  }
 }
 
 run();
