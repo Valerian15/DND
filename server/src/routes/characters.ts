@@ -36,6 +36,7 @@ interface CharacterRow {
   personality: string;
   effects: string;
   classes: string;
+  languages: string;
   resistances: string;
   vulnerabilities: string;
   immunities: string;
@@ -71,6 +72,7 @@ function hydrate(row: CharacterRow) {
     personality: JSON.parse(row.personality || '{"traits":"","ideals":"","bonds":"","flaws":""}'),
     effects: JSON.parse(row.effects || '[]'),
     classes: JSON.parse(row.classes || '[]'),
+    languages: JSON.parse(row.languages || '[]'),
     resistances: JSON.parse(row.resistances || '[]'),
     vulnerabilities: JSON.parse(row.vulnerabilities || '[]'),
     immunities: JSON.parse(row.immunities || '[]'),
@@ -158,6 +160,7 @@ const UPDATABLE_JSON = new Set([
   'personality',
   'effects',
   'classes',
+  'languages',
   'resistances',
   'vulnerabilities',
   'immunities',

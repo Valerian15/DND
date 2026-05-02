@@ -105,7 +105,12 @@ export default function BackgroundStep({ character, onChange }: Props) {
           <h3 style={{ marginTop: 0 }}>{selected.name}</h3>
           {selected.skill_proficiencies && <p><strong>Skill proficiencies:</strong> {selected.skill_proficiencies}</p>}
           {selected.tool_proficiencies && <p><strong>Tool proficiencies:</strong> {selected.tool_proficiencies}</p>}
-          {selected.languages && <p><strong>Languages:</strong> {selected.languages}</p>}
+          {selected.languages && (
+            <p>
+              <strong>Languages:</strong> {selected.languages}
+              <span style={{ fontSize: '0.78rem', color: '#888', marginLeft: '0.4rem' }}>↪ Add in Details step.</span>
+            </p>
+          )}
           {selected.equipment && <p><strong>Equipment:</strong> {selected.equipment}</p>}
           {selected.feature && (
             <div style={{ marginTop: '0.4rem', fontSize: '0.9rem' }}>

@@ -493,6 +493,9 @@ export function initSchema() {
   // Subrace selection (Hill vs Mountain Dwarf, High vs Wood Elf, etc.).
   try { db.exec('ALTER TABLE characters ADD COLUMN subrace_slug TEXT'); } catch { /* exists */ }
 
+  // Spoken/read languages — JSON array of language names (e.g. ['Common', 'Dwarvish']).
+  try { db.exec("ALTER TABLE characters ADD COLUMN languages TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+
   // AOE spell templates on maps
   db.exec(`
     CREATE TABLE IF NOT EXISTS map_templates (

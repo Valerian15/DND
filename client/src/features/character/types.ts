@@ -71,6 +71,7 @@ export interface Character {
   weapons: string[];
   spells_known: unknown[];
   spells_prepared: unknown[];
+  languages: string[];
   spell_slots: Record<string, number>;
   spell_slots_used: Record<string, number>;
   hit_dice_used: number;

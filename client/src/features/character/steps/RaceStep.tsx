@@ -214,7 +214,12 @@ export default function RaceStep({ character, onChange }: Props) {
           {selected.asi_desc && <div style={{ fontSize: '0.9rem', marginBottom: '0.4rem' }}><MD text={selected.asi_desc} /></div>}
           {selected.size_raw && <p><strong>Size:</strong> {selected.size_raw}</p>}
           {selected.speed_desc && <div style={{ fontSize: '0.9rem', marginBottom: '0.4rem' }}><MD text={selected.speed_desc} /></div>}
-          {selected.languages && <div style={{ fontSize: '0.9rem', marginBottom: '0.4rem' }}><MD text={selected.languages} /></div>}
+          {selected.languages && (
+            <div style={{ fontSize: '0.9rem', marginBottom: '0.4rem' }}>
+              <MD text={selected.languages} />
+              <div style={{ fontSize: '0.78rem', color: '#888', marginTop: '0.2rem' }}>↪ Add granted languages in the Details step.</div>
+            </div>
+          )}
           {selected.vision && <div style={{ fontSize: '0.9rem', marginBottom: '0.4rem' }}><MD text={selected.vision} /></div>}
           {selected.traits && (
             <details style={{ marginTop: '0.5rem' }}>

@@ -499,7 +499,7 @@ export default function CharacterSheet() {
             )}
           </Card>
 
-          {(desc.backstory || desc.age || desc.eyes) && (
+          {(desc.backstory || desc.age || desc.eyes || (character.languages && character.languages.length > 0)) && (
             <Card>
               <SectionTitle>About</SectionTitle>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', fontSize: '0.9rem', marginBottom: '0.5rem' }}>
@@ -510,6 +510,12 @@ export default function CharacterSheet() {
                 {desc.hair && <Bit label="Hair" value={desc.hair} />}
                 {desc.skin && <Bit label="Skin" value={desc.skin} />}
               </div>
+              {character.languages && character.languages.length > 0 && (
+                <div style={{ fontSize: '0.9rem', marginTop: '0.4rem' }}>
+                  <span style={{ color: '#888', fontWeight: 600, marginRight: '0.4rem' }}>Languages:</span>
+                  {character.languages.join(', ')}
+                </div>
+              )}
               {desc.backstory && (
                 <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.5rem', fontSize: '0.95rem' }}>{desc.backstory}</div>
               )}

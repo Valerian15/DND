@@ -15,6 +15,9 @@ const ALIGNMENTS = [
 
 const DAMAGE_TYPES = ['acid', 'bludgeoning', 'cold', 'fire', 'force', 'lightning', 'necrotic', 'piercing', 'poison', 'psychic', 'radiant', 'slashing', 'thunder'];
 
+const STANDARD_LANGUAGES = ['Common', 'Dwarvish', 'Elvish', 'Giant', 'Gnomish', 'Goblin', 'Halfling', 'Orc'];
+const EXOTIC_LANGUAGES = ['Abyssal', 'Celestial', 'Deep Speech', 'Draconic', 'Infernal', 'Primordial', 'Sylvan', 'Undercommon'];
+
 export default function DetailsStep({ character, onChange }: Props) {
   const desc = (character.description ?? {}) as Record<string, any>;
   const initialPersonality = character.personality ?? { traits: '', ideals: '', bonds: '', flaws: '' };
@@ -164,6 +167,83 @@ export default function DetailsStep({ character, onChange }: Props) {
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
         </Field>
       </div>
+
+      <h3 style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontSize: '1rem' }}>Languages</h3>
+      <p style={{ color: '#666', fontSize: '0.85rem', margin: '0 0 0.75rem' }}>
+        Languages your character can speak, read, and write. Race + background grants are listed in their respective steps; pick them here.
+      </p>
+      {(() => {
+        const selected = (character.languages ?? []) as string[];
+        const toggle = (lang: string) => {
+          const next = selected.includes(lang) ? selected.filter((x) => x !== lang) : [...selected, lang];
+          onChange({ languages: next });
+        };
+        const customLanguages = selected.filter((l) => !STANDARD_LANGUAGES.includes(l) && !EXOTIC_LANGUAGES.includes(l));
+        return (
+          <>
+            <div style={{ fontSize: '0.78rem', color: '#888', marginBottom: '0.25rem' }}>STANDARD</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: '0.5rem' }}>
+              {STANDARD_LANGUAGES.map((lang) => {
+                const active = selected.includes(lang);
+                return (
+                  <button key={lang} type="button" onClick={() => toggle(lang)}
+                    style={{
+                      padding: '0.2rem 0.5rem', fontSize: '0.8rem',
+                      border: `1px solid ${active ? '#27a' : '#ddd'}`,
+                      background: active ? '#27a' : '#fff',
+                      color: active ? '#fff' : '#666', borderRadius: 4, cursor: 'pointer',
+                    }}>{lang}</button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: '0.78rem', color: '#888', marginBottom: '0.25rem' }}>EXOTIC</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: '0.5rem' }}>
+              {EXOTIC_LANGUAGES.map((lang) => {
+                const active = selected.includes(lang);
+                return (
+                  <button key={lang} type="button" onClick={() => toggle(lang)}
+                    style={{
+                      padding: '0.2rem 0.5rem', fontSize: '0.8rem',
+                      border: `1px solid ${active ? '#a60' : '#ddd'}`,
+                      background: active ? '#a60' : '#fff',
+                      color: active ? '#fff' : '#666', borderRadius: 4, cursor: 'pointer',
+                    }}>{lang}</button>
+                );
+              })}
+            </div>
+            {customLanguages.length > 0 && (
+              <>
+                <div style={{ fontSize: '0.78rem', color: '#888', marginBottom: '0.25rem' }}>CUSTOM</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: '0.5rem' }}>
+                  {customLanguages.map((lang) => (
+                    <button key={lang} type="button" onClick={() => toggle(lang)}
+                      style={{
+                        padding: '0.2rem 0.5rem', fontSize: '0.8rem',
+                        border: '1px solid #555',
+                        background: '#555',
+                        color: '#fff', borderRadius: 4, cursor: 'pointer',
+                      }}>{lang} ✕</button>
+                  ))}
+                </div>
+              </>
+            )}
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const form = e.currentTarget;
+              const input = form.elements.namedItem('custom-lang') as HTMLInputElement | null;
+              if (!input) return;
+              const v = input.value.trim();
+              if (!v || selected.includes(v)) return;
+              onChange({ languages: [...selected, v] });
+              input.value = '';
+            }} style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem' }}>
+              <input name="custom-lang" type="text" placeholder="Add custom language…"
+                style={{ flex: 1, padding: '0.4rem', fontSize: '0.85rem', border: '1px solid #ddd', borderRadius: 4 }} />
+              <button type="submit" style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}>Add</button>
+            </form>
+          </>
+        );
+      })()}
 
       <h3 style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontSize: '1rem' }}>Damage Modifiers</h3>
       <p style={{ color: '#666', fontSize: '0.85rem', margin: '0 0 1rem' }}>
