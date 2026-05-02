@@ -4,6 +4,7 @@ import { ABILITY_NAMES, ABILITY_ORDER } from './types';
 import { abilityModifier, formatModifier } from './pointBuy';
 import { applyAsi, isAsiLevel, previewLevelUp, type AsiChoice } from './levelUp';
 import { hitDieFor } from './rules';
+import { featuresAtLevel } from './classFeatures';
 
 interface Props {
   character: Character;
@@ -123,6 +124,22 @@ export default function LevelUpDialog({ character, hitDieSize, onConfirm, onCanc
               ].filter(Boolean).join(', ')} — pick them in the Spells step after levelling.
             </div>
           )}
+          {(() => {
+            const newFeats = featuresAtLevel(targetClass, preview.newClassLevel);
+            if (newFeats.length === 0) return null;
+            return (
+              <div style={{ marginTop: '0.6rem', borderTop: '1px solid #ddd', paddingTop: '0.5rem' }}>
+                <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#444', marginBottom: '0.3rem' }}>New features:</div>
+                <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.82rem' }}>
+                  {newFeats.map((f, i) => (
+                    <li key={i} style={{ marginBottom: '0.2rem' }}>
+                      <strong>{f.name}</strong> — <span style={{ color: '#555' }}>{f.desc}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })()}
         </div>
 
         {requiresAsi && (

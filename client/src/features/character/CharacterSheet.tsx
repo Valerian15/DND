@@ -11,6 +11,7 @@ import { isWeaponProficient, isWeaponProficientForClasses } from './weaponProfic
 import { parseSpellForAttack, scaleCantripDice } from './attackUtils';
 import LevelUpDialog from './LevelUpDialog';
 import { MD } from '../library/Statblock';
+import { featuresThroughLevel } from './classFeatures';
 
 interface WeaponData {
   slug: string;
@@ -475,6 +476,35 @@ export default function CharacterSheet() {
                     );
                   })}
                 </div>
+              </Card>
+            );
+          })()}
+
+          {(() => {
+            const cls = character.classes && character.classes.length > 0
+              ? character.classes
+              : (character.class_slug ? [{ slug: character.class_slug, level: character.level || 1, subclass_slug: null, hit_dice_used: 0 }] : []);
+            const sections = cls
+              .map((c) => ({ slug: c.slug, level: c.level, feats: featuresThroughLevel(c.slug, c.level) }))
+              .filter((s) => s.feats.length > 0);
+            if (sections.length === 0) return null;
+            return (
+              <Card>
+                <SectionTitle>Class features</SectionTitle>
+                {sections.map((s) => (
+                  <div key={s.slug} style={{ marginBottom: '0.75rem' }}>
+                    {sections.length > 1 && (
+                      <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#666', marginBottom: '0.25rem', textTransform: 'capitalize' }}>{s.slug} L{s.level}</div>
+                    )}
+                    <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.85rem' }}>
+                      {s.feats.map((f, i) => (
+                        <li key={i} style={{ marginBottom: '0.2rem' }}>
+                          <strong>L{f.level} {f.name}</strong> — <span style={{ color: '#555' }}>{f.desc}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
               </Card>
             );
           })()}

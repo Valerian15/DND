@@ -3,6 +3,7 @@ import type { Character, ClassEntry, LibraryItem } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
 import { defaultResourcesForClass } from '../classResources';
 import { MD } from '../../library/Statblock';
+import { featuresThroughLevel } from '../classFeatures';
 import { CLASS_SAVE_PROFICIENCIES, meetsMulticlassPrereqs, missingMulticlassPrereqs, MULTICLASS_PREREQS } from '../rules';
 import type { AbilityKey } from '../types';
 
@@ -197,9 +198,25 @@ export default function ClassStep({ character, onChange }: Props) {
                   {data.spellcasting_ability && <span><strong>Casting:</strong> {data.spellcasting_ability}</span>}
                 </div>
               )}
+              {(() => {
+                const feats = featuresThroughLevel(entry.slug, entry.level);
+                if (feats.length === 0) return null;
+                return (
+                  <details style={{ marginTop: '0.4rem' }}>
+                    <summary style={{ fontSize: '0.78rem', cursor: 'pointer', color: '#27a' }}>Features through L{entry.level} ({feats.length})</summary>
+                    <ul style={{ margin: '0.4rem 0 0', paddingLeft: '1.1rem', fontSize: '0.82rem' }}>
+                      {feats.map((f, i) => (
+                        <li key={i} style={{ marginBottom: '0.2rem' }}>
+                          <strong>L{f.level} {f.name}</strong> — <span style={{ color: '#555' }}>{f.desc}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                );
+              })()}
               {data?.desc && (
                 <details style={{ marginTop: '0.4rem' }}>
-                  <summary style={{ fontSize: '0.78rem', cursor: 'pointer', color: '#888' }}>Class features</summary>
+                  <summary style={{ fontSize: '0.78rem', cursor: 'pointer', color: '#888' }}>Full class description</summary>
                   <div style={{ marginTop: '0.4rem', fontSize: '0.82rem', maxHeight: 320, overflowY: 'auto', paddingRight: '0.4rem' }}>
                     <MD text={data.desc} />
                   </div>
