@@ -511,23 +511,7 @@ export default function CharacterSheet() {
 
           <Card>
             <SectionTitle>Inventory</SectionTitle>
-            {(character.inventory as any[]).length === 0 ? (
-              <div style={{ color: '#888' }}>Empty.</div>
-            ) : (
-              (character.inventory as any[]).map((item, i) => (
-                <details key={i} style={{ marginBottom: '0.5rem' }}>
-                  <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>
-                    {item.name}
-                    {item.quantity && item.quantity > 1 && ` ×${item.quantity}`}
-                  </summary>
-                  {item.description && (
-                    <div style={{ fontSize: '0.9rem', marginTop: '0.25rem', color: '#555' }}>
-                      <MD text={String(item.description)} />
-                    </div>
-                  )}
-                </details>
-              ))
-            )}
+            <InventoryEditor character={character} setCharacter={setCharacter} />
           </Card>
 
           {(desc.backstory || desc.age || desc.eyes || (character.languages && character.languages.length > 0)) && (
@@ -608,6 +592,127 @@ export default function CharacterSheet() {
 
 function humanize(slug: string): string {
   return slug.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+}
+
+interface InventoryItem {
+  id?: string;
+  source?: string;
+  name?: string;
+  quantity?: number;
+  description?: string;
+}
+
+function InventoryEditor({
+  character,
+  setCharacter,
+}: {
+  character: Character;
+  setCharacter: (c: Character) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draftName, setDraftName] = useState('');
+  const [draftQty, setDraftQty] = useState('1');
+  const [draftDesc, setDraftDesc] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const items = (character.inventory ?? []) as InventoryItem[];
+
+  async function persist(next: InventoryItem[]) {
+    setSaving(true);
+    try {
+      const updated = await updateCharacter(character.id, { inventory: next });
+      setCharacter(updated);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addItem() {
+    const name = draftName.trim();
+    if (!name) return;
+    const qty = Math.max(1, Math.min(999, parseInt(draftQty, 10) || 1));
+    const item: InventoryItem = {
+      id: `it-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name,
+      quantity: qty,
+      description: draftDesc.trim() || undefined,
+    };
+    await persist([...items, item]);
+    setDraftName('');
+    setDraftQty('1');
+    setDraftDesc('');
+    setAdding(false);
+  }
+
+  async function adjustQty(idx: number, delta: number) {
+    const next = items.slice();
+    const cur = Math.max(1, (next[idx].quantity ?? 1) + delta);
+    next[idx] = { ...next[idx], quantity: cur };
+    await persist(next);
+  }
+
+  async function removeItem(idx: number) {
+    if (!confirm(`Remove ${items[idx].name ?? 'this item'}?`)) return;
+    await persist(items.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <>
+      {items.length === 0 ? (
+        <div style={{ color: '#888' }}>Empty.</div>
+      ) : (
+        items.map((item, i) => (
+          <details key={item.id ?? i} style={{ marginBottom: '0.4rem' }}>
+            <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <strong style={{ flex: 1 }}>
+                {item.name ?? '(unnamed)'}
+                {(item.quantity ?? 1) > 1 && <span style={{ color: '#888', fontWeight: 400 }}> ×{item.quantity}</span>}
+              </strong>
+              <button onClick={(e) => { e.preventDefault(); adjustQty(i, -1); }} disabled={saving || (item.quantity ?? 1) <= 1}
+                style={{ width: 22, height: 22, padding: 0, fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ddd', borderRadius: 3, background: '#fff' }}>−</button>
+              <button onClick={(e) => { e.preventDefault(); adjustQty(i, +1); }} disabled={saving}
+                style={{ width: 22, height: 22, padding: 0, fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ddd', borderRadius: 3, background: '#fff' }}>+</button>
+              <button onClick={(e) => { e.preventDefault(); removeItem(i); }} disabled={saving}
+                style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, background: '#fff', color: 'crimson' }}>×</button>
+            </summary>
+            {item.description && (
+              <div style={{ fontSize: '0.9rem', marginTop: '0.25rem', color: '#555' }}>
+                <MD text={String(item.description)} />
+              </div>
+            )}
+          </details>
+        ))
+      )}
+
+      {adding ? (
+        <div style={{ marginTop: '0.5rem', padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4 }}>
+          <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem' }}>
+            <input value={draftName} onChange={(e) => setDraftName(e.target.value)} placeholder="Item name"
+              style={{ flex: 2, padding: '0.3rem', fontSize: '0.85rem', border: '1px solid #ddd', borderRadius: 3 }} />
+            <input value={draftQty} onChange={(e) => setDraftQty(e.target.value)} placeholder="Qty" type="number" min={1}
+              style={{ width: 60, padding: '0.3rem', fontSize: '0.85rem', border: '1px solid #ddd', borderRadius: 3 }} />
+          </div>
+          <textarea value={draftDesc} onChange={(e) => setDraftDesc(e.target.value)} placeholder="Description (optional)"
+            rows={2} style={{ width: '100%', padding: '0.3rem', fontSize: '0.85rem', border: '1px solid #ddd', borderRadius: 3, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+          <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem' }}>
+            <button onClick={addItem} disabled={!draftName.trim() || saving}
+              style={{ padding: '0.3rem 0.7rem', fontSize: '0.85rem', cursor: draftName.trim() ? 'pointer' : 'not-allowed', border: '1px solid #2a7', background: draftName.trim() ? '#e7f7ec' : '#f5f5f5', color: '#2a7', borderRadius: 3, fontWeight: 600 }}>
+              Add
+            </button>
+            <button onClick={() => { setAdding(false); setDraftName(''); setDraftQty('1'); setDraftDesc(''); }}
+              style={{ padding: '0.3rem 0.7rem', fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ccc', background: '#fff', color: '#666', borderRadius: 3 }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)}
+          style={{ marginTop: '0.5rem', padding: '0.3rem 0.7rem', fontSize: '0.85rem', cursor: 'pointer', border: '1px dashed #ccc', background: '#fff', color: '#666', borderRadius: 3 }}>
+          + Add item
+        </button>
+      )}
+    </>
+  );
 }
 
 function Card({ children }: { children: React.ReactNode }) {
