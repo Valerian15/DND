@@ -28,6 +28,47 @@ export interface ClassResource {
 }
 
 /**
+ * Structured inventory item (equipment refactor). Replaces the loose
+ * `inventory: any[]` + `weapons: string[]` model. Stored in `character.inventory_v2`.
+ *
+ * Fields beyond name/quantity are optional — homebrew items can be created with just
+ * a name. Library-derived items copy the relevant stats in at the time of pickup so
+ * combat resolvers don't have to refetch.
+ */
+export type InventoryCategory = 'weapon' | 'armor' | 'tool' | 'gear' | 'consumable' | 'treasure' | 'other';
+
+export interface InventoryItem {
+  id: string;
+  /** Slug of the source library item (weapons / armor / items). Empty for homebrew rows. */
+  library_slug?: string;
+  /** Where the row came from (e.g. 'class-starter', 'background-starter', 'shop'). Free-form. */
+  source?: string;
+  name: string;
+  quantity: number;
+  weight_lbs?: number;
+  cost_gp?: number;
+  category: InventoryCategory;
+  /** True if held / worn. Combat resolver only sees equipped weapons. */
+  equipped?: boolean;
+  /** True if attuned (max 3 attuned items per character). */
+  attuned?: boolean;
+  description?: string;
+  // ── weapon-specific (copied from library on pickup) ──
+  damage_dice?: string;
+  damage_type?: string;
+  weapon_type?: 'Melee' | 'Ranged';
+  weapon_category?: 'Simple' | 'Martial';
+  properties?: string[];
+  range_normal?: number;
+  range_long?: number;
+  versatile_dice?: string;
+  // ── armor-specific ──
+  armor_class?: number;
+  armor_type?: 'light' | 'medium' | 'heavy' | 'shield';
+  stealth_disadvantage?: boolean;
+}
+
+/**
  * Multiclass entry. Each class a character has is one entry in `Character.classes`.
  * For single-class characters this array has one entry that mirrors the legacy
  * top-level fields (class_slug, subclass_slug, level, hit_dice_used).
@@ -67,8 +108,12 @@ export interface Character {
   abilities: Abilities;
   skills: Record<string, unknown>;
   saves: Record<string, unknown>;
+  /** @deprecated free-form inventory; legacy fallback. New code reads inventory_v2. */
   inventory: unknown[];
+  /** @deprecated weapon slug list; legacy. New code derives equipped weapons from inventory_v2. */
   weapons: string[];
+  /** Structured inventory rows. Empty array for legacy chars that haven't been migrated. */
+  inventory_v2: InventoryItem[];
   spells_known: unknown[];
   spells_prepared: unknown[];
   languages: string[];

@@ -506,6 +506,12 @@ export function initSchema() {
   // initiative:next_turn for the character whose turn just ended.
   try { db.exec('ALTER TABLE characters ADD COLUMN sneak_used_this_turn INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
 
+  // Structured inventory (Phase: equipment refactor). The legacy `inventory` (JSON of free-form
+  // {name, quantity, description, source}) and `weapons` (slug list) columns stay populated and
+  // are not dropped — code reads inventory_v2 first and falls back to legacy if empty. A
+  // separate migration script (pnpm migrate:equipment) walks legacy data into v2 idempotently.
+  try { db.exec("ALTER TABLE characters ADD COLUMN inventory_v2 TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
+
   // Saved encounters — DM snapshots the active map's tokens + initiative, restore later.
   db.exec(`
     CREATE TABLE IF NOT EXISTS encounters (
