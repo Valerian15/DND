@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { Character } from '../types';
+import type { Character, InventoryItem } from '../types';
 import { getLibraryItem } from '../api';
 import { MD } from '../../library/Statblock';
+import { viewInventory } from '../inventoryView';
 
 interface Props {
   character: Character;
@@ -35,11 +36,13 @@ export default function EquipmentStep({ character, onChange }: Props) {
     Promise.all(promises).finally(() => setLoading(false));
   }, [character.class_slug, character.background_slug]);
 
-  const inventory = (character.inventory ?? []) as any[];
-  const hasStarterPack = inventory.some((i) => i?.source === 'class-starter' || i?.source === 'background-starter');
+  // Read via the structured view so the wizard works whether the character is migrated or not.
+  // Writes always go to inventory_v2; the first write effectively migrates the character.
+  const inventory: InventoryItem[] = viewInventory(character);
+  const hasStarterPack = inventory.some((i) => i.source === 'class-starter' || i.source === 'background-starter');
 
   function acceptStarterEquipment() {
-    const additions: any[] = [];
+    const additions: InventoryItem[] = [];
     if (classEquipment) {
       additions.push({
         id: `class-starter-${character.class_slug}`,
@@ -47,6 +50,7 @@ export default function EquipmentStep({ character, onChange }: Props) {
         name: `Starting kit (${character.class_slug})`,
         description: classEquipment,
         quantity: 1,
+        category: 'gear',
       });
     }
     if (backgroundEquipment) {
@@ -56,21 +60,22 @@ export default function EquipmentStep({ character, onChange }: Props) {
         name: `Background items (${character.background_slug})`,
         description: backgroundEquipment,
         quantity: 1,
+        category: 'gear',
       });
     }
 
     const filtered = inventory.filter(
-      (i) => i?.source !== 'class-starter' && i?.source !== 'background-starter',
+      (i) => i.source !== 'class-starter' && i.source !== 'background-starter',
     );
 
-    onChange({ inventory: [...filtered, ...additions] });
+    onChange({ inventory_v2: [...filtered, ...additions] });
   }
 
   function clearStarter() {
     const filtered = inventory.filter(
-      (i) => i?.source !== 'class-starter' && i?.source !== 'background-starter',
+      (i) => i.source !== 'class-starter' && i.source !== 'background-starter',
     );
-    onChange({ inventory: filtered });
+    onChange({ inventory_v2: filtered });
   }
 
   if (!character.class_slug && !character.background_slug) {

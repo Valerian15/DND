@@ -10,6 +10,7 @@ import type { Character, ClassResource, TimedEffect } from '../character/types';
 import { parseSpellDurationRounds, getSpellConditions, isHealingSpell, buildHealDice } from './spellEffects';
 import { TokenAuraControl } from './TokenAuraControl';
 import { isWeaponProficientForClasses } from '../character/weaponProficiency';
+import { viewEquippedWeapons } from '../character/inventoryView';
 import { parseSpellForAttack, scaleCantripDice } from '../character/attackUtils';
 import { updateTokenHp } from './tokenApi';
 import { socket } from '../../lib/socket';
@@ -719,7 +720,9 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const dexMod = abilityModifier(character.abilities.dex);
   const spellAtk = config ? prof + configAbilityMod : 0;
   const spellDc  = config ? 8 + spellAtk : 0;
-  const hasWeapons = character.weapons?.length > 0;
+  // hasWeapons checks the structured view (inventory_v2 with legacy fallback) so the
+  // Attacks section appears whether or not migration has run.
+  const hasWeapons = viewEquippedWeapons(character).length > 0;
 
   const hitDie = HIT_DIE_BY_CLASS[character.class_slug ?? ''] ?? 8;
   const totalHitDice = character.level;
@@ -1068,16 +1071,22 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                 </div>
               )}
               <div style={{ display: 'grid', gap: '0.35rem' }}>
-                {character.weapons?.map((slug) => {
-                  const w = weaponData[slug];
-                  if (!w) return <div key={slug} style={{ fontSize: '0.8rem', color: '#aaa' }}>{slug}</div>;
+                {viewEquippedWeapons(character).map((item) => {
+                  // Migrated rows carry stats directly; legacy rows fall back to weaponData lookup.
+                  const slug = item.library_slug ?? item.id;
+                  const fallback = weaponData[item.library_slug ?? ''];
+                  const w = item.damage_dice ? item : fallback;
+                  if (!w) return <div key={item.id} style={{ fontSize: '0.8rem', color: '#aaa' }}>{item.name}</div>;
                   const classSlugs = (character.classes && character.classes.length > 0)
                     ? character.classes.map((c) => c.slug)
                     : (character.class_slug ? [character.class_slug] : []);
-                  const proficient = isWeaponProficientForClasses(classSlugs, slug, w.category);
-                  const isFinesse = w.properties.includes('finesse');
-                  const isRanged = w.weapon_type === 'Ranged';
-                  const isHeavy = w.properties.includes('heavy');
+                  const wCategory = (w.weapon_category ?? w.category) as string;
+                  const wProperties = (w.properties ?? []) as string[];
+                  const wType = w.weapon_type as 'Melee' | 'Ranged' | undefined;
+                  const proficient = isWeaponProficientForClasses(classSlugs, slug, wCategory);
+                  const isFinesse = wProperties.includes('finesse');
+                  const isRanged = wType === 'Ranged';
+                  const isHeavy = wProperties.includes('heavy');
                   const powerEligible = (hasGwm && !isRanged && isHeavy) || (hasSharp && isRanged);
                   const abilityMod = isRanged ? dexMod : isFinesse ? Math.max(strMod, dexMod) : strMod;
                   const damageMod  = isFinesse ? Math.max(strMod, dexMod) : isRanged ? dexMod : strMod;
@@ -1089,8 +1098,9 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                   const dmgExpr = w.damage_dice
                     ? `${w.damage_dice}${damageMod !== 0 ? formatModifier(damageMod) : ''}`
                     : null;
+                  const weaponName = w.name ?? item.name;
                   return (
-                    <InGameAttackRow key={slug} name={w.name} tag={`${w.category} ${w.weapon_type}${powerAttack && powerEligible ? ' · −5/+10' : ''}`}
+                    <InGameAttackRow key={item.id} name={weaponName} tag={`${wCategory ?? ''} ${wType ?? ''}${powerAttack && powerEligible ? ' · −5/+10' : ''}`}
                       attackLabel={formatModifier(attackBonus)} damageLabel={damageStr} damageType={w.damage_type}
                       extra={w.versatile_dice ? `${w.versatile_dice}${formatModifier(damageMod)} 2H` : undefined}
                       onRoll={() => {
@@ -1100,7 +1110,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                           socket.emit('combat:resolve_attack', {
                             caster_token_id: tokenId,
                             target_token_ids: selectedTargetIds,
-                            attack_name: w.name,
+                            attack_name: weaponName,
                             attack_bonus: attackBonus,
                             damage_dice: dmgExpr,
                             damage_type: w.damage_type,
@@ -1112,8 +1122,8 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                           return;
                         }
                         // MANUAL MODE: existing behavior
-                        rollInChat(`${w.name} — Attack`, atkExpr);
-                        if (dmgExpr) setTimeout(() => rollInChat(`${w.name} — Damage`, dmgExpr), 80);
+                        rollInChat(`${weaponName} — Attack`, atkExpr);
+                        if (dmgExpr) setTimeout(() => rollInChat(`${weaponName} — Damage`, dmgExpr), 80);
                       }} />
                   );
                 })}

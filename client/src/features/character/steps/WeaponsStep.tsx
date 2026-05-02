@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '../../../lib/api';
 import { isWeaponProficientForClasses } from '../weaponProficiency';
-import type { Character } from '../types';
+import { getLibraryItem } from '../api';
+import { viewInventory } from '../inventoryView';
+import type { Character, InventoryItem } from '../types';
 
 interface WeaponListItem {
   slug: string;
@@ -29,13 +31,48 @@ export default function WeaponsStep({ character, onChange }: Props) {
       .finally(() => setLoading(false));
   }, []);
 
-  const selected = new Set(character.weapons ?? []);
+  // Selected = library_slugs already in the character's inventory_v2 (or legacy fallback view).
+  const inventory: InventoryItem[] = viewInventory(character);
+  const selected = new Set(
+    inventory.filter((i) => i.category === 'weapon' && i.library_slug)
+      .map((i) => i.library_slug!),
+  );
 
-  function toggle(slug: string) {
-    const next = selected.has(slug)
-      ? [...selected].filter((s) => s !== slug)
-      : [...selected, slug];
-    onChange({ weapons: next });
+  async function toggle(weapon: WeaponListItem) {
+    const wasIn = selected.has(weapon.slug);
+    if (wasIn) {
+      const next = inventory.filter((i) => !(i.category === 'weapon' && i.library_slug === weapon.slug));
+      onChange({ inventory_v2: next });
+      return;
+    }
+    // Fetch full weapon data from library to bake metadata into the inventory row.
+    try {
+      const lib = await getLibraryItem<{ name: string; category: string; weapon_type: string; data: any }>('weapons', weapon.slug);
+      const props = Array.isArray(lib.data?.properties)
+        ? lib.data.properties
+        : typeof lib.data?.properties === 'string'
+          ? lib.data.properties.split(',').map((s: string) => s.trim()).filter(Boolean)
+          : [];
+      const newRow: InventoryItem = {
+        id: `it-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        library_slug: weapon.slug,
+        name: lib.name,
+        quantity: 1,
+        category: 'weapon',
+        equipped: true,
+        damage_dice: lib.data?.damage_dice,
+        damage_type: lib.data?.damage_type,
+        weapon_type: lib.weapon_type === 'Ranged' ? 'Ranged' : 'Melee',
+        weapon_category: lib.category === 'Martial' ? 'Martial' : 'Simple',
+        properties: props,
+        range_normal: lib.data?.range_normal,
+        range_long: lib.data?.range_long,
+        versatile_dice: lib.data?.versatile_dice,
+      };
+      onChange({ inventory_v2: [...inventory, newRow] });
+    } catch {
+      /* ignore */
+    }
   }
 
   // Group by "Simple Melee", "Simple Ranged", "Martial Melee", "Martial Ranged"
@@ -87,7 +124,7 @@ export default function WeaponsStep({ character, onChange }: Props) {
                 <button
                   key={w.slug}
                   type="button"
-                  onClick={() => toggle(w.slug)}
+                  onClick={() => toggle(w)}
                   style={{
                     padding: '0.5rem 0.75rem',
                     textAlign: 'left',
