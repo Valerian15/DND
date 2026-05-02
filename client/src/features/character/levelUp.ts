@@ -100,7 +100,8 @@ export function previewLevelUp(
   const newClassLevel = currentClassLevel + 1;
   const newLevel = character.level + 1;
   const conMod = abilityModifier(character.abilities.con);
-  const hpGain = hpGainOnLevelUp(hitDieSize, conMod);
+  const toughBonus = (character.feats ?? []).includes('tough') ? 2 : 0;
+  const hpGain = hpGainOnLevelUp(hitDieSize, conMod) + toughBonus;
   const newHpMax = character.hp_max + hpGain;
 
   // Spells/cantrips known deltas — only meaningful for caster classes with a known table.

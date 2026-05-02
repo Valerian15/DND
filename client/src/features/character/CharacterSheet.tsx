@@ -10,6 +10,7 @@ import { SKILLS } from './skills';
 import { isWeaponProficient, isWeaponProficientForClasses } from './weaponProficiency';
 import { parseSpellForAttack, scaleCantripDice } from './attackUtils';
 import LevelUpDialog from './LevelUpDialog';
+import { MD } from '../library/Statblock';
 
 interface WeaponData {
   slug: string;
@@ -204,8 +205,11 @@ export default function CharacterSheet() {
       hp_max: newHpMax,
       hp_current: newHpCurrent,
     });
+    // Re-derive everything (includes feat-aware HP — Tough +2/level — and recomputes AC + slots).
     const derived = recomputeDerived(updated, hitDieSize);
     updated = await updateCharacter(character.id, {
+      hp_max: derived.hp_max,
+      hp_current: derived.hp_current,
       ac: derived.ac,
       spell_slots: derived.spell_slots,
     });
@@ -486,8 +490,8 @@ export default function CharacterSheet() {
                     {item.quantity && item.quantity > 1 && ` ×${item.quantity}`}
                   </summary>
                   {item.description && (
-                    <div style={{ whiteSpace: 'pre-wrap', fontSize: '0.9rem', marginTop: '0.25rem', color: '#555' }}>
-                      {item.description}
+                    <div style={{ fontSize: '0.9rem', marginTop: '0.25rem', color: '#555' }}>
+                      <MD text={String(item.description)} />
                     </div>
                   )}
                 </details>
