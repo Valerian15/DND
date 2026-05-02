@@ -8,6 +8,7 @@ import { initiative, parseHitDie, passivePerception, proficiencyBonus, recompute
 import { getCasterConfig } from './casters';
 import { SKILLS } from './skills';
 import { isWeaponProficient, isWeaponProficientForClasses } from './weaponProficiency';
+import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity } from './inventoryView';
 import { parseSpellForAttack, scaleCantripDice } from './attackUtils';
 import LevelUpDialog from './LevelUpDialog';
 import { MD } from '../library/Statblock';
@@ -440,23 +441,30 @@ export default function CharacterSheet() {
             const strMod = abilityModifier(character.abilities.str);
             const dexMod = abilityModifier(character.abilities.dex);
 
-            const hasWeapons = character.weapons?.length > 0;
-            if (!hasWeapons) return null;
+            // Equipped weapons via the structured view (inventory_v2 with legacy fallback).
+            const equippedWeapons = viewEquippedWeapons(character);
+            if (equippedWeapons.length === 0) return null;
 
             return (
               <Card>
                 <SectionTitle>Attacks</SectionTitle>
                 <div style={{ display: 'grid', gap: '0.5rem' }}>
-                  {character.weapons?.map((slug) => {
-                    const w = weaponData[slug];
-                    if (!w) return <div key={slug} style={{ fontSize: '0.9rem', color: '#aaa' }}>{slug}</div>;
+                  {equippedWeapons.map((item) => {
+                    // Migrated rows carry their own stats; legacy rows defer to weaponData lookup
+                    // by library_slug (the slug-only synthesis from viewInventory).
+                    const slug = item.library_slug ?? item.id;
+                    const w = item.damage_dice ? item : weaponData[item.library_slug ?? ''];
+                    if (!w) return <div key={item.id} style={{ fontSize: '0.9rem', color: '#aaa' }}>{item.name}</div>;
 
                     const classSlugs = (character.classes && character.classes.length > 0)
                       ? character.classes.map((c) => c.slug)
                       : (character.class_slug ? [character.class_slug] : []);
-                    const proficient = isWeaponProficientForClasses(classSlugs, slug, w.category);
-                    const isFinesse = w.properties.includes('finesse');
-                    const isRanged = w.weapon_type === 'Ranged';
+                    const wCategory = (w.weapon_category ?? w.category) as string;
+                    const wProperties = (w.properties ?? []) as string[];
+                    const wType = w.weapon_type as 'Melee' | 'Ranged' | undefined;
+                    const proficient = isWeaponProficientForClasses(classSlugs, slug, wCategory);
+                    const isFinesse = wProperties.includes('finesse');
+                    const isRanged = wType === 'Ranged';
                     const abilityMod = isRanged ? dexMod : isFinesse ? Math.max(strMod, dexMod) : strMod;
                     const attackBonus = abilityMod + (proficient ? prof : 0);
                     const damageMod = isFinesse ? Math.max(strMod, dexMod) : isRanged ? dexMod : strMod;
@@ -467,10 +475,10 @@ export default function CharacterSheet() {
 
                     return (
                       <AttackRow
-                        key={slug}
-                        name={w.name}
-                        subtitle={`${w.category} ${w.weapon_type}${proficient ? '' : ' · not proficient'}`}
-                        detail={[...w.properties, ...(rangeStr ? [rangeStr] : [])].join(', ')}
+                        key={item.id}
+                        name={w.name ?? item.name}
+                        subtitle={`${wCategory ?? ''} ${wType ?? ''}${proficient ? '' : ' · not proficient'}`}
+                        detail={[...wProperties, ...(rangeStr ? [rangeStr] : [])].join(', ')}
                         attackLabel={formatModifier(attackBonus)}
                         damageLabel={damageStr}
                         damageType={w.damage_type}
@@ -513,7 +521,20 @@ export default function CharacterSheet() {
           })()}
 
           <Card>
-            <SectionTitle>Inventory</SectionTitle>
+            {(() => {
+              const carried = viewTotalWeight(character);
+              const cap = carryCapacity(character);
+              const overEncumbered = carried > cap;
+              return (
+                <>
+                  <SectionTitle>Inventory</SectionTitle>
+                  <div style={{ fontSize: '0.78rem', color: overEncumbered ? '#a44' : '#888', marginBottom: '0.5rem' }}>
+                    Carried: <strong>{carried.toFixed(1)}</strong> / {cap} lb
+                    {overEncumbered && <span style={{ marginLeft: '0.4rem' }}>⚠ over capacity</span>}
+                  </div>
+                </>
+              );
+            })()}
             <InventoryEditor character={character} setCharacter={setCharacter} />
           </Card>
 
@@ -597,14 +618,6 @@ function humanize(slug: string): string {
   return slug.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
 }
 
-interface InventoryItem {
-  id?: string;
-  source?: string;
-  name?: string;
-  quantity?: number;
-  description?: string;
-}
-
 function InventoryEditor({
   character,
   setCharacter,
@@ -618,12 +631,14 @@ function InventoryEditor({
   const [draftDesc, setDraftDesc] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const items = (character.inventory ?? []) as InventoryItem[];
+  // Read via inventory_v2 with legacy fallback. The first write commits the converted
+  // (or augmented) array as the new v2, effectively migrating the character implicitly.
+  const items = viewInventory(character);
 
-  async function persist(next: InventoryItem[]) {
+  async function persist(next: typeof items) {
     setSaving(true);
     try {
-      const updated = await updateCharacter(character.id, { inventory: next });
+      const updated = await updateCharacter(character.id, { inventory_v2: next });
       setCharacter(updated);
     } finally {
       setSaving(false);
@@ -634,10 +649,11 @@ function InventoryEditor({
     const name = draftName.trim();
     if (!name) return;
     const qty = Math.max(1, Math.min(999, parseInt(draftQty, 10) || 1));
-    const item: InventoryItem = {
+    const item = {
       id: `it-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name,
       quantity: qty,
+      category: 'gear' as const,
       description: draftDesc.trim() || undefined,
     };
     await persist([...items, item]);
@@ -664,13 +680,35 @@ function InventoryEditor({
       {items.length === 0 ? (
         <div style={{ color: '#888' }}>Empty.</div>
       ) : (
-        items.map((item, i) => (
+        items.map((item, i) => {
+          const canToggleEquip = item.category === 'weapon' || item.category === 'armor';
+          const toggleEquip = async () => {
+            const next = items.slice();
+            next[i] = { ...next[i], equipped: !next[i].equipped };
+            await persist(next);
+          };
+          const catColors: Record<string, string> = {
+            weapon: '#a83', armor: '#368', tool: '#666', gear: '#888',
+            consumable: '#6a4', treasure: '#c83', other: '#999',
+          };
+          return (
           <details key={item.id ?? i} style={{ marginBottom: '0.4rem' }}>
             <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span title={item.category} style={{ fontSize: '0.6rem', color: '#fff', background: catColors[item.category] ?? '#888', borderRadius: 2, padding: '0.05rem 0.3rem', textTransform: 'uppercase', flexShrink: 0 }}>
+                {item.category[0]}
+              </span>
               <strong style={{ flex: 1 }}>
                 {item.name ?? '(unnamed)'}
                 {(item.quantity ?? 1) > 1 && <span style={{ color: '#888', fontWeight: 400 }}> ×{item.quantity}</span>}
+                {item.weight_lbs && <span style={{ color: '#aaa', fontWeight: 400, fontSize: '0.78rem', marginLeft: '0.4rem' }}>{(item.weight_lbs * (item.quantity ?? 1)).toFixed(1)} lb</span>}
               </strong>
+              {canToggleEquip && (
+                <button onClick={(e) => { e.preventDefault(); toggleEquip(); }} disabled={saving}
+                  title={item.equipped ? 'Equipped (click to unequip)' : 'Click to equip'}
+                  style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', cursor: 'pointer', border: `1px solid ${item.equipped ? '#2a7' : '#ccc'}`, borderRadius: 3, background: item.equipped ? '#e7f7ec' : '#fff', color: item.equipped ? '#2a7' : '#888' }}>
+                  {item.equipped ? '✓ Equipped' : 'Equip'}
+                </button>
+              )}
               <button onClick={(e) => { e.preventDefault(); adjustQty(i, -1); }} disabled={saving || (item.quantity ?? 1) <= 1}
                 style={{ width: 22, height: 22, padding: 0, fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ddd', borderRadius: 3, background: '#fff' }}>−</button>
               <button onClick={(e) => { e.preventDefault(); adjustQty(i, +1); }} disabled={saving}
@@ -684,7 +722,8 @@ function InventoryEditor({
               </div>
             )}
           </details>
-        ))
+          );
+        })
       )}
 
       {adding ? (
