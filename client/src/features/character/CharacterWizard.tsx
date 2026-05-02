@@ -206,7 +206,10 @@ export default function CharacterWizard() {
           </div>
         </div>
 
-        <CharacterPreview character={character} />
+        <CharacterPreview character={character} onJumpToStep={(key) => {
+          const idx = STEPS.findIndex((s) => s.key === key);
+          if (idx >= 0) setStepIndex(idx);
+        }} />
       </div>
     </div>
   );

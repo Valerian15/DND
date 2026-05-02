@@ -2,8 +2,14 @@ import type { Character } from './types';
 import { ABILITY_NAMES, ABILITY_ORDER } from './types';
 import { abilityModifier, formatModifier } from './pointBuy';
 import { proficiencyBonus, initiative } from './rules';
+import { isSubclassUnlocked } from './subclassUnlock';
 
-export default function CharacterPreview({ character }: { character: Character }) {
+interface Props {
+  character: Character;
+  onJumpToStep?: (key: string) => void;
+}
+
+export default function CharacterPreview({ character, onJumpToStep }: Props) {
   const prof = proficiencyBonus(character.level);
   const init = initiative(character.abilities);
   const hasPortrait = !!character.portrait_url;
@@ -106,7 +112,53 @@ export default function CharacterPreview({ character }: { character: Character }
           <div>{character.feats.map((f) => capitalize(f)).join(', ')}</div>
         </div>
       )}
+
+      <ReadinessChecklist character={character} onJumpToStep={onJumpToStep} />
     </aside>
+  );
+}
+
+function ReadinessChecklist({ character, onJumpToStep }: Props) {
+  const classes = character.classes && character.classes.length > 0
+    ? character.classes
+    : (character.class_slug ? [{ slug: character.class_slug, level: character.level || 1, subclass_slug: character.subclass_slug, hit_dice_used: 0 }] : []);
+
+  const items: Array<{ ok: boolean; label: string; step?: string }> = [
+    { ok: !!character.race_slug, label: 'Race picked', step: 'race' },
+    { ok: classes.length > 0, label: 'Class picked', step: 'class' },
+    {
+      ok: classes.length > 0 && classes.every((c) => !isSubclassUnlocked(c.slug, c.level) || !!c.subclass_slug),
+      label: 'Subclass(es) picked',
+      step: 'subclass',
+    },
+    { ok: ABILITY_ORDER.every((k) => character.abilities[k] > 0), label: 'Abilities filled', step: 'abilities' },
+    { ok: !!character.background_slug, label: 'Background picked', step: 'background' },
+    { ok: (character.languages ?? []).length > 0, label: 'Languages chosen', step: 'details' },
+    { ok: !!character.name && character.name.toLowerCase() !== 'unnamed hero', label: 'Name set', step: 'details' },
+  ];
+  const allOk = items.every((i) => i.ok);
+
+  return (
+    <div style={{ marginTop: '1rem', borderTop: '1px solid #eee', paddingTop: '0.75rem' }}>
+      <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: allOk ? '#2a7' : '#a60', marginBottom: '0.4rem' }}>
+        {allOk ? '✓ Ready to play' : 'Ready to play?'}
+      </div>
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: '0.78rem' }}>
+        {items.map((it, i) => (
+          <li key={i}
+            onClick={() => !it.ok && it.step && onJumpToStep?.(it.step)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
+              padding: '0.15rem 0',
+              cursor: !it.ok && it.step && onJumpToStep ? 'pointer' : 'default',
+              color: it.ok ? '#666' : '#a60',
+            }}>
+            <span style={{ width: 14 }}>{it.ok ? '✓' : '○'}</span>
+            <span>{it.label}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
