@@ -44,6 +44,27 @@ export const MULTICLASS_SKILL_COUNT: Record<string, number> = {
 };
 
 /**
+ * Number of expertise picks unlocked at a given class level.
+ * Rogue: 2 at L1, +2 at L6.  Bard: 2 at L3, +2 at L10.
+ * Returns 0 for classes with no expertise.
+ */
+export function expertiseSlotsAtLevel(classSlug: string, classLevel: number): number {
+  if (classSlug === 'rogue') {
+    let slots = 0;
+    if (classLevel >= 1) slots += 2;
+    if (classLevel >= 6) slots += 2;
+    return slots;
+  }
+  if (classSlug === 'bard') {
+    let slots = 0;
+    if (classLevel >= 3) slots += 2;
+    if (classLevel >= 10) slots += 2;
+    return slots;
+  }
+  return 0;
+}
+
+/**
  * Parse a class's prof_skills string into a list of skill keys the player can choose from.
  * Handles:
  * - "Choose two from Arcana, History, ..."  → the listed skills

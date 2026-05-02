@@ -382,12 +382,15 @@ export default function CharacterSheet() {
               <SectionTitle>Skills</SectionTitle>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.25rem 1rem' }}>
                 {SKILLS.map((sk) => {
-                  const proficient = !!profSkills[sk.key]?.proficient;
-                  const mod = abilityModifier(character.abilities[sk.ability]) + (proficient ? prof : 0);
+                  const entry = profSkills[sk.key] as { proficient?: boolean; expertise?: boolean } | undefined;
+                  const proficient = !!entry?.proficient;
+                  const expertise = !!entry?.expertise;
+                  const profMod = expertise ? prof * 2 : proficient ? prof : 0;
+                  const mod = abilityModifier(character.abilities[sk.ability]) + profMod;
                   return (
                     <Row key={sk.key}>
                       <span>
-                        {proficient ? '●' : '○'} {sk.name}{' '}
+                        {expertise ? '⬢' : proficient ? '●' : '○'} {sk.name}{' '}
                         <span style={{ color: '#999', fontSize: '0.8rem' }}>({ABILITY_NAMES[sk.ability].slice(0,3)})</span>
                       </span>
                       <span>{formatModifier(mod)}</span>

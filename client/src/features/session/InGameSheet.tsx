@@ -1266,15 +1266,19 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
           <Section title="Skills">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.15rem 1rem' }}>
               {SKILLS.map((sk) => {
+                const entry = profSkills[sk.key] as { proficient?: boolean; expertise?: boolean } | undefined;
                 const mod = abilityModifier(character.abilities[sk.ability]);
-                const isProficient = !!(profSkills[sk.key] as any)?.proficient;
-                const total = mod + (isProficient ? prof : 0);
+                const isProficient = !!entry?.proficient;
+                const isExpertise = !!entry?.expertise;
+                const profMod = isExpertise ? prof * 2 : isProficient ? prof : 0;
+                const total = mod + profMod;
+                const marker = isExpertise ? '⬢ ' : isProficient ? '◆ ' : '◇ ';
                 return (
                   <div key={sk.key} onClick={() => rollInChat(`${sk.name} Check`, `1d20${formatModifier(total)}`)}
                     style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.1rem 0.3rem', borderRadius: 3, cursor: 'pointer' }}
-                    title={`Roll ${sk.name} check`}>
+                    title={`Roll ${sk.name} check${isExpertise ? ' (expertise)' : ''}`}>
                     <span style={{ color: '#444', fontWeight: isProficient ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {isProficient ? '◆ ' : '◇ '}{sk.name}
+                      {marker}{sk.name}
                     </span>
                     <span style={{ fontWeight: 600, flexShrink: 0, marginLeft: 4 }}>{formatModifier(total)}</span>
                   </div>

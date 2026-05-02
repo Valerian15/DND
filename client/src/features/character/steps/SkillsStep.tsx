@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Character } from '../types';
 import { getLibraryItem } from '../api';
-import { SKILLS, CLASS_SKILL_COUNT, MULTICLASS_SKILL_COUNT, parseClassSkillChoices } from '../skills';
+import { SKILLS, CLASS_SKILL_COUNT, MULTICLASS_SKILL_COUNT, parseClassSkillChoices, expertiseSlotsAtLevel } from '../skills';
 import { ABILITY_NAMES } from '../types';
 import { abilityModifier, formatModifier } from '../pointBuy';
 import { proficiencyBonus } from '../rules';
@@ -14,6 +14,7 @@ interface Props {
 interface SkillEntry {
   proficient?: boolean;
   source?: string;
+  expertise?: boolean;
 }
 
 export default function SkillsStep({ character, onChange }: Props) {
@@ -121,6 +122,25 @@ export default function SkillsStep({ character, onChange }: Props) {
   const profBonus = proficiencyBonus(character.level);
   const remaining = maxChoices - classPicked.size;
 
+  // Expertise: sum slots across all classes (rogue 2 at L1 / +2 at L6, bard 2 at L3 / +2 at L10).
+  const expertiseSlots = classes.reduce((sum, c) => sum + expertiseSlotsAtLevel(c.slug, c.level), 0);
+  const expertiseSelected = new Set(
+    Object.entries(skillsMap).filter(([_, v]) => v?.expertise).map(([k]) => k),
+  );
+
+  function toggleExpertise(skillKey: string) {
+    const entry = skillsMap[skillKey];
+    if (!entry?.proficient) return;
+    const next = { ...skillsMap };
+    if (entry.expertise) {
+      next[skillKey] = { ...entry, expertise: false };
+    } else {
+      if (expertiseSelected.size >= expertiseSlots) return;
+      next[skillKey] = { ...entry, expertise: true };
+    }
+    onChange({ skills: next });
+  }
+
   // Orphans: class picks (non-background) that are not in the class's allowed list
   const hasOrphans = [...classPicked].some((k) => !allowedSkills.includes(k));
 
@@ -211,17 +231,45 @@ export default function SkillsStep({ character, onChange }: Props) {
                 <span style={{ fontSize: '0.8rem', color: '#888' }}>({ABILITY_NAMES[skill.ability].slice(0, 3)})</span>
                 {isBg && <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#27a' }}>background</span>}
                 {isRace && <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#2a7' }}>race</span>}
+                {expertiseSelected.has(skill.key) && <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#a60' }}>expertise</span>}
               </span>
               <span style={{ fontSize: '0.9rem' }}>
-                {formatModifier(total)}
+                {formatModifier(total + (expertiseSelected.has(skill.key) ? profBonus : 0))}
                 {isProf && (
-                  <span style={{ color: isBg ? '#27a' : isOrphan ? '#a60' : '#2a7', marginLeft: '0.5rem' }}>●</span>
+                  <span style={{ color: isBg ? '#27a' : isOrphan ? '#a60' : '#2a7', marginLeft: '0.5rem' }}>{expertiseSelected.has(skill.key) ? '⬢' : '●'}</span>
                 )}
               </span>
             </button>
           );
         })}
       </div>
+
+      {expertiseSlots > 0 && (
+        <div style={{ marginTop: '1.25rem', padding: '0.75rem', background: '#fdf3e0', border: '1px solid #ecd87a', borderRadius: 6 }}>
+          <h3 style={{ marginTop: 0, marginBottom: '0.4rem', fontSize: '1rem' }}>Expertise ({expertiseSelected.size} / {expertiseSlots})</h3>
+          <p style={{ fontSize: '0.82rem', color: '#666', margin: '0 0 0.6rem' }}>
+            Pick {expertiseSlots} skill{expertiseSlots > 1 ? 's' : ''} you're proficient in to double your proficiency bonus on its checks.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {SKILLS.filter((s) => proficient.has(s.key)).map((s) => {
+              const isExp = expertiseSelected.has(s.key);
+              const canPick = isExp || expertiseSelected.size < expertiseSlots;
+              return (
+                <button key={s.key} type="button" onClick={() => toggleExpertise(s.key)} disabled={!canPick}
+                  style={{
+                    padding: '0.25rem 0.55rem', fontSize: '0.8rem',
+                    border: `1px solid ${isExp ? '#a60' : '#ddd'}`,
+                    background: isExp ? '#a60' : '#fff',
+                    color: isExp ? '#fff' : canPick ? '#666' : '#bbb',
+                    borderRadius: 4, cursor: canPick ? 'pointer' : 'not-allowed', fontWeight: isExp ? 700 : 400,
+                  }}>
+                  {s.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
