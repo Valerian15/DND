@@ -36,6 +36,14 @@ export const CLASS_SKILL_COUNT: Record<string, number> = {
 };
 
 /**
+ * Skill grants when MULTICLASSING into a class (PHB p.164). Most classes grant 0;
+ * rogue/bard/ranger each grant +1 skill from their list when added as a secondary class.
+ */
+export const MULTICLASS_SKILL_COUNT: Record<string, number> = {
+  bard: 1, ranger: 1, rogue: 1,
+};
+
+/**
  * Parse a class's prof_skills string into a list of skill keys the player can choose from.
  * Handles:
  * - "Choose two from Arcana, History, ..."  → the listed skills

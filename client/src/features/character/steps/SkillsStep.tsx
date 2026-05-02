@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Character } from '../types';
 import { getLibraryItem } from '../api';
-import { SKILLS, CLASS_SKILL_COUNT, parseClassSkillChoices } from '../skills';
+import { SKILLS, CLASS_SKILL_COUNT, MULTICLASS_SKILL_COUNT, parseClassSkillChoices } from '../skills';
 import { ABILITY_NAMES } from '../types';
 import { abilityModifier, formatModifier } from '../pointBuy';
 import { proficiencyBonus } from '../rules';
@@ -19,23 +19,48 @@ interface SkillEntry {
 export default function SkillsStep({ character, onChange }: Props) {
   const [allowedSkills, setAllowedSkills] = useState<string[]>([]);
   const [maxChoices, setMaxChoices] = useState(0);
+  const [classBreakdown, setClassBreakdown] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
+  // Source of truth: classes[] if populated, else legacy class_slug.
+  const classes = character.classes && character.classes.length > 0
+    ? character.classes
+    : (character.class_slug ? [{ slug: character.class_slug, level: character.level || 1, subclass_slug: null, hit_dice_used: 0 }] : []);
+
   useEffect(() => {
-    if (!character.class_slug) {
+    if (classes.length === 0) {
       setAllowedSkills([]);
       setMaxChoices(0);
+      setClassBreakdown('');
       return;
     }
     setLoading(true);
-    getLibraryItem<{ data: any }>('classes', character.class_slug)
-      .then((r) => {
-        const choices = parseClassSkillChoices(r.data?.prof_skills);
-        setAllowedSkills(choices);
-        setMaxChoices(CLASS_SKILL_COUNT[character.class_slug!] ?? 2);
-      })
-      .finally(() => setLoading(false));
-  }, [character.class_slug]);
+    Promise.all(classes.map((c, idx) =>
+      getLibraryItem<{ data: any; name: string }>('classes', c.slug)
+        .then((r) => {
+          const choices = parseClassSkillChoices(r.data?.prof_skills);
+          // Primary class uses full skill count; secondary classes use the multiclass
+          // grant (0 unless rogue/bard/ranger).
+          const count = idx === 0
+            ? (CLASS_SKILL_COUNT[c.slug] ?? 2)
+            : (MULTICLASS_SKILL_COUNT[c.slug] ?? 0);
+          return { name: r.name, choices, count };
+        })
+        .catch(() => ({ name: c.slug, choices: [] as string[], count: 0 })),
+    )).then((results) => {
+      const allowed = new Set<string>();
+      for (const r of results) for (const k of r.choices) allowed.add(k);
+      const total = results.reduce((sum, r) => sum + r.count, 0);
+      const parts = results
+        .filter((r) => r.count > 0)
+        .map((r) => `${r.count} from ${r.name}`)
+        .join(' + ');
+      setAllowedSkills([...allowed]);
+      setMaxChoices(total);
+      setClassBreakdown(parts);
+    }).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classes.map((c) => c.slug).join(',')]);
 
   const skillsMap = character.skills as Record<string, SkillEntry>;
 
@@ -84,7 +109,7 @@ export default function SkillsStep({ character, onChange }: Props) {
     }
   }
 
-  if (!character.class_slug) {
+  if (classes.length === 0) {
     return (
       <div>
         <h2 style={{ marginTop: 0 }}>Skills</h2>
@@ -103,8 +128,9 @@ export default function SkillsStep({ character, onChange }: Props) {
     <div>
       <h2 style={{ marginTop: 0 }}>Skill proficiencies</h2>
       <p style={{ color: '#666' }}>
-        Your class lets you pick {maxChoices} skill proficienc{maxChoices === 1 ? 'y' : 'ies'}.
-        Background-granted skills are shown but don't count against your class budget.
+        Pick {maxChoices} skill proficienc{maxChoices === 1 ? 'y' : 'ies'} from your class{classes.length > 1 ? 'es' : ''}' lists.
+        {classes.length > 1 && classBreakdown && <span style={{ display: 'block', fontSize: '0.85rem', color: '#888', marginTop: '0.2rem' }}>({classBreakdown})</span>}
+        Background- and race-granted skills are shown but don't count against your class budget.
       </p>
 
       {loading && <p>Loading class skill list…</p>}
