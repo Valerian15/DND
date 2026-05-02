@@ -1,4 +1,4 @@
-import type { AbilityKey } from './types';
+import type { AbilityKey, ClassEntry } from './types';
 import type { CasterType } from './rules';
 
 export interface CasterConfig {
@@ -10,7 +10,7 @@ export interface CasterConfig {
   /** How spells are gained — 'known' means you pick from the class list and they're always available.
    *  'prepared' means you pick from a bigger pool daily. */
   model: 'known' | 'prepared' | 'spellbook';
-  /** If 'known', the number of spells known per level (index = character level). null = not a spellcaster at that level. */
+  /** If 'known', the number of spells known per level (index = class level). null = not a spellcaster at that level. */
   spellsKnownByLevel?: (number | null)[];
   /** Cantrips known per level */
   cantripsKnownByLevel: (number | null)[];
@@ -18,6 +18,13 @@ export interface CasterConfig {
   preparedFormula?: 'ability+level' | 'ability+halfLevel';
   /** For rangers/paladins that don't get spells at level 1 */
   firstSpellLevel?: number;
+  /**
+   * Override the class list this caster picks from. Defaults to classSlug.
+   * Eldritch Knight + Arcane Trickster pick from the wizard list, not fighter/rogue.
+   */
+  spellListClass?: string;
+  /** Display label for the caster section. Defaults to capitalize(classSlug). */
+  label?: string;
 }
 
 // Index 0 = level 1, index 1 = level 2, etc. up to level 20.
@@ -90,11 +97,52 @@ export const CASTER_CONFIG: CasterConfig[] = [
     spellsKnownByLevel: [2,3,4,5,6,7,8,9,10,10,11,11,12,12,13,13,14,14,15,15],
     cantripsKnownByLevel: [2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4],
   },
+  // Third-caster subclasses. Class level is the FIGHTER/ROGUE level, not character level.
+  {
+    classSlug: 'eldritch-knight',
+    type: 'third',
+    ability: 'int',
+    model: 'known',
+    spellListClass: 'wizard',
+    label: 'Eldritch Knight',
+    firstSpellLevel: 3,
+    // Spells Known by class level (index = class level - 1). PHB p.75.
+    spellsKnownByLevel: [null,null,3,4,4,4,5,6,6,7,8,8,9,10,10,11,11,11,12,13],
+    // Cantrips Known by class level: L3 = 2, L10 = 3.
+    cantripsKnownByLevel: [null,null,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3],
+  },
+  {
+    classSlug: 'arcane-trickster',
+    type: 'third',
+    ability: 'int',
+    model: 'known',
+    spellListClass: 'wizard',
+    label: 'Arcane Trickster',
+    firstSpellLevel: 3,
+    // Spells Known by class level. PHB p.98.
+    spellsKnownByLevel: [null,null,3,4,4,4,5,6,6,7,8,8,9,10,10,11,11,11,12,13],
+    // Cantrips: L3 grants 3 (mage hand + 2). L10 = 4.
+    cantripsKnownByLevel: [null,null,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4],
+  },
 ];
 
 export function getCasterConfig(classSlug: string | null): CasterConfig | null {
   if (!classSlug) return null;
   return CASTER_CONFIG.find((c) => c.classSlug === classSlug) ?? null;
+}
+
+/**
+ * Resolve a caster config for a class entry, including the third-caster subclass overrides
+ * (Eldritch Knight on a fighter, Arcane Trickster on a rogue).
+ */
+export function getCasterConfigForEntry(entry: ClassEntry): CasterConfig | null {
+  if (entry.slug === 'fighter' && entry.subclass_slug === 'eldritch-knight') {
+    return getCasterConfig('eldritch-knight');
+  }
+  if (entry.slug === 'rogue' && entry.subclass_slug === 'arcane-trickster') {
+    return getCasterConfig('arcane-trickster');
+  }
+  return getCasterConfig(entry.slug);
 }
 
 /** Given a config + character level + ability mod, how many spells can they prepare? */
