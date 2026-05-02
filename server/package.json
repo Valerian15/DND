@@ -7,6 +7,7 @@
     "seed": "tsx src/db/seed.ts",
     "seed:srd": "tsx src/db/seedSrd.ts",
     "seed:expanded": "tsx src/db/seedExpanded.ts",
+    "migrate:equipment": "tsx src/db/migrateEquipment.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
