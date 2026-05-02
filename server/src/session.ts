@@ -612,6 +612,58 @@ function rageOffenseBonus(barbarianLevel: number): number {
   return 2;
 }
 
+/** Find the rogue level for a PC character. Mirror of getBarbarianLevel. */
+function getRogueLevel(characterId: number | null): number {
+  if (!characterId) return 0;
+  const ch = db.prepare('SELECT class_slug, level, classes FROM characters WHERE id = ?').get(characterId) as { class_slug: string | null; level: number; classes: string } | undefined;
+  if (!ch) return 0;
+  try {
+    const classes = JSON.parse(ch.classes ?? '[]') as Array<{ slug: string; level: number }>;
+    if (Array.isArray(classes) && classes.length > 0) {
+      const rg = classes.find((c) => c.slug === 'rogue');
+      return rg?.level ?? 0;
+    }
+  } catch { /* fall through */ }
+  return ch.class_slug === 'rogue' ? ch.level : 0;
+}
+
+/** Sneak attack dice count = ceil(rogueLevel / 2). */
+function sneakAttackDiceCount(rogueLevel: number): number {
+  if (rogueLevel <= 0) return 0;
+  return Math.ceil(rogueLevel / 2);
+}
+
+/**
+ * RAW sneak attack eligibility (without checking weapon type, which we don't track):
+ *   - the attacker is a rogue PC who hasn't sneak-attacked this turn
+ *   - either the attack roll has advantage OR a non-target, non-attacker creature is
+ *     within 5 ft of the target (Chebyshev ≤ 1 on a 5-ft grid)
+ */
+function checkSneakAttackEligible(
+  attackerTokenId: number,
+  attackerCharacterId: number | null,
+  targetTokenId: number,
+  hadAdvantage: boolean,
+): boolean {
+  if (!attackerCharacterId) return false;
+  const ch = db.prepare('SELECT sneak_used_this_turn FROM characters WHERE id = ?').get(attackerCharacterId) as { sneak_used_this_turn: number } | undefined;
+  if (!ch || ch.sneak_used_this_turn) return false;
+  if (getRogueLevel(attackerCharacterId) <= 0) return false;
+  if (hadAdvantage) return true;
+
+  // Adjacency check: pull target's row + every other token on the same map; any token
+  // (except the attacker itself) within Chebyshev distance 1 counts as flanking.
+  const target = db.prepare('SELECT map_id, col, row FROM tokens WHERE id = ?').get(targetTokenId) as { map_id: number; col: number; row: number } | undefined;
+  if (!target) return false;
+  const others = db.prepare('SELECT id, col, row FROM tokens WHERE map_id = ? AND id != ? AND id != ?')
+    .all(target.map_id, targetTokenId, attackerTokenId) as Array<{ id: number; col: number; row: number }>;
+  return others.some((t) => Math.abs(t.col - target.col) <= 1 && Math.abs(t.row - target.row) <= 1);
+}
+
+function consumeSneakAttack(characterId: number) {
+  db.prepare('UPDATE characters SET sneak_used_this_turn = 1 WHERE id = ?').run(characterId);
+}
+
 /**
  * Rage defense: resistance to bludgeoning/piercing/slashing while raging. Halves damage
  * AFTER the existing resistance multiplier from `damageModifierForToken` (applies once).
@@ -1177,7 +1229,7 @@ export function setupSession(io: AppServer) {
         const tokRow = db.prepare('SELECT character_id FROM tokens WHERE id = ?')
           .get(startingEntry.token_id) as { character_id: number | null } | undefined;
         if (tokRow?.character_id != null) {
-          db.prepare('UPDATE characters SET action_used = 0, bonus_used = 0, reaction_used = 0 WHERE id = ?')
+          db.prepare('UPDATE characters SET action_used = 0, bonus_used = 0, reaction_used = 0, sneak_used_this_turn = 0 WHERE id = ?')
             .run(tokRow.character_id);
           io.to(`campaign:${campaign_id}`).emit('character:turn_reset', { character_id: tokRow.character_id });
         }
@@ -1562,6 +1614,14 @@ export function setupSession(io: AppServer) {
         }
       }
 
+      // Sneak attack scaffolding: figure out how many dice to add per-target on hit. The
+      // actual eligibility check (advantage / adjacent ally / once-per-turn) happens inside
+      // the per-target loop. We don't track weapon-type, so all non-spell rogue attacks are
+      // candidate.
+      const rogueLevel = !is_spell && casterToken?.character_id ? getRogueLevel(casterToken.character_id) : 0;
+      const sneakDiceCount = sneakAttackDiceCount(rogueLevel);
+      let sneakAlreadyAppliedThisAction = false; // once per turn — don't burn on multiple targets in one Attack action
+
       const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
 
       // Counterspell offer for spell attacks (Fire Bolt, Disintegrate, etc.). Skipped for
@@ -1678,17 +1738,40 @@ export function setupSession(io: AppServer) {
           continue;
         }
 
+        // Sneak attack: roll the sneak dice as their own pool added to weapon damage if
+        // eligible. Crit doubles the dice; once-per-turn enforced via sneakAlreadyAppliedThisAction.
+        let sneakDiceLanded = 0;
+        let sneakRollTotal = 0;
+        let sneakRollDice: number[] = [];
+        if (sneakDiceCount > 0 && !sneakAlreadyAppliedThisAction
+            && checkSneakAttackEligible(caster_token_id, casterToken?.character_id ?? null, tid, isAdv)) {
+          const count = isCrit ? sneakDiceCount * 2 : sneakDiceCount;
+          for (let i = 0; i < count; i++) {
+            const r = Math.floor(Math.random() * 6) + 1;
+            sneakRollDice.push(r);
+            sneakRollTotal += r;
+          }
+          sneakDiceLanded = count;
+          sneakAlreadyAppliedThisAction = true;
+          if (casterToken?.character_id) consumeSneakAttack(casterToken.character_id);
+        }
+
         // Damage roll (with crit doubling dice)
         const dmg = isCrit ? rollCritDamage(effectiveDamageDice) : rollDiceExpression(effectiveDamageDice);
+        // Bake sneak attack roll into the totals BEFORE resistance multipliers — sneak
+        // attack damage is the same type as the weapon attack so it's affected the same way.
+        const baseDamageTotal = dmg.total + sneakRollTotal;
         const dmgMod = damageModifierForToken(target, damage_type);
-        let adjustedTotal = dmgMod.multiplier === 1 ? dmg.total : Math.floor(dmg.total * dmgMod.multiplier);
+        let adjustedTotal = dmgMod.multiplier === 1 ? baseDamageTotal : Math.floor(baseDamageTotal * dmgMod.multiplier);
         const ham = applyHeavyArmorMaster(target, damage_type, adjustedTotal);
         adjustedTotal = ham.adjusted;
         const rageDef = applyRageDefense(target, damage_type, adjustedTotal);
         adjustedTotal = rageDef.adjusted;
+        const sneakSuffix = sneakDiceLanded > 0 ? ` (+${sneakRollTotal} sneak attack ${sneakDiceLanded}d6${isCrit ? ' crit-doubled' : ''})` : '';
         const modSuffix = (dmgMod.label ? ` (${dmgMod.label})` : '')
           + (ham.reduced ? ' (HAM −3)' : '')
-          + (rageDef.reduced ? ' (rage)' : '');
+          + (rageDef.reduced ? ' (rage)' : '')
+          + sneakSuffix;
         const dmgLabel = `${target.label} — ${attack_name} ${damage_type || 'damage'}${isCrit ? ' (crit!)' : ''}${modSuffix}`;
         const undoMeta = adjustedTotal > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
         const dmgData = JSON.stringify({ expression: effectiveDamageDice, dice: dmg.rolls, modifier: dmg.modifier, total: adjustedTotal, label: dmgLabel, ...undoMeta });

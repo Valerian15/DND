@@ -502,6 +502,10 @@ export function initSchema() {
   // Walking speed in feet (race + feat modifiers). Default 30 covers most Medium races.
   try { db.exec('ALTER TABLE characters ADD COLUMN speed_walk INTEGER NOT NULL DEFAULT 30'); } catch { /* exists */ }
 
+  // Sneak Attack tracker (rogue): 1 = sneak attack already fired this turn. Cleared on
+  // initiative:next_turn for the character whose turn just ended.
+  try { db.exec('ALTER TABLE characters ADD COLUMN sneak_used_this_turn INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+
   // Saved encounters — DM snapshots the active map's tokens + initiative, restore later.
   db.exec(`
     CREATE TABLE IF NOT EXISTS encounters (
