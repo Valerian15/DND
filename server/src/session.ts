@@ -3,6 +3,7 @@ import { verifyToken, type AuthUser } from './auth/index.js';
 import { db } from './db/index.js';
 import { broadcastFiltered, getIo } from './io.js';
 import { offerReaction, resolveReaction, cancelOffers } from './reactions.js';
+import { addToDamageExpression, reduceDamageForHam } from './combatMath.js';
 import { canUserSeeToken, hydrateToken, broadcastFogTokenChanges, VALID_CONDITIONS, type TokenRow } from './routes/tokens.js';
 import { computeAndSaveFog, getVisibleSet } from './vision.js';
 
@@ -545,36 +546,14 @@ function counterspellAbility(classSlug: string | null): 'int' | 'cha' {
   }
 }
 
-/**
- * Heavy Armor Master: -3 damage from bludgeoning/piercing/slashing.
- * RAW also requires heavy armor + nonmagical source — we apply more loosely (no armor/source
- * tracking). Returns the adjusted damage (never below 0).
- */
+/** Wrapper around reduceDamageForHam that resolves the feat from the target's character row. */
 function applyHeavyArmorMaster(
   target: { character_id: number | null },
   damageType: string,
   dmg: number,
 ): { adjusted: number; reduced: boolean } {
-  if (dmg <= 0 || !target.character_id) return { adjusted: dmg, reduced: false };
-  const dt = (damageType || '').toLowerCase().trim();
-  if (dt !== 'bludgeoning' && dt !== 'piercing' && dt !== 'slashing') {
-    return { adjusted: dmg, reduced: false };
-  }
-  if (!getCharacterFeats(target.character_id).has('heavy-armor-master')) {
-    return { adjusted: dmg, reduced: false };
-  }
-  return { adjusted: Math.max(0, dmg - 3), reduced: true };
-}
-
-/** Add a flat bonus to a "NdM[+X]" damage expression. Returns the original on parse failure. */
-function addToDamageExpression(expr: string, bonus: number): string {
-  const m = expr.replace(/\s+/g, '').match(/^(\d+d\d+)([+-]\d+)?$/i);
-  if (!m) return expr;
-  const dice = m[1];
-  const mod = m[2] ? parseInt(m[2], 10) : 0;
-  const next = mod + bonus;
-  if (next === 0) return dice;
-  return `${dice}${next > 0 ? '+' : ''}${next}`;
+  const hasHam = !!target.character_id && getCharacterFeats(target.character_id).has('heavy-armor-master');
+  return reduceDamageForHam(hasHam, damageType, dmg);
 }
 
 /** Load the feats array for a PC character. Returns an empty Set if missing or unparseable. */
