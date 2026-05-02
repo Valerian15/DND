@@ -99,6 +99,13 @@ export default function CharacterPreview({ character }: { character: Character }
           </div>
         </div>
       )}
+
+      {character.feats && character.feats.length > 0 && (
+        <div style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: '#666' }}>
+          <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>Feats</div>
+          <div>{character.feats.map((f) => capitalize(f)).join(', ')}</div>
+        </div>
+      )}
     </aside>
   );
 }
