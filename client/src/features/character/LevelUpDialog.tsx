@@ -146,7 +146,7 @@ export default function LevelUpDialog({ character, hitDieSize, onConfirm, onCanc
             )}
 
             {asiMode === 'skip' && (
-              <p style={{ color: '#888', fontSize: '0.9rem' }}>No ability scores will change. Feat selection will be added in a later phase.</p>
+              <p style={{ color: '#888', fontSize: '0.9rem' }}>No ability scores will change. Add the feat you took instead in the Feats step of the character editor.</p>
             )}
 
             {projectedAbilities && (
