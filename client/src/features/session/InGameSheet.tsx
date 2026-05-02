@@ -1034,8 +1034,24 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             const hasGwm = feats.includes('great-weapon-master');
             const hasSharp = feats.includes('sharpshooter');
             const showPowerAttack = hasGwm || hasSharp;
+            // Extra Attack count from each class' level (PHB):
+            //   Fighter: 2 at L5, 3 at L11, 4 at L20
+            //   Paladin / Ranger / Barbarian / Monk: 2 at L5
+            //   Eldritch Knight / Arcane Trickster: same as parent class
+            //   Multiclass note: pick the highest among classes (don't stack).
+            const classes = character.classes ?? (character.class_slug ? [{ slug: character.class_slug, level: character.level }] : []);
+            const extraAttackCount = classes.reduce((max, c) => {
+              if (c.slug === 'fighter') {
+                if (c.level >= 20) return Math.max(max, 4);
+                if (c.level >= 11) return Math.max(max, 3);
+                if (c.level >= 5) return Math.max(max, 2);
+              } else if (['paladin', 'ranger', 'barbarian', 'monk'].includes(c.slug) && c.level >= 5) {
+                return Math.max(max, 2);
+              }
+              return max;
+            }, 1);
             return (
-            <Section title="Attacks">
+            <Section title={extraAttackCount > 1 ? `Attacks (×${extraAttackCount} per Attack action)` : 'Attacks'}>
               {showPowerAttack && (
                 <div style={{ marginBottom: '0.4rem' }}>
                   <button onClick={() => setPowerAttack(!powerAttack)}
