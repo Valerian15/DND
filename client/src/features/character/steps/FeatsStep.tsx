@@ -31,6 +31,26 @@ interface FeatGrants {
   resilient?: { ability: AbilityKey };
 }
 
+const ABILITY_WORD_TO_KEY: Record<string, AbilityKey> = {
+  strength: 'str', str: 'str',
+  dexterity: 'dex', dex: 'dex',
+  constitution: 'con', con: 'con',
+  intelligence: 'int', int: 'int',
+  wisdom: 'wis', wis: 'wis',
+  charisma: 'cha', cha: 'cha',
+};
+
+/** Parse a prerequisite line into an {ability, minScore} pair. Returns null if unparseable. */
+function parseAbilityPrereq(prereq: string | undefined): { ability: AbilityKey; minScore: number } | null {
+  if (!prereq) return null;
+  const m = prereq.match(/(strength|str|dexterity|dex|constitution|con|intelligence|int|wisdom|wis|charisma|cha)\s+(\d+)/i);
+  if (!m) return null;
+  const ability = ABILITY_WORD_TO_KEY[m[1].toLowerCase()];
+  const minScore = parseInt(m[2], 10);
+  if (!ability || !Number.isFinite(minScore)) return null;
+  return { ability, minScore };
+}
+
 export default function FeatsStep({ character, onChange }: Props) {
   const [allFeats, setAllFeats] = useState<LibraryItem[]>([]);
   const [details, setDetails] = useState<Record<string, FeatData>>({});
@@ -41,26 +61,23 @@ export default function FeatsStep({ character, onChange }: Props) {
 
   useEffect(() => {
     listLibrary('feats')
-      .then((items) => setAllFeats(items))
+      .then(async (items) => {
+        setAllFeats(items);
+        // Lazy-load prereqs for the picker so ineligible feats can be greyed out.
+        const results = await Promise.all(items.map((it) =>
+          getLibraryItem<{ name: string; data: FeatData }>('feats', it.slug)
+            .then((r) => ({ slug: it.slug, data: { ...r.data, name: r.name } as FeatData }))
+            .catch(() => null),
+        ));
+        setDetails((prev) => {
+          const next = { ...prev };
+          for (const r of results) if (r) next[r.slug] = r.data;
+          return next;
+        });
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
-
-  useEffect(() => {
-    const missing = selected.filter((s) => !details[s]);
-    if (missing.length === 0) return;
-    Promise.all(missing.map((slug) =>
-      getLibraryItem<{ name: string; data: FeatData }>('feats', slug)
-        .then((r) => ({ slug, data: { ...r.data, name: r.name } as FeatData }))
-        .catch(() => null),
-    )).then((results) => {
-      setDetails((prev) => {
-        const next = { ...prev };
-        for (const r of results) if (r) next[r.slug] = r.data;
-        return next;
-      });
-    });
-  }, [selected, details]);
 
   function addFeat() {
     if (!picking || selected.includes(picking)) return;
@@ -200,13 +217,31 @@ export default function FeatsStep({ character, onChange }: Props) {
           {allFeats
             .filter((f) => !selected.includes(f.slug))
             .sort((a, b) => a.name.localeCompare(b.name))
-            .map((f) => <option key={f.slug} value={f.slug}>{f.name}</option>)}
+            .map((f) => {
+              const prereq = parseAbilityPrereq(details[f.slug]?.prerequisite);
+              const meets = !prereq || character.abilities[prereq.ability] >= prereq.minScore;
+              const suffix = !meets && prereq
+                ? ` — needs ${prereq.ability.toUpperCase()} ${prereq.minScore}`
+                : '';
+              return <option key={f.slug} value={f.slug}>{meets ? '' : '⚠ '}{f.name}{suffix}</option>;
+            })}
         </select>
         <button onClick={addFeat} disabled={!picking}
           style={{ padding: '0.5rem 1rem', background: picking ? '#333' : '#ccc', color: '#fff', border: 'none', borderRadius: 4, cursor: picking ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
           + Add
         </button>
       </div>
+      {(() => {
+        const prereq = picking ? parseAbilityPrereq(details[picking]?.prerequisite) : null;
+        if (!prereq) return null;
+        const meets = character.abilities[prereq.ability] >= prereq.minScore;
+        if (meets) return null;
+        return (
+          <p style={{ marginTop: '0.5rem', color: '#a60', fontSize: '0.82rem' }}>
+            Prereq: {prereq.ability.toUpperCase()} {prereq.minScore} (you have {character.abilities[prereq.ability]}). You can still add this feat — the wizard won't block you — but the character won't legally meet the prerequisite.
+          </p>
+        );
+      })()}
     </div>
   );
 }

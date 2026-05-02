@@ -115,6 +115,14 @@ export default function LevelUpDialog({ character, hitDieSize, onConfirm, onCanc
           <div><strong>HP gain:</strong> +{preview.hpGain} (fixed average d{effectiveHitDie})</div>
           <div><strong>New HP max:</strong> {preview.newHpMax}</div>
           {requiresAsi && <div style={{ color: '#a60', marginTop: '0.5rem' }}>⚡ This {capitalize(targetClass)} level grants an Ability Score Improvement.</div>}
+          {(preview.cantripsGained > 0 || preview.spellsKnownGained > 0) && (
+            <div style={{ color: '#27a', marginTop: '0.5rem' }}>
+              ✨ {[
+                preview.cantripsGained > 0 ? `+${preview.cantripsGained} cantrip${preview.cantripsGained > 1 ? 's' : ''} known` : null,
+                preview.spellsKnownGained > 0 ? `+${preview.spellsKnownGained} spell${preview.spellsKnownGained > 1 ? 's' : ''} known` : null,
+              ].filter(Boolean).join(', ')} — pick them in the Spells step after levelling.
+            </div>
+          )}
         </div>
 
         {requiresAsi && (

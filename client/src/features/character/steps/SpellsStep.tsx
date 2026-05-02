@@ -53,6 +53,18 @@ function normalizeLevel(raw: unknown): number {
   return 0;
 }
 
+function isConcentration(s: SpellFull): boolean {
+  if (typeof s.concentration === 'string' && /^(yes|true)$/i.test(s.concentration)) return true;
+  if (typeof s.duration === 'string' && /concentration/i.test(s.duration)) return true;
+  return false;
+}
+
+function isRitual(s: SpellFull): boolean {
+  if (typeof s.ritual === 'string' && /^(yes|true)$/i.test(s.ritual)) return true;
+  if (typeof s.casting_time === 'string' && /ritual/i.test(s.casting_time)) return true;
+  return false;
+}
+
 function effectiveClasses(character: Character): ClassEntry[] {
   if (character.classes && character.classes.length > 0) return character.classes;
   if (character.class_slug) {
@@ -320,6 +332,14 @@ function ClassSpellSection({
                         {spell.level === 0 ? 'Cantrip' : `L${spell.level}`}
                         {spell.school && ` · ${spell.school}`}
                       </span>
+                      {isConcentration(spell) && (
+                        <span title="Requires concentration"
+                          style={{ marginLeft: '0.4rem', fontSize: '0.65rem', color: '#a60', background: '#fdf3e0', border: '1px solid #ecd87a', borderRadius: 3, padding: '0.05rem 0.3rem' }}>C</span>
+                      )}
+                      {isRitual(spell) && (
+                        <span title="Can be cast as a ritual"
+                          style={{ marginLeft: '0.3rem', fontSize: '0.65rem', color: '#27a', background: '#e0eaf5', border: '1px solid #b6cae6', borderRadius: 3, padding: '0.05rem 0.3rem' }}>R</span>
+                      )}
                     </button>
                     <div style={{ display: 'flex', gap: '0.25rem' }}>
                       <button onClick={() => toggleKnown(spell.slug)}

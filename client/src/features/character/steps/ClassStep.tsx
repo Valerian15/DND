@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Character, ClassEntry, LibraryItem } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
 import { defaultResourcesForClass } from '../classResources';
+import { MD } from '../../library/Statblock';
 import { CLASS_SAVE_PROFICIENCIES, meetsMulticlassPrereqs, missingMulticlassPrereqs, MULTICLASS_PREREQS } from '../rules';
 import type { AbilityKey } from '../types';
 
@@ -195,6 +196,14 @@ export default function ClassStep({ character, onChange }: Props) {
                   {data.prof_saving_throws && isPrimary && <span><strong>Saves:</strong> {data.prof_saving_throws}</span>}
                   {data.spellcasting_ability && <span><strong>Casting:</strong> {data.spellcasting_ability}</span>}
                 </div>
+              )}
+              {data?.desc && (
+                <details style={{ marginTop: '0.4rem' }}>
+                  <summary style={{ fontSize: '0.78rem', cursor: 'pointer', color: '#888' }}>Class features</summary>
+                  <div style={{ marginTop: '0.4rem', fontSize: '0.82rem', maxHeight: 320, overflowY: 'auto', paddingRight: '0.4rem' }}>
+                    <MD text={data.desc} />
+                  </div>
+                </details>
               )}
               {isPrimary && (
                 <details style={{ marginTop: '0.4rem' }}>

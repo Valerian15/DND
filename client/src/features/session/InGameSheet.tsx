@@ -848,6 +848,11 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
 
           {/* Conditions */}
           <Section title={`Conditions${canEditConditions ? '' : ' (view only)'}`}>
+            {conditions.includes('concentration') && concentratingOn && (
+              <div style={{ marginBottom: '0.5rem', padding: '0.4rem 0.6rem', background: '#fdf3e0', border: '1px solid #ecd87a', borderRadius: 4, fontSize: '0.78rem', color: '#a60' }}>
+                <strong>Concentrating on:</strong> {concentratingOn}
+              </div>
+            )}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
               {CONDITIONS.filter((c) => c !== 'exhaustion').map((cond) => {
                 const active = conditions.includes(cond);

@@ -51,9 +51,8 @@ export default function CharacterPreview({ character }: { character: Character }
       <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
         <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{character.name}</div>
         <div style={{ fontSize: '0.85rem', color: '#666' }}>
-          Level {character.level}
-          {character.race_slug && ` · ${capitalize(character.race_slug)}`}
-          {character.class_slug && ` · ${capitalize(character.class_slug)}`}
+          {classSummary(character)}
+          {character.race_slug && ` · ${capitalize(character.subrace_slug ?? character.race_slug)}`}
         </div>
       </div>
 
@@ -118,4 +117,15 @@ function capitalize(s: string): string {
     .split('-')
     .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
     .join(' ');
+}
+
+/** "Fighter 3 / Wizard 2 (5)" or "Fighter 5" or "Level 1" if no class. */
+function classSummary(character: Character): string {
+  const classes = character.classes && character.classes.length > 0
+    ? character.classes
+    : (character.class_slug ? [{ slug: character.class_slug, level: character.level || 1 }] : []);
+  if (classes.length === 0) return `Level ${character.level}`;
+  const parts = classes.map((c) => `${capitalize(c.slug)} ${c.level}`);
+  if (classes.length === 1) return parts[0];
+  return `${parts.join(' / ')} (${character.level})`;
 }

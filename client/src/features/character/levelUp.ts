@@ -2,6 +2,7 @@ import type { Abilities, AbilityKey, Character } from './types';
 import { ABILITY_ORDER } from './types';
 import { hpAverageForHitDie } from './rules';
 import { abilityModifier } from './pointBuy';
+import { getCasterConfig } from './casters';
 
 /** Levels at which a 5e character gains an Ability Score Improvement (or feat in place of one). */
 export const ASI_LEVELS = new Set([4, 8, 12, 16, 19]);
@@ -74,6 +75,10 @@ export interface LevelUpPreview {
   newHpMax: number;
   /** ASI is gated on the new CLASS level, not the total character level. */
   asiRequired: boolean;
+  /** Number of new cantrips the character can pick up at this level (0 if none). */
+  cantripsGained: number;
+  /** Number of new spells known the character can pick up at this level (0 or null if not a known caster). */
+  spellsKnownGained: number;
 }
 
 /**
@@ -97,6 +102,25 @@ export function previewLevelUp(
   const conMod = abilityModifier(character.abilities.con);
   const hpGain = hpGainOnLevelUp(hitDieSize, conMod);
   const newHpMax = character.hp_max + hpGain;
+
+  // Spells/cantrips known deltas — only meaningful for caster classes with a known table.
+  let cantripsGained = 0;
+  let spellsKnownGained = 0;
+  const config = getCasterConfig(slug);
+  if (config && newClassLevel >= 1 && newClassLevel <= 20) {
+    const prevC = currentClassLevel >= 1 ? config.cantripsKnownByLevel[currentClassLevel - 1] ?? null : null;
+    const nextC = config.cantripsKnownByLevel[newClassLevel - 1] ?? null;
+    if (typeof prevC === 'number' && typeof nextC === 'number' && nextC > prevC) cantripsGained = nextC - prevC;
+    else if (prevC === null && typeof nextC === 'number') cantripsGained = nextC;
+
+    if (config.model === 'known' && config.spellsKnownByLevel) {
+      const prevS = currentClassLevel >= 1 ? config.spellsKnownByLevel[currentClassLevel - 1] ?? null : null;
+      const nextS = config.spellsKnownByLevel[newClassLevel - 1] ?? null;
+      if (typeof prevS === 'number' && typeof nextS === 'number' && nextS > prevS) spellsKnownGained = nextS - prevS;
+      else if (prevS === null && typeof nextS === 'number') spellsKnownGained = nextS;
+    }
+  }
+
   return {
     newLevel,
     targetClass: slug,
@@ -104,6 +128,8 @@ export function previewLevelUp(
     hpGain,
     newHpMax,
     asiRequired: isAsiLevel(slug, newClassLevel),
+    cantripsGained,
+    spellsKnownGained,
   };
 }
 

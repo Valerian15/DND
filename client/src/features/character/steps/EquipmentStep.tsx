@@ -86,7 +86,7 @@ export default function EquipmentStep({ character, onChange }: Props) {
     <div>
       <h2 style={{ marginTop: 0 }}>Starting equipment</h2>
       <p style={{ color: '#666' }}>
-        Review your starting kit below. For now we grant it as a text entry — the detailed item picker and inventory editor land with the character sheet (Phase 1g).
+        Review your starting kit below. Click "Accept starting kit" to add it to your inventory as a text entry. The detailed item picker lives on the character sheet.
       </p>
 
       {loading && <p>Loading equipment…</p>}

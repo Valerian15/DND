@@ -15,6 +15,7 @@ import SpellsStep from './steps/SpellsStep';
 import FeatsStep from './steps/FeatsStep';
 import DetailsStep from './steps/DetailsStep';
 import { parseHitDie, recomputeDerived } from './rules';
+import { isSubclassUnlocked } from './subclassUnlock';
 
 const STEPS = [
   { key: 'race', label: 'Race' },
@@ -95,6 +96,18 @@ export default function CharacterWizard() {
   const currentStep = STEPS[stepIndex];
   const exitTarget = `/characters/${character.id}`;
 
+  // Step-level "needs attention" flags. Used to render a red dot on the relevant nav button
+  // so the player knows where they need to come back to before finishing the wizard.
+  const classes = character.classes && character.classes.length > 0
+    ? character.classes
+    : (character.class_slug ? [{ slug: character.class_slug, subclass_slug: character.subclass_slug, level: character.level || 1, hit_dice_used: 0 }] : []);
+  const stepWarnings: Partial<Record<typeof STEPS[number]['key'], string>> = {};
+  if (!character.race_slug) stepWarnings.race = 'Pick a race';
+  if (classes.length === 0) stepWarnings.class = 'Pick a class';
+  const needsSubclass = classes.some((c) => isSubclassUnlocked(c.slug, c.level) && !c.subclass_slug);
+  if (needsSubclass) stepWarnings.subclass = 'Pick a subclass for each unlocked class';
+  if (!character.background_slug) stepWarnings.background = 'Pick a background';
+
   return (
     <div style={{ padding: '2rem', fontFamily: 'system-ui', maxWidth: 1200, margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
@@ -109,11 +122,14 @@ export default function CharacterWizard() {
         {STEPS.map((s, i) => {
           const isCurrent = i === stepIndex;
           const isPast = i < stepIndex;
+          const warning = stepWarnings[s.key];
           return (
             <button
               key={s.key}
               onClick={() => setStepIndex(i)}
+              title={warning ?? ''}
               style={{
+                position: 'relative',
                 padding: '0.5rem 1rem',
                 borderRadius: 4,
                 border: '1px solid #ccc',
@@ -124,6 +140,13 @@ export default function CharacterWizard() {
               }}
             >
               {i + 1}. {s.label}
+              {warning && (
+                <span aria-label="needs attention" style={{
+                  position: 'absolute', top: 4, right: 4,
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: 'crimson',
+                }} />
+              )}
             </button>
           );
         })}
@@ -154,14 +177,25 @@ export default function CharacterWizard() {
             <span style={{ fontSize: '0.85rem', color: '#666' }}>
               {saving ? 'Saving…' : 'All changes saved'}
             </span>
-            {stepIndex === STEPS.length - 1 ? (
-              <button
-                onClick={() => navigate(exitTarget)}
-                style={{ padding: '0.5rem 1.25rem', cursor: 'pointer', background: '#333', color: '#fff', border: 'none', borderRadius: 4 }}
-              >
-                Done →
-              </button>
-            ) : (
+            {stepIndex === STEPS.length - 1 ? (() => {
+              const warningEntries = Object.entries(stepWarnings) as [string, string][];
+              const hasWarnings = warningEntries.length > 0;
+              return (
+                <button
+                  onClick={() => navigate(exitTarget)}
+                  disabled={hasWarnings}
+                  title={hasWarnings ? warningEntries.map(([_, msg]) => `• ${msg}`).join('\n') : ''}
+                  style={{
+                    padding: '0.5rem 1.25rem',
+                    cursor: hasWarnings ? 'not-allowed' : 'pointer',
+                    background: hasWarnings ? '#999' : '#333',
+                    color: '#fff', border: 'none', borderRadius: 4,
+                  }}
+                >
+                  Done →
+                </button>
+              );
+            })() : (
               <button
                 onClick={() => setStepIndex(Math.min(STEPS.length - 1, stepIndex + 1))}
                 style={{ padding: '0.5rem 1rem', cursor: 'pointer' }}
