@@ -46,6 +46,7 @@ import { crToXp, partyThresholds, encounterMultiplier, difficultyOf, DIFFICULTY_
 import { listMapFolders, createMapFolder, renameMapFolder, deleteMapFolder } from '../features/session/mapFolderApi';
 import { listNotes, createNote, updateNote, deleteNote } from '../features/session/campaignNotesApi';
 import type { CampaignNote } from '../features/session/campaignNotesApi';
+import { listEncounters, saveEncounter, deleteEncounter, restoreEncounter, type SavedEncounter } from '../features/session/encounterApi';
 import type { WallSegment, MapTemplate, TemplateShape, MapDrawing } from '../features/session/types';
 import { InGameSheet, CONDITION_COLORS, CONDITIONS } from '../features/session/InGameSheet';
 import { MonsterSheet } from '../features/session/MonsterSheet';
@@ -720,6 +721,14 @@ export default function CampaignSessionPage() {
   const [leftTab, setLeftTab] = useState<'maps' | 'monsters' | 'tokens'>('maps');
   // Whether the DM Notes panel under the Maps tab is expanded.
   const [dmNotesExpanded, setDmNotesExpanded] = useState(false);
+  // Encounter save/load disclosure state.
+  const [encountersExpanded, setEncountersExpanded] = useState(false);
+  const [savedEncounters, setSavedEncounters] = useState<SavedEncounter[]>([]);
+  const [newEncounterName, setNewEncounterName] = useState('');
+
+  async function refreshEncounters(cid: number) {
+    try { setSavedEncounters(await listEncounters(cid)); } catch { /* ignore */ }
+  }
 
   const [addingMap, setAddingMap] = useState(false);
   const [newMapName, setNewMapName] = useState('');
@@ -1576,6 +1585,66 @@ export default function CampaignSessionPage() {
               )}
             </div>
 
+            {/* Encounters: save / restore tokens + initiative as a named snapshot. */}
+            {campaign && (
+              <div style={{ borderBottom: '1px solid #ddd', flexShrink: 0 }}>
+                <button onClick={() => {
+                  const next = !encountersExpanded;
+                  setEncountersExpanded(next);
+                  if (next) refreshEncounters(campaign.id);
+                }}
+                  style={{ width: '100%', textAlign: 'left', padding: '0.4rem 0.75rem', background: '#fafafa', border: 'none', borderBottom: encountersExpanded ? '1px solid #eee' : 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, color: '#555' }}>
+                  {encountersExpanded ? '▾' : '▸'} Encounters {savedEncounters.length > 0 && <span style={{ color: '#aaa', fontWeight: 400 }}>({savedEncounters.length})</span>}
+                </button>
+                {encountersExpanded && (
+                  <div style={{ padding: '0.5rem 0.75rem' }}>
+                    <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.4rem' }}>
+                      <input value={newEncounterName} onChange={(e) => setNewEncounterName(e.target.value)} placeholder="Snapshot name…"
+                        style={{ flex: 1, padding: '0.25rem 0.4rem', fontSize: '0.78rem', border: '1px solid #ccc', borderRadius: 3 }} />
+                      <button disabled={!newEncounterName.trim()} onClick={async () => {
+                        try {
+                          await saveEncounter(campaign.id, newEncounterName.trim());
+                          setNewEncounterName('');
+                          refreshEncounters(campaign.id);
+                        } catch (e) { setError((e as Error).message); }
+                      }}
+                        style={{ padding: '0.25rem 0.55rem', fontSize: '0.78rem', cursor: newEncounterName.trim() ? 'pointer' : 'not-allowed', border: '1px solid #2a7', background: newEncounterName.trim() ? '#e7f7ec' : '#f5f5f5', color: '#2a7', borderRadius: 3, fontWeight: 600 }}>
+                        Save
+                      </button>
+                    </div>
+                    {savedEncounters.length === 0 ? (
+                      <div style={{ fontSize: '0.75rem', color: '#888', textAlign: 'center', padding: '0.4rem' }}>No encounters saved.</div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', maxHeight: 160, overflowY: 'auto' }}>
+                        {savedEncounters.map((enc) => (
+                          <div key={enc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.2rem 0.4rem', background: '#fff', border: '1px solid #eee', borderRadius: 3 }}>
+                            <span style={{ flex: 1, fontSize: '0.78rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{enc.name}</span>
+                            <button onClick={async () => {
+                              if (!confirm(`Restore "${enc.name}"? This wipes the active map's tokens and initiative.`)) return;
+                              try { await restoreEncounter(campaign.id, enc.id); }
+                              catch (e) { setError((e as Error).message); }
+                            }}
+                              style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3, background: '#fff', color: '#446' }}>
+                              Restore
+                            </button>
+                            <button onClick={async () => {
+                              if (!confirm(`Delete saved encounter "${enc.name}"?`)) return;
+                              try { await deleteEncounter(campaign.id, enc.id); refreshEncounters(campaign.id); }
+                              catch (e) { setError((e as Error).message); }
+                            }}
+                              title="Delete"
+                              style={{ padding: '0.15rem 0.35rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, background: '#fff', color: 'crimson' }}>
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div style={{ display: 'flex', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
               {(['maps', 'monsters', 'tokens'] as const).map((tab) => (
                 <button key={tab} onClick={() => setLeftTab(tab)} style={{ flex: 1, padding: '0.6rem', border: 'none', borderBottom: leftTab === tab ? '2px solid #333' : '2px solid transparent', background: 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: leftTab === tab ? 600 : 400, color: leftTab === tab ? '#333' : '#888' }}>
@@ -2305,6 +2374,31 @@ export default function CampaignSessionPage() {
                               style={{ fontSize: '0.85rem', fontWeight: 700, color: '#333', minWidth: 22, textAlign: 'center', cursor: isDmOrAdmin ? 'text' : 'default' }}>
                               {entry.initiative}
                             </span>
+                          )}
+                          {isDmOrAdmin && (
+                            <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+                              <button
+                                title="Move up"
+                                disabled={idx === 0}
+                                onClick={() => {
+                                  const prev = initiative.entries[idx - 1];
+                                  if (!prev) return;
+                                  // Set this entry's value to prev's + 1 (or +1 above the highest of prev's tier).
+                                  const target = prev.initiative === entry.initiative ? prev.initiative + 1 : prev.initiative;
+                                  socket.emit('initiative:set', { id: entry.id, initiative: target });
+                                }}
+                                style={{ width: 16, height: 12, padding: 0, fontSize: '0.6rem', lineHeight: 1, cursor: idx === 0 ? 'not-allowed' : 'pointer', border: '1px solid #ddd', borderRadius: 2, background: '#fff', color: idx === 0 ? '#ddd' : '#888' }}>▲</button>
+                              <button
+                                title="Move down"
+                                disabled={idx === initiative.entries.length - 1}
+                                onClick={() => {
+                                  const next = initiative.entries[idx + 1];
+                                  if (!next) return;
+                                  const target = next.initiative === entry.initiative ? next.initiative - 1 : next.initiative;
+                                  socket.emit('initiative:set', { id: entry.id, initiative: target });
+                                }}
+                                style={{ width: 16, height: 12, padding: 0, fontSize: '0.6rem', lineHeight: 1, cursor: idx === initiative.entries.length - 1 ? 'not-allowed' : 'pointer', border: '1px solid #ddd', borderRadius: 2, background: '#fff', color: idx === initiative.entries.length - 1 ? '#ddd' : '#888' }}>▼</button>
+                            </div>
                           )}
                           {isDmOrAdmin && entryToken && (
                             <button onClick={() => setInitiativeConditionPicker(showPicker ? null : entry.id)}

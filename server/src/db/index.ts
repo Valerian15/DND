@@ -502,6 +502,20 @@ export function initSchema() {
   // Walking speed in feet (race + feat modifiers). Default 30 covers most Medium races.
   try { db.exec('ALTER TABLE characters ADD COLUMN speed_walk INTEGER NOT NULL DEFAULT 30'); } catch { /* exists */ }
 
+  // Saved encounters — DM snapshots the active map's tokens + initiative, restore later.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS encounters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      tokens_json TEXT NOT NULL DEFAULT '[]',
+      initiative_json TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_encounters_campaign ON encounters(campaign_id);
+  `);
+
   // AOE spell templates on maps
   db.exec(`
     CREATE TABLE IF NOT EXISTS map_templates (

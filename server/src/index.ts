@@ -20,6 +20,7 @@ import templateRoutes from './routes/templates.js';
 import drawingRoutes from './routes/drawings.js';
 import mapFolderRoutes from './routes/mapFolders.js';
 import campaignNotesRoutes from './routes/campaignNotes.js';
+import encounterRoutes from './routes/encounters.js';
 
 initSchema();
 
@@ -50,6 +51,7 @@ app.use('/api/maps', templateRoutes);
 app.use('/api/maps', drawingRoutes);
 app.use('/api/campaigns/:id/map-folders', mapFolderRoutes);
 app.use('/api/campaigns/:id/notes', campaignNotesRoutes);
+app.use('/api/campaigns/:id/encounters', encounterRoutes);
 
 const httpServer = createServer(app);
 
