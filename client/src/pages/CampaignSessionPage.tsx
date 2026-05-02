@@ -245,6 +245,15 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, isTarge
           {showStatsInTooltip && activeConditions.length > 0 && (
             <div style={{ fontSize: 10, color: '#cbb', marginTop: 2, textTransform: 'capitalize' }}>{activeConditions.join(', ')}</div>
           )}
+          {showStatsInTooltip && (token.effects ?? []).length > 0 && (
+            <div style={{ fontSize: 10, color: '#bcb', marginTop: 2 }}>
+              {(token.effects ?? []).map((e) => (
+                <span key={e.name} style={{ marginRight: 6 }}>
+                  ✦ {e.name}{e.indefinite ? '' : ` (${e.rounds}r)`}
+                </span>
+              ))}
+            </div>
+          )}
           {/* Player view of an enemy token: narrative cue + size + distance, no numbers. */}
           {!showStatsInTooltip && (
             <div style={{ fontSize: 10, color: '#bbb' }}>

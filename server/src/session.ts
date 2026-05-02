@@ -1279,14 +1279,18 @@ export function setupSession(io: AppServer) {
           const abilMod = Math.floor((score - 10) / 2);
           const prof = Math.floor((pc.level - 1) / 4) + 2; // 5e prof bonus by level
           let isProficient = false;
+          let isExpertise = false;
           if (kind === 'skill') {
-            const skills = JSON.parse(pc.skills) as Record<string, { proficient?: boolean }>;
+            const skills = JSON.parse(pc.skills) as Record<string, { proficient?: boolean; expertise?: boolean }>;
             isProficient = !!skills[key]?.proficient;
+            isExpertise = !!skills[key]?.expertise;
           } else if (kind === 'save') {
             const saves = JSON.parse(pc.saves) as Record<string, { proficient?: boolean }>;
             isProficient = !!saves[key]?.proficient;
           }
-          mod = abilMod + (isProficient ? prof : 0);
+          // Expertise (rogue / bard) doubles the proficiency bonus on the chosen skills.
+          const profMod = isExpertise ? prof * 2 : isProficient ? prof : 0;
+          mod = abilMod + profMod;
         } catch { /* fall through with mod = 0 */ }
 
         const roll = Math.floor(Math.random() * 20) + 1;

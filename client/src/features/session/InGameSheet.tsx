@@ -34,6 +34,8 @@ interface SpellMeta {
   higher_level?: string;
   concentration?: boolean;
   duration?: string;
+  ritual?: boolean;
+  casting_time?: string;
 }
 
 interface InventoryItem {
@@ -232,13 +234,17 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     if (!missing.length) return;
     Promise.all(
       missing.map((slug) =>
-        getLibraryItem<{ name: string; level: number; data?: { desc?: string; higher_level?: string; concentration?: boolean | string; duration?: string } }>('spells', slug)
+        getLibraryItem<{ name: string; level: number; data?: { desc?: string; higher_level?: string; concentration?: boolean | string; duration?: string; ritual?: string | boolean; casting_time?: string } }>('spells', slug)
           .then((r) => {
             const conc = r.data?.concentration;
             const isConc = typeof conc === 'boolean' ? conc
               : typeof conc === 'string' ? (conc !== '' && conc !== 'no')
               : !!(r.data?.duration?.toLowerCase().includes('concentration'));
-            return { slug, name: r.name, level: r.level, desc: r.data?.desc, higher_level: r.data?.higher_level, concentration: isConc, duration: r.data?.duration };
+            const ritualVal = r.data?.ritual;
+            const isRitual = typeof ritualVal === 'boolean' ? ritualVal
+              : typeof ritualVal === 'string' ? /^(yes|true)$/i.test(ritualVal)
+              : !!r.data?.casting_time?.toLowerCase().includes('ritual');
+            return { slug, name: r.name, level: r.level, desc: r.data?.desc, higher_level: r.data?.higher_level, concentration: isConc, duration: r.data?.duration, ritual: isRitual, casting_time: r.data?.casting_time };
           })
           .catch(() => null),
       ),
@@ -1796,7 +1802,8 @@ function SpellsPageContent({ character, config, spellMeta, preparedSlugs, prepar
                           title={meta ? 'Click to share spell description in chat' : undefined}
                           style={{ fontSize: '0.85rem', fontWeight: (isPrepared || isCantrip) ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '0.5rem', cursor: meta ? 'pointer' : 'default', textDecoration: meta ? 'underline dotted' : 'none', textUnderlineOffset: 3 }}>
                           {meta?.name ?? slug}
-                          {meta?.concentration && <span style={{ fontSize: '0.65rem', color: '#886', fontStyle: 'italic', marginLeft: '0.3rem' }}>conc.</span>}
+                          {meta?.concentration && <span title="Requires concentration" style={{ fontSize: '0.6rem', color: '#a60', background: '#fdf3e0', border: '1px solid #ecd87a', borderRadius: 2, padding: '0 0.25rem', marginLeft: '0.3rem' }}>C</span>}
+                          {meta?.ritual && <span title="Can be cast as a ritual" style={{ fontSize: '0.6rem', color: '#27a', background: '#e0eaf5', border: '1px solid #b6cae6', borderRadius: 2, padding: '0 0.25rem', marginLeft: '0.2rem' }}>R</span>}
                         </span>
                         {isCantrip ? (
                           <span style={{ fontSize: '0.7rem', color: '#7788bb', fontStyle: 'italic', flexShrink: 0 }}>always</span>

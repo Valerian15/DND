@@ -28,17 +28,33 @@ interface FeatGrants {
   resilient?: { ability: AbilityKey };
 }
 
+interface BreakdownPart { source: 'race' | 'subrace' | 'floating' | 'feat' | 'level-up'; amount: number }
+
+/** Per-ability bonus breakdown by source. */
+function asiBreakdown(applied: AppliedAsis, grants: FeatGrants): Record<AbilityKey, BreakdownPart[]> {
+  const out: Record<AbilityKey, BreakdownPart[]> = { str: [], dex: [], con: [], int: [], wis: [], cha: [] };
+  for (const k of ABILITY_ORDER) {
+    const r = applied.race?.[k] ?? 0;
+    if (r) out[k].push({ source: 'race', amount: r });
+    const s = applied.subrace?.[k] ?? 0;
+    if (s) out[k].push({ source: 'subrace', amount: s });
+  }
+  for (const k of applied.floating ?? []) out[k].push({ source: 'floating', amount: 1 });
+  if (grants.resilient?.ability) out[grants.resilient.ability].push({ source: 'feat', amount: 1 });
+  for (const g of applied.level_grants ?? []) {
+    for (const k of ABILITY_ORDER) {
+      const d = g.deltas[k] ?? 0;
+      if (d) out[k].push({ source: 'level-up', amount: d });
+    }
+  }
+  return out;
+}
+
 /** Combined delta from race ASIs + feat grants + level-up ASIs. */
 function asiDelta(applied: AppliedAsis, grants: FeatGrants): Record<AbilityKey, number> {
+  const breakdown = asiBreakdown(applied, grants);
   const out: Record<AbilityKey, number> = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
-  for (const m of [applied.race, applied.subrace]) {
-    for (const k of ABILITY_ORDER) out[k] += m?.[k] ?? 0;
-  }
-  for (const k of applied.floating ?? []) out[k] += 1;
-  if (grants.resilient?.ability) out[grants.resilient.ability] += 1;
-  for (const g of applied.level_grants ?? []) {
-    for (const k of ABILITY_ORDER) out[k] += g.deltas[k] ?? 0;
-  }
+  for (const k of ABILITY_ORDER) out[k] = breakdown[k].reduce((sum, p) => sum + p.amount, 0);
   return out;
 }
 
@@ -69,6 +85,7 @@ export default function AbilitiesStep({ character, onChange }: Props) {
   const applied = desc.applied_asis ?? {};
   const grants = desc.feat_grants ?? {};
   const delta = useMemo(() => asiDelta(applied, grants), [applied, grants]);
+  const breakdown = useMemo(() => asiBreakdown(applied, grants), [applied, grants]);
   const rawAbilities = useMemo(() => subtract(character.abilities, delta), [character.abilities, delta]);
 
   // Pick starting mode based on what the character currently has (raw, pre-ASI)
@@ -291,8 +308,20 @@ export default function AbilitiesStep({ character, onChange }: Props) {
               )}
 
               {bonus > 0 && score > 0 && (
-                <div style={{ fontSize: '0.78rem', color: '#2a7', marginTop: '0.15rem' }}>
-                  +{bonus} bonus → <strong>{finalScore}</strong>
+                <div style={{ fontSize: '0.78rem', color: '#2a7', marginTop: '0.15rem' }}
+                  title={breakdown[key].map((p) => `+${p.amount} ${p.source}`).join(' · ')}>
+                  {breakdown[key]
+                    .reduce<Record<string, number>>((acc, p) => { acc[p.source] = (acc[p.source] ?? 0) + p.amount; return acc; }, {})
+                    && (() => {
+                      const grouped: Array<{ source: string; amount: number }> = [];
+                      const acc: Record<string, number> = {};
+                      for (const p of breakdown[key]) acc[p.source] = (acc[p.source] ?? 0) + p.amount;
+                      for (const [source, amount] of Object.entries(acc)) grouped.push({ source, amount });
+                      return grouped.map((g, i) => (
+                        <span key={i}>{i > 0 ? ' · ' : ''}+{g.amount} {g.source}</span>
+                      ));
+                    })()}
+                  {' '}→ <strong>{finalScore}</strong>
                 </div>
               )}
 
