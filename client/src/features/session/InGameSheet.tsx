@@ -1222,6 +1222,40 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             </Section>
           )}
 
+          {/* Rage one-click for barbarian PCs — applies a 10-round Rage effect (combat
+              automation honours it for B/P/S resistance and weapon damage bonus) and
+              decrements the Rage resource. Visible only when the resource exists. */}
+          {(() => {
+            const rageIdx = localResources.findIndex((r) => /^rage$/i.test(r.name));
+            const isBarb = (character.classes ?? []).some((c) => c.slug === 'barbarian') || character.class_slug === 'barbarian';
+            if (!isBarb || rageIdx < 0) return null;
+            const res = localResources[rageIdx];
+            const tokenEffectActive = (effects ?? []).some((e) => /^rage$/i.test(e.name));
+            return (
+              <Section title="Rage">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <button
+                    disabled={tokenEffectActive || res.current <= 0 || tokenId <= 0}
+                    onClick={async () => {
+                      socket.emit('token:effect_apply', { token_id: tokenId, name: 'Rage', rounds: 10 });
+                      await adjustResource(rageIdx, -1);
+                      socket.emit('chat:send', { body: `/action ${character.name} enters a rage.` });
+                    }}
+                    title={tokenEffectActive ? 'Already raging' : res.current <= 0 ? 'No rages remaining' : 'Apply Rage effect (10 rounds) + decrement resource'}
+                    style={{
+                      flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.85rem',
+                      background: tokenEffectActive ? '#ffe5cc' : res.current > 0 ? '#c84e2c' : '#eee',
+                      color: tokenEffectActive ? '#a44' : res.current > 0 ? '#fff' : '#bbb',
+                      border: 'none', borderRadius: 4, fontWeight: 700,
+                      cursor: tokenEffectActive || res.current <= 0 || tokenId <= 0 ? 'not-allowed' : 'pointer',
+                    }}>
+                    {tokenEffectActive ? '🔥 Raging' : `🔥 Enter Rage (${res.current}/${res.max})`}
+                  </button>
+                </div>
+              </Section>
+            );
+          })()}
+
           {/* Class Resource Tracker */}
           {hasResources && (
             <Section title="Resources">

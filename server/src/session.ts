@@ -579,6 +579,58 @@ function applyHeavyArmorMaster(
   return reduceDamageForHam(hasHam, damageType, dmg);
 }
 
+/** Returns true if the token has a "Rage" effect active (case-insensitive name match). */
+function tokenHasRageEffect(tokenId: number): boolean {
+  const row = db.prepare('SELECT effects FROM tokens WHERE id = ?').get(tokenId) as { effects: string } | undefined;
+  if (!row) return false;
+  try {
+    const arr = JSON.parse(row.effects ?? '[]');
+    return Array.isArray(arr) && arr.some((e: { name?: unknown }) => typeof e?.name === 'string' && /^rage$/i.test(e.name));
+  } catch { return false; }
+}
+
+/** Find the barbarian level for a PC character (searches classes[] then falls back to class_slug). */
+function getBarbarianLevel(characterId: number | null): number {
+  if (!characterId) return 0;
+  const ch = db.prepare('SELECT class_slug, level, classes FROM characters WHERE id = ?').get(characterId) as { class_slug: string | null; level: number; classes: string } | undefined;
+  if (!ch) return 0;
+  try {
+    const classes = JSON.parse(ch.classes ?? '[]') as Array<{ slug: string; level: number }>;
+    if (Array.isArray(classes) && classes.length > 0) {
+      const barb = classes.find((c) => c.slug === 'barbarian');
+      return barb?.level ?? 0;
+    }
+  } catch { /* fall through */ }
+  return ch.class_slug === 'barbarian' ? ch.level : 0;
+}
+
+/** Rage offense bonus by barbarian level (PHB p.48): +2 (1-8), +3 (9-15), +4 (16+). */
+function rageOffenseBonus(barbarianLevel: number): number {
+  if (barbarianLevel <= 0) return 0;
+  if (barbarianLevel >= 16) return 4;
+  if (barbarianLevel >= 9) return 3;
+  return 2;
+}
+
+/**
+ * Rage defense: resistance to bludgeoning/piercing/slashing while raging. Halves damage
+ * AFTER the existing resistance multiplier from `damageModifierForToken` (applies once).
+ */
+function applyRageDefense(
+  target: { id: number; character_id: number | null },
+  damageType: string,
+  dmg: number,
+): { adjusted: number; reduced: boolean } {
+  if (dmg <= 0 || !target.character_id) return { adjusted: dmg, reduced: false };
+  const dt = (damageType || '').toLowerCase().trim();
+  if (dt !== 'bludgeoning' && dt !== 'piercing' && dt !== 'slashing') {
+    return { adjusted: dmg, reduced: false };
+  }
+  if (getBarbarianLevel(target.character_id) <= 0) return { adjusted: dmg, reduced: false };
+  if (!tokenHasRageEffect(target.id)) return { adjusted: dmg, reduced: false };
+  return { adjusted: Math.floor(dmg / 2), reduced: true };
+}
+
 /** Load the feats array for a PC character. Returns an empty Set if missing or unparseable. */
 function getCharacterFeats(characterId: number | null | undefined): Set<string> {
   if (!characterId) return new Set();
@@ -1409,11 +1461,14 @@ export function setupSession(io: AppServer) {
         }
         const ham = applyHeavyArmorMaster(target, damage_type, damageDealt);
         damageDealt = ham.adjusted;
+        const rageDef = applyRageDefense(target, damage_type, damageDealt);
+        damageDealt = rageDef.adjusted;
 
         // Post the save roll. Carry undo metadata when damage will land — DM sees an undo button.
         const saveExpr = `1d20${saveMod >= 0 ? '+' : ''}${saveMod}`;
         const hamNote = ham.reduced ? ' (HAM −3)' : '';
-        const saveLabel = `${target.label} — ${save_ability.toUpperCase()} Save (DC ${save_dc}) ${passed ? '✓ saved' : '✗ failed'}${hamNote}`;
+        const rageNote = rageDef.reduced ? ' (rage resistance)' : '';
+        const saveLabel = `${target.label} — ${save_ability.toUpperCase()} Save (DC ${save_dc}) ${passed ? '✓ saved' : '✗ failed'}${hamNote}${rageNote}`;
         const undoMeta = damageDealt > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
         const saveData = JSON.stringify({ expression: saveExpr, dice: [saveRoll], modifier: saveMod, total: saveTotal, label: saveLabel, ...undoMeta });
         const sr = insertChat.run(cid, user.id, user.username, `/roll ${saveExpr}`, 'roll', saveData);
@@ -1494,6 +1549,19 @@ export function setupSession(io: AppServer) {
         }
       }
 
+      // Rage offense: barbarian PC with a "Rage" effect on their token gets +2/+3/+4 weapon
+      // damage. Loose vs RAW (which restricts to melee STR-based attacks) — we apply to all
+      // non-spell attacks so the player can rage with thrown weapons; if a barbarian wants
+      // to be RAW-strict they can drop the rage effect before a ranged attack.
+      let rageBonusApplied = 0;
+      if (!is_spell && casterToken?.character_id) {
+        const barbLevel = getBarbarianLevel(casterToken.character_id);
+        if (barbLevel > 0 && tokenHasRageEffect(caster_token_id)) {
+          rageBonusApplied = rageOffenseBonus(barbLevel);
+          if (rageBonusApplied > 0) effectiveDamageDice = addToDamageExpression(effectiveDamageDice, rageBonusApplied);
+        }
+      }
+
       const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
 
       // Counterspell offer for spell attacks (Fire Bolt, Disintegrate, etc.). Skipped for
@@ -1505,7 +1573,10 @@ export function setupSession(io: AppServer) {
 
       // Cast announcement
       {
-        const note = powerAttackApplied ? ' (-5/+10 power attack)' : '';
+        const tags: string[] = [];
+        if (powerAttackApplied) tags.push('-5/+10 power attack');
+        if (rageBonusApplied > 0) tags.push(`+${rageBonusApplied} rage damage`);
+        const note = tags.length > 0 ? ` (${tags.join(', ')})` : '';
         const r = insertChat.run(cid, user.id, user.username, `/action ${casterName} ${verb} ${attack_name}${note}.`, 'action', null);
         const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
@@ -1613,7 +1684,11 @@ export function setupSession(io: AppServer) {
         let adjustedTotal = dmgMod.multiplier === 1 ? dmg.total : Math.floor(dmg.total * dmgMod.multiplier);
         const ham = applyHeavyArmorMaster(target, damage_type, adjustedTotal);
         adjustedTotal = ham.adjusted;
-        const modSuffix = (dmgMod.label ? ` (${dmgMod.label})` : '') + (ham.reduced ? ' (HAM −3)' : '');
+        const rageDef = applyRageDefense(target, damage_type, adjustedTotal);
+        adjustedTotal = rageDef.adjusted;
+        const modSuffix = (dmgMod.label ? ` (${dmgMod.label})` : '')
+          + (ham.reduced ? ' (HAM −3)' : '')
+          + (rageDef.reduced ? ' (rage)' : '');
         const dmgLabel = `${target.label} — ${attack_name} ${damage_type || 'damage'}${isCrit ? ' (crit!)' : ''}${modSuffix}`;
         const undoMeta = adjustedTotal > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
         const dmgData = JSON.stringify({ expression: effectiveDamageDice, dice: dmg.rolls, modifier: dmg.modifier, total: adjustedTotal, label: dmgLabel, ...undoMeta });
@@ -1734,7 +1809,11 @@ export function setupSession(io: AppServer) {
         let adjustedDmg = dmgMod.multiplier === 1 ? dmgTotal : Math.floor(dmgTotal * dmgMod.multiplier);
         const ham = applyHeavyArmorMaster(target, damage_type, adjustedDmg);
         adjustedDmg = ham.adjusted;
-        const modSuffix = (dmgMod.label ? ` (${dmgMod.label})` : '') + (ham.reduced ? ' (HAM −3)' : '');
+        const rageDef = applyRageDefense(target, damage_type, adjustedDmg);
+        adjustedDmg = rageDef.adjusted;
+        const modSuffix = (dmgMod.label ? ` (${dmgMod.label})` : '')
+          + (ham.reduced ? ' (HAM −3)' : '')
+          + (rageDef.reduced ? ' (rage)' : '');
 
         const expr = `${rollCount}d${sides}${totalMod !== 0 ? (totalMod > 0 ? '+' + totalMod : totalMod) : ''}`;
         const dmgLabel = `${target.label} — ${attack_name} (${hits} hit${hits > 1 ? 's' : ''}) ${damage_type || 'damage'}${modSuffix}`;
