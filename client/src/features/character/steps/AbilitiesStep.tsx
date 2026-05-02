@@ -11,17 +11,24 @@ import {
   remaining,
 } from '../pointBuy';
 
+interface LevelGrant {
+  class_slug: string;
+  class_level: number;
+  deltas: Partial<Record<AbilityKey, number>>;
+}
+
 interface AppliedAsis {
   race?: Partial<Record<AbilityKey, number>>;
   subrace?: Partial<Record<AbilityKey, number>>;
   floating?: AbilityKey[];
+  level_grants?: LevelGrant[];
 }
 
 interface FeatGrants {
   resilient?: { ability: AbilityKey };
 }
 
-/** Combined delta from race ASIs + feat grants. */
+/** Combined delta from race ASIs + feat grants + level-up ASIs. */
 function asiDelta(applied: AppliedAsis, grants: FeatGrants): Record<AbilityKey, number> {
   const out: Record<AbilityKey, number> = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
   for (const m of [applied.race, applied.subrace]) {
@@ -29,6 +36,9 @@ function asiDelta(applied: AppliedAsis, grants: FeatGrants): Record<AbilityKey, 
   }
   for (const k of applied.floating ?? []) out[k] += 1;
   if (grants.resilient?.ability) out[grants.resilient.ability] += 1;
+  for (const g of applied.level_grants ?? []) {
+    for (const k of ABILITY_ORDER) out[k] += g.deltas[k] ?? 0;
+  }
   return out;
 }
 

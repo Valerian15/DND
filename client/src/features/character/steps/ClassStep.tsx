@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Abilities, Character, ClassEntry, LibraryItem } from '../types';
+import { ABILITY_ORDER } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
 import { defaultResourcesForClass } from '../classResources';
 import { MD } from '../../library/Statblock';
@@ -7,6 +8,12 @@ import { featuresThroughLevel } from '../classFeatures';
 import { CLASS_SAVE_PROFICIENCIES, hitDieFor, meetsMulticlassPrereqs, missingMulticlassPrereqs, MULTICLASS_PREREQS } from '../rules';
 import type { AbilityKey } from '../types';
 import LevelUpDialog from '../LevelUpDialog';
+
+interface LevelGrant {
+  class_slug: string;
+  class_level: number;
+  deltas: Partial<Record<AbilityKey, number>>;
+}
 
 function savesForClass(slug: string): Record<string, { proficient: boolean; sources: string[] }> {
   const profs = CLASS_SAVE_PROFICIENCIES[slug] ?? [];
@@ -142,18 +149,72 @@ export default function ClassStep({ character, onChange }: Props) {
       setLevelUpClass(slug);
       return;
     }
-    const next = classes
-      .map((c) => c.slug === slug ? { ...c, level: Math.max(1, c.level + delta) } : c);
-    setClassesAndSync(next);
+
+    // Decrement: undo any ASI granted at the level we're dropping.
+    const oldClassLevel = classes.find((c) => c.slug === slug)?.level ?? 1;
+    const newClassLevel = Math.max(1, oldClassLevel - 1);
+    if (newClassLevel === oldClassLevel) return;
+
+    const desc = (character.description ?? {}) as Record<string, any>;
+    const applied = (desc.applied_asis ?? {}) as Record<string, any>;
+    const levelGrants = (applied.level_grants ?? []) as LevelGrant[];
+
+    const dropped = levelGrants.filter((g) => g.class_slug === slug && g.class_level > newClassLevel);
+    const kept = levelGrants.filter((g) => !(g.class_slug === slug && g.class_level > newClassLevel));
+
+    let abilities: Abilities = { ...character.abilities };
+    for (const e of dropped) {
+      for (const k of ABILITY_ORDER) {
+        const d = e.deltas[k] ?? 0;
+        if (d) abilities[k] = Math.max(0, abilities[k] - d);
+      }
+    }
+
+    const nextClasses = classes.map((c) => c.slug === slug ? { ...c, level: newClassLevel } : c);
+    const newTotalLevel = nextClasses.reduce((s, c) => s + c.level, 0);
+    const nextDesc = dropped.length > 0
+      ? { ...desc, applied_asis: { ...applied, level_grants: kept } }
+      : desc;
+
+    onChange({
+      classes: nextClasses,
+      abilities,
+      level: newTotalLevel,
+      description: nextDesc,
+    });
   }
 
   async function handleLevelUpConfirm(updatedClasses: ClassEntry[], abilities: Abilities, newLevel: number, newHpMax: number, newHpCurrent: number) {
+    // Diff abilities to capture any ASI applied via the dialog; record it tagged with this
+    // class + class-level so a future "−" click can undo precisely the ASI from THIS level.
+    const oldAbilities = character.abilities;
+    const deltas: Partial<Record<AbilityKey, number>> = {};
+    for (const k of ABILITY_ORDER) {
+      const d = abilities[k] - oldAbilities[k];
+      if (d !== 0) deltas[k] = d;
+    }
+
+    const desc = (character.description ?? {}) as Record<string, any>;
+    const applied = (desc.applied_asis ?? {}) as Record<string, any>;
+    const levelGrants = (applied.level_grants ?? []) as LevelGrant[];
+
+    const newClassLevel = updatedClasses.find((c) => c.slug === levelUpClass)?.level ?? 1;
+
+    const nextLevelGrants = Object.keys(deltas).length > 0
+      ? [...levelGrants, { class_slug: levelUpClass!, class_level: newClassLevel, deltas }]
+      : levelGrants;
+
+    const nextDesc = nextLevelGrants !== levelGrants
+      ? { ...desc, applied_asis: { ...applied, level_grants: nextLevelGrants } }
+      : desc;
+
     onChange({
       classes: updatedClasses,
       abilities,
       level: newLevel,
       hp_max: newHpMax,
       hp_current: newHpCurrent,
+      description: nextDesc,
     });
     setLevelUpClass(null);
   }
