@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import type { Character, ClassEntry, LibraryItem } from '../types';
+import type { Abilities, Character, ClassEntry, LibraryItem } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
 import { defaultResourcesForClass } from '../classResources';
 import { MD } from '../../library/Statblock';
 import { featuresThroughLevel } from '../classFeatures';
-import { CLASS_SAVE_PROFICIENCIES, meetsMulticlassPrereqs, missingMulticlassPrereqs, MULTICLASS_PREREQS } from '../rules';
+import { CLASS_SAVE_PROFICIENCIES, hitDieFor, meetsMulticlassPrereqs, missingMulticlassPrereqs, MULTICLASS_PREREQS } from '../rules';
 import type { AbilityKey } from '../types';
+import LevelUpDialog from '../LevelUpDialog';
 
 function savesForClass(slug: string): Record<string, { proficient: boolean; sources: string[] }> {
   const profs = CLASS_SAVE_PROFICIENCIES[slug] ?? [];
@@ -48,6 +49,7 @@ export default function ClassStep({ character, onChange }: Props) {
   const [allClasses, setAllClasses] = useState<LibraryItem[]>([]);
   const [classDataByslug, setClassDataBySlug] = useState<Record<string, ClassData>>({});
   const [loadingList, setLoadingList] = useState(true);
+  const [levelUpClass, setLevelUpClass] = useState<string | null>(null);
 
   // Use classes[] as source of truth. If empty (legacy / fresh), derive a one-entry array
   // from the legacy field so the rest of the UI uniformly works on classes[].
@@ -133,9 +135,27 @@ export default function ClassStep({ character, onChange }: Props) {
   }
 
   function adjustClassLevel(slug: string, delta: number) {
+    if (delta > 0) {
+      // Level-up goes through the LevelUpDialog so the player gets ASI prompts at L4/8/12/16/19
+      // (plus fighter L6/14, rogue L10), HP preview, and new-features summary. The dialog
+      // handles one level at a time; clicking + repeatedly walks through each level's prompt.
+      setLevelUpClass(slug);
+      return;
+    }
     const next = classes
       .map((c) => c.slug === slug ? { ...c, level: Math.max(1, c.level + delta) } : c);
     setClassesAndSync(next);
+  }
+
+  async function handleLevelUpConfirm(updatedClasses: ClassEntry[], abilities: Abilities, newLevel: number, newHpMax: number, newHpCurrent: number) {
+    onChange({
+      classes: updatedClasses,
+      abilities,
+      level: newLevel,
+      hp_max: newHpMax,
+      hp_current: newHpCurrent,
+    });
+    setLevelUpClass(null);
   }
 
   if (loadingList) return <p>Loading classes…</p>;
@@ -270,6 +290,16 @@ export default function ClassStep({ character, onChange }: Props) {
             })}
           </div>
         </div>
+      )}
+
+      {levelUpClass && (
+        <LevelUpDialog
+          character={character}
+          hitDieSize={hitDieFor(levelUpClass)}
+          initialTargetClass={levelUpClass}
+          onConfirm={handleLevelUpConfirm}
+          onCancel={() => setLevelUpClass(null)}
+        />
       )}
     </div>
   );

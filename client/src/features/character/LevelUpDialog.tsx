@@ -10,6 +10,8 @@ interface Props {
   character: Character;
   /** Legacy: hit die for the primary class. Used as fallback when picking that class to level. */
   hitDieSize: number;
+  /** Initial class to target. Defaults to classes[0]. */
+  initialTargetClass?: string;
   /**
    * Confirm callback. Receives the updated classes[] (with the chosen class's level bumped),
    * abilities (post-ASI), new total level, and HP totals.
@@ -18,7 +20,7 @@ interface Props {
   onCancel: () => void;
 }
 
-export default function LevelUpDialog({ character, hitDieSize, onConfirm, onCancel }: Props) {
+export default function LevelUpDialog({ character, hitDieSize, initialTargetClass, onConfirm, onCancel }: Props) {
   // Source of truth: classes[] if populated, else legacy single-class.
   const classes: ClassEntry[] = useMemo(() => character.classes && character.classes.length > 0
     ? character.classes
@@ -26,7 +28,7 @@ export default function LevelUpDialog({ character, hitDieSize, onConfirm, onCanc
       ? [{ slug: character.class_slug, subclass_slug: character.subclass_slug, level: character.level || 1, hit_dice_used: 0 }]
       : []), [character.classes, character.class_slug, character.subclass_slug, character.level]);
 
-  const [targetClass, setTargetClass] = useState<string>(classes[0]?.slug ?? '');
+  const [targetClass, setTargetClass] = useState<string>(initialTargetClass ?? classes[0]?.slug ?? '');
   useEffect(() => {
     // If the dialog opens after a class change, keep target valid.
     if (!classes.some((c) => c.slug === targetClass)) {
