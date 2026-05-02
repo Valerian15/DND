@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '../../../lib/api';
-import { isWeaponProficient } from '../weaponProficiency';
+import { isWeaponProficientForClasses } from '../weaponProficiency';
 import type { Character } from '../types';
 
 interface WeaponListItem {
@@ -78,7 +78,10 @@ export default function WeaponsStep({ character, onChange }: Props) {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.5rem' }}>
             {weapons.map((w) => {
-              const proficient = isWeaponProficient(character.class_slug, w.slug, w.category);
+              const classSlugs = (character.classes && character.classes.length > 0)
+                ? character.classes.map((c) => c.slug)
+                : (character.class_slug ? [character.class_slug] : []);
+              const proficient = isWeaponProficientForClasses(classSlugs, w.slug, w.category);
               const isSelected = selected.has(w.slug);
               return (
                 <button

@@ -7,7 +7,7 @@ import { abilityModifier, formatModifier } from './pointBuy';
 import { initiative, parseHitDie, passivePerception, proficiencyBonus, recomputeDerived } from './rules';
 import { getCasterConfig } from './casters';
 import { SKILLS } from './skills';
-import { isWeaponProficient } from './weaponProficiency';
+import { isWeaponProficient, isWeaponProficientForClasses } from './weaponProficiency';
 import { parseSpellForAttack, scaleCantripDice } from './attackUtils';
 import LevelUpDialog from './LevelUpDialog';
 
@@ -442,7 +442,10 @@ export default function CharacterSheet() {
                     const w = weaponData[slug];
                     if (!w) return <div key={slug} style={{ fontSize: '0.9rem', color: '#aaa' }}>{slug}</div>;
 
-                    const proficient = isWeaponProficient(character.class_slug, slug, w.category);
+                    const classSlugs = (character.classes && character.classes.length > 0)
+                      ? character.classes.map((c) => c.slug)
+                      : (character.class_slug ? [character.class_slug] : []);
+                    const proficient = isWeaponProficientForClasses(classSlugs, slug, w.category);
                     const isFinesse = w.properties.includes('finesse');
                     const isRanged = w.weapon_type === 'Ranged';
                     const abilityMod = isRanged ? dexMod : isFinesse ? Math.max(strMod, dexMod) : strMod;

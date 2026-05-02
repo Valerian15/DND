@@ -9,7 +9,7 @@ import { ABILITY_ORDER, ABILITY_NAMES } from '../character/types';
 import type { Character, ClassResource, TimedEffect } from '../character/types';
 import { parseSpellDurationRounds, getSpellConditions, isHealingSpell, buildHealDice } from './spellEffects';
 import { TokenAuraControl } from './TokenAuraControl';
-import { isWeaponProficient } from '../character/weaponProficiency';
+import { isWeaponProficientForClasses } from '../character/weaponProficiency';
 import { parseSpellForAttack, scaleCantripDice } from '../character/attackUtils';
 import { updateTokenHp } from './tokenApi';
 import { socket } from '../../lib/socket';
@@ -1032,7 +1032,10 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                 {character.weapons?.map((slug) => {
                   const w = weaponData[slug];
                   if (!w) return <div key={slug} style={{ fontSize: '0.8rem', color: '#aaa' }}>{slug}</div>;
-                  const proficient = isWeaponProficient(character.class_slug, slug, w.category);
+                  const classSlugs = (character.classes && character.classes.length > 0)
+                    ? character.classes.map((c) => c.slug)
+                    : (character.class_slug ? [character.class_slug] : []);
+                  const proficient = isWeaponProficientForClasses(classSlugs, slug, w.category);
                   const isFinesse = w.properties.includes('finesse');
                   const isRanged = w.weapon_type === 'Ranged';
                   const isHeavy = w.properties.includes('heavy');

@@ -42,3 +42,17 @@ export function isWeaponProficient(
   if (hasSimpleBase && weaponCategory === 'Simple') return true;
   return prof.extra.includes(weaponSlug);
 }
+
+/**
+ * Multiclass-aware variant: a character is proficient with a weapon if ANY of their
+ * classes confers proficiency. RAW multiclassing grants a subset of weapon profs,
+ * but for the secondary classes we model the gap loosely — a Wizard 1/Fighter 1
+ * gets the full fighter list, which matches player expectations.
+ */
+export function isWeaponProficientForClasses(
+  classSlugs: string[],
+  weaponSlug: string,
+  weaponCategory: string,
+): boolean {
+  return classSlugs.some((slug) => isWeaponProficient(slug, weaponSlug, weaponCategory));
+}
