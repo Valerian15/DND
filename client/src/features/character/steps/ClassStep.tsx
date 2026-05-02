@@ -6,10 +6,10 @@ import { MD } from '../../library/Statblock';
 import { CLASS_SAVE_PROFICIENCIES, meetsMulticlassPrereqs, missingMulticlassPrereqs, MULTICLASS_PREREQS } from '../rules';
 import type { AbilityKey } from '../types';
 
-function savesForClass(slug: string): Record<string, { proficient: boolean }> {
+function savesForClass(slug: string): Record<string, { proficient: boolean; sources: string[] }> {
   const profs = CLASS_SAVE_PROFICIENCIES[slug] ?? [];
-  const out: Record<string, { proficient: boolean }> = {};
-  for (const k of profs) out[k as AbilityKey] = { proficient: true };
+  const out: Record<string, { proficient: boolean; sources: string[] }> = {};
+  for (const k of profs) out[k as AbilityKey] = { proficient: true, sources: ['class'] };
   return out;
 }
 

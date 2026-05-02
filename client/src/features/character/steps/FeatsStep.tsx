@@ -31,6 +31,31 @@ interface FeatGrants {
   resilient?: { ability: AbilityKey };
 }
 
+interface SaveEntry { proficient?: boolean; sources?: string[] }
+
+/** Add a source tag to a save proficiency, creating the entry if missing. */
+function addSaveSource(saves: unknown, ability: string, source: string): Record<string, SaveEntry> {
+  const out = { ...((saves ?? {}) as Record<string, SaveEntry>) };
+  const entry = out[ability] ?? {};
+  // Migrate legacy entries (proficient: true, no sources) to ['class'].
+  const baseSources = entry.sources ?? (entry.proficient ? ['class'] : []);
+  const sources = baseSources.includes(source) ? baseSources : [...baseSources, source];
+  out[ability] = { proficient: true, sources };
+  return out;
+}
+
+/** Remove a source tag; if no sources remain, drop the entry. */
+function removeSaveSource(saves: unknown, ability: string, source: string): Record<string, SaveEntry> {
+  const out = { ...((saves ?? {}) as Record<string, SaveEntry>) };
+  const entry = out[ability];
+  if (!entry) return out;
+  const baseSources = entry.sources ?? (entry.proficient ? ['class'] : []);
+  const sources = baseSources.filter((s) => s !== source);
+  if (sources.length === 0) delete out[ability];
+  else out[ability] = { proficient: true, sources };
+  return out;
+}
+
 const ABILITY_WORD_TO_KEY: Record<string, AbilityKey> = {
   strength: 'str', str: 'str',
   dexterity: 'dex', dex: 'dex',
@@ -87,7 +112,7 @@ export default function FeatsStep({ character, onChange }: Props) {
 
   function removeFeat(slug: string) {
     const patch: Partial<Character> = { feats: selected.filter((s) => s !== slug) };
-    // If removing Resilient, undo its ability +1.
+    // If removing Resilient, undo its ability +1 AND remove the feat tag from saves.
     if (slug === 'resilient') {
       const desc = (character.description ?? {}) as Record<string, any>;
       const grants = (desc.feat_grants ?? {}) as FeatGrants;
@@ -99,6 +124,7 @@ export default function FeatsStep({ character, onChange }: Props) {
         delete nextGrants.resilient;
         patch.abilities = abilities;
         patch.description = { ...desc, feat_grants: nextGrants };
+        patch.saves = removeSaveSource(character.saves, prev, 'feat:resilient');
       }
     }
     onChange(patch);
@@ -118,8 +144,9 @@ export default function FeatsStep({ character, onChange }: Props) {
     if (next) nextGrants.resilient = { ability: next };
     else delete nextGrants.resilient;
 
-    const saves = { ...((character.saves ?? {}) as Record<string, { proficient?: boolean }>) };
-    if (next) saves[next] = { ...(saves[next] ?? {}), proficient: true };
+    let saves = character.saves as Record<string, unknown>;
+    if (prev) saves = removeSaveSource(saves, prev, 'feat:resilient') as Record<string, unknown>;
+    if (next) saves = addSaveSource(saves, next, 'feat:resilient') as Record<string, unknown>;
 
     onChange({
       abilities,
