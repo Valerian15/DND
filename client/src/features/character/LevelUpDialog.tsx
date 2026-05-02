@@ -61,6 +61,9 @@ export default function LevelUpDialog({ character, hitDieSize, onConfirm, onCanc
       const finalAbilities = projectedAbilities ?? character.abilities;
       const newConMod = abilityModifier(finalAbilities.con);
       const conDelta = newConMod - abilityModifier(character.abilities.con);
+      // Retroactive Con bump: +conDelta per existing level (× character.level), plus +conDelta
+      // for the new level on top of preview.newHpMax (which used the old Con mod).
+      // Net: preview.newHpMax + conDelta × newLevel.
       const newHpMax = preview.newHpMax + conDelta * character.level + conDelta;
       const newHpCurrent = Math.min(character.hp_current + preview.hpGain + conDelta, newHpMax);
 
