@@ -136,6 +136,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const [deathSavesSuccess, setDeathSavesSuccess] = useState(0);
   const [deathSavesFailure, setDeathSavesFailure] = useState(0);
   const [inspiration, setInspiration] = useState(0);
+  const [luckyUsed, setLuckyUsed] = useState(0);
   const [exhaustion, setExhaustion] = useState(0);
   const [newEffectName, setNewEffectName] = useState('');
   const [newEffectRounds, setNewEffectRounds] = useState('10');
@@ -163,6 +164,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
         setDeathSavesSuccess(c.death_saves_success ?? 0);
         setDeathSavesFailure(c.death_saves_failure ?? 0);
         setInspiration(c.inspiration ?? 0);
+        setLuckyUsed(c.lucky_used ?? 0);
         setExhaustion(c.exhaustion_level ?? 0);
 
         setLocalFeats(c.feats ?? []);
@@ -656,6 +658,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     setLocalResources(nextResources);
     setDeathSavesSuccess(0);
     setDeathSavesFailure(0);
+    setLuckyUsed(0);
     socket.emit('chat:send', { body: `/action ${character.name} takes a long rest. HP and resources restored.` });
     try {
       await updateCharacter(character.id, {
@@ -663,6 +666,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
         hit_dice_used: nextHDUsed, resources: nextResources,
         ...(nextClasses ? { classes: nextClasses } : {}),
         death_saves_success: 0, death_saves_failure: 0,
+        lucky_used: 0,
       });
       if (tokenId > 0) await updateTokenHp(tokenId, nextHp);
     } catch { /* ignore */ }
@@ -1157,6 +1161,47 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
               );
             })()}
           </Section>
+
+          {/* Lucky feat tracker */}
+          {(character.feats ?? []).includes('lucky') && (
+            <Section title={`🍀 Lucky (${3 - luckyUsed}/3)`}>
+              <p style={{ fontSize: '0.78rem', color: '#666', margin: '0 0 0.4rem' }}>
+                Spend a luck point to roll an extra d20 (use whichever you prefer). Resets on long rest.
+              </p>
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                <button
+                  disabled={luckyUsed >= 3}
+                  onClick={async () => {
+                    if (!character || luckyUsed >= 3) return;
+                    const next = luckyUsed + 1;
+                    setLuckyUsed(next);
+                    rollInChat(`🍀 Lucky reroll (${next}/3 spent)`, '1d20');
+                    try { await updateCharacter(character.id, { lucky_used: next }); }
+                    catch { setLuckyUsed(luckyUsed); }
+                  }}
+                  style={{
+                    padding: '0.3rem 0.65rem', fontSize: '0.82rem', fontWeight: 600,
+                    background: luckyUsed >= 3 ? '#f5f5f5' : '#e7f7ec',
+                    color: luckyUsed >= 3 ? '#bbb' : '#2a7',
+                    border: `1px solid ${luckyUsed >= 3 ? '#ddd' : '#c2e7d0'}`,
+                    borderRadius: 4, cursor: luckyUsed >= 3 ? 'not-allowed' : 'pointer',
+                  }}>
+                  Spend luck → roll 1d20
+                </button>
+                {luckyUsed > 0 && (
+                  <button
+                    onClick={async () => {
+                      if (!character) return;
+                      setLuckyUsed(0);
+                      try { await updateCharacter(character.id, { lucky_used: 0 }); }
+                      catch { setLuckyUsed(luckyUsed); }
+                    }}
+                    title="Reset to 3 (auto-runs on long rest)"
+                    style={{ padding: '0.3rem 0.5rem', fontSize: '0.78rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', color: '#666' }}>↻</button>
+                )}
+              </div>
+            </Section>
+          )}
 
           {/* Class Resource Tracker */}
           {hasResources && (

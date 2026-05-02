@@ -25,6 +25,7 @@ const AUTOMATED_FEATS: Record<string, string> = {
   'sharpshooter': '−5/+10 power attack toggle on ranged weapons (in-game sheet)',
   'heavy-armor-master': '−3 to bludgeoning/piercing/slashing damage taken (auto-applied)',
   'resilient': '+1 to chosen ability and proficiency in its saving throws',
+  'lucky': '3 luck points/long rest — spend one in the in-game sheet to reroll a d20',
 };
 
 interface FeatGrants {

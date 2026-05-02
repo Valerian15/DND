@@ -496,6 +496,9 @@ export function initSchema() {
   // Spoken/read languages — JSON array of language names (e.g. ['Common', 'Dwarvish']).
   try { db.exec("ALTER TABLE characters ADD COLUMN languages TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
 
+  // Lucky feat point tracker (0..3). Resets on long rest.
+  try { db.exec('ALTER TABLE characters ADD COLUMN lucky_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+
   // AOE spell templates on maps
   db.exec(`
     CREATE TABLE IF NOT EXISTS map_templates (
