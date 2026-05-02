@@ -34,7 +34,6 @@ export default function DetailsStep({ character, onChange }: Props) {
   const [bonds, setBonds] = useState(initialPersonality.bonds ?? '');
   const [flaws, setFlaws] = useState(initialPersonality.flaws ?? '');
 
-  // Reload when switching characters
   useEffect(() => {
     const d = (character.description ?? {}) as Record<string, any>;
     const p = character.personality ?? { traits: '', ideals: '', bonds: '', flaws: '' };
@@ -54,41 +53,37 @@ export default function DetailsStep({ character, onChange }: Props) {
     setFlaws(p.flaws ?? '');
   }, [character.id]);
 
-  function saveAll() {
-    onChange({
-      name: name.trim() || 'Unnamed Hero',
-      portrait_url: portraitUrl.trim() || null,
-      description: { alignment, age, height, weight, eyes, hair, skin, backstory },
-      personality: { traits, ideals, bonds, flaws },
-    });
+  /** Patch description with one or more fields. Reads the latest from `character` to avoid stomping concurrent changes. */
+  function saveDescription(patch: Record<string, string>) {
+    const current = (character.description ?? {}) as Record<string, any>;
+    onChange({ description: { ...current, ...patch } });
   }
 
-  // Save name immediately on blur so the list page reflects it
-  function onNameBlur() {
-    if (name.trim() !== character.name) {
-      onChange({ name: name.trim() || 'Unnamed Hero' });
-    }
+  function savePersonality(patch: Partial<Character['personality']>) {
+    const current = character.personality ?? { traits: '', ideals: '', bonds: '', flaws: '' };
+    onChange({ personality: { ...current, ...patch } });
   }
 
   return (
     <div>
       <h2 style={{ marginTop: 0 }}>Details</h2>
       <p style={{ color: '#666' }}>
-        Give your character a name, a look, and a story. Everything here is optional except the name.
+        Give your character a name, a look, and a story. Everything here is optional except the name. Changes save automatically when you leave a field.
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
         <Field label="Name">
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onBlur={onNameBlur}
-            style={inputStyle}
-          />
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+            onBlur={() => {
+              const trimmed = name.trim() || 'Unnamed Hero';
+              if (trimmed !== character.name) onChange({ name: trimmed });
+            }}
+            style={inputStyle} />
         </Field>
         <Field label="Alignment">
-          <select value={alignment} onChange={(e) => setAlignment(e.target.value)} style={inputStyle}>
+          <select value={alignment}
+            onChange={(e) => { setAlignment(e.target.value); saveDescription({ alignment: e.target.value }); }}
+            style={inputStyle}>
             <option value="">— select —</option>
             {ALIGNMENTS.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
@@ -96,35 +91,46 @@ export default function DetailsStep({ character, onChange }: Props) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-        <Field label="Age"><input type="text" value={age} onChange={(e) => setAge(e.target.value)} style={inputStyle} /></Field>
-        <Field label="Height"><input type="text" value={height} onChange={(e) => setHeight(e.target.value)} style={inputStyle} /></Field>
-        <Field label="Weight"><input type="text" value={weight} onChange={(e) => setWeight(e.target.value)} style={inputStyle} /></Field>
+        <Field label="Age">
+          <input type="text" value={age} onChange={(e) => setAge(e.target.value)}
+            onBlur={() => saveDescription({ age })} style={inputStyle} />
+        </Field>
+        <Field label="Height">
+          <input type="text" value={height} onChange={(e) => setHeight(e.target.value)}
+            onBlur={() => saveDescription({ height })} style={inputStyle} />
+        </Field>
+        <Field label="Weight">
+          <input type="text" value={weight} onChange={(e) => setWeight(e.target.value)}
+            onBlur={() => saveDescription({ weight })} style={inputStyle} />
+        </Field>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-        <Field label="Eyes"><input type="text" value={eyes} onChange={(e) => setEyes(e.target.value)} style={inputStyle} /></Field>
-        <Field label="Hair"><input type="text" value={hair} onChange={(e) => setHair(e.target.value)} style={inputStyle} /></Field>
-        <Field label="Skin"><input type="text" value={skin} onChange={(e) => setSkin(e.target.value)} style={inputStyle} /></Field>
+        <Field label="Eyes">
+          <input type="text" value={eyes} onChange={(e) => setEyes(e.target.value)}
+            onBlur={() => saveDescription({ eyes })} style={inputStyle} />
+        </Field>
+        <Field label="Hair">
+          <input type="text" value={hair} onChange={(e) => setHair(e.target.value)}
+            onBlur={() => saveDescription({ hair })} style={inputStyle} />
+        </Field>
+        <Field label="Skin">
+          <input type="text" value={skin} onChange={(e) => setSkin(e.target.value)}
+            onBlur={() => saveDescription({ skin })} style={inputStyle} />
+        </Field>
       </div>
 
       <Field label="Portrait image URL (optional)">
-        <input
-          type="text"
-          value={portraitUrl}
-          onChange={(e) => setPortraitUrl(e.target.value)}
-          placeholder="https://..."
-          style={inputStyle}
-        />
+        <input type="text" value={portraitUrl} onChange={(e) => setPortraitUrl(e.target.value)}
+          onBlur={() => onChange({ portrait_url: portraitUrl.trim() || null })}
+          placeholder="https://..." style={inputStyle} />
       </Field>
 
       <div style={{ marginTop: '1rem' }}>
         <Field label="Backstory">
-          <textarea
-            value={backstory}
-            onChange={(e) => setBackstory(e.target.value)}
-            rows={6}
-            style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
-          />
+          <textarea value={backstory} onChange={(e) => setBackstory(e.target.value)}
+            onBlur={() => saveDescription({ backstory })}
+            rows={6} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
         </Field>
       </div>
 
@@ -134,23 +140,27 @@ export default function DetailsStep({ character, onChange }: Props) {
       </p>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
         <Field label="Personality Traits">
-          <textarea value={traits} onChange={(e) => setTraits(e.target.value)} rows={3}
-            placeholder="How you act and present yourself…"
+          <textarea value={traits} onChange={(e) => setTraits(e.target.value)}
+            onBlur={() => savePersonality({ traits })}
+            rows={3} placeholder="How you act and present yourself…"
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
         </Field>
         <Field label="Ideals">
-          <textarea value={ideals} onChange={(e) => setIdeals(e.target.value)} rows={3}
-            placeholder="What drives you, your principles…"
+          <textarea value={ideals} onChange={(e) => setIdeals(e.target.value)}
+            onBlur={() => savePersonality({ ideals })}
+            rows={3} placeholder="What drives you, your principles…"
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
         </Field>
         <Field label="Bonds">
-          <textarea value={bonds} onChange={(e) => setBonds(e.target.value)} rows={3}
-            placeholder="Connections to people, places, things…"
+          <textarea value={bonds} onChange={(e) => setBonds(e.target.value)}
+            onBlur={() => savePersonality({ bonds })}
+            rows={3} placeholder="Connections to people, places, things…"
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
         </Field>
         <Field label="Flaws">
-          <textarea value={flaws} onChange={(e) => setFlaws(e.target.value)} rows={3}
-            placeholder="Weaknesses, vices, fears…"
+          <textarea value={flaws} onChange={(e) => setFlaws(e.target.value)}
+            onBlur={() => savePersonality({ flaws })}
+            rows={3} placeholder="Weaknesses, vices, fears…"
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
         </Field>
       </div>
@@ -189,10 +199,6 @@ export default function DetailsStep({ character, onChange }: Props) {
           </div>
         );
       })}
-
-      <button onClick={saveAll} style={{ marginTop: '1rem', padding: '0.75rem 1.5rem', cursor: 'pointer' }}>
-        Save details
-      </button>
     </div>
   );
 }
