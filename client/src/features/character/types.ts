@@ -57,6 +57,7 @@ export interface Character {
   /** @deprecated mirror of classes[0].subclass_slug */
   subclass_slug: string | null;
   race_slug: string | null;
+  subrace_slug: string | null;
   background_slug: string | null;
   hp_current: number;
   hp_max: number;

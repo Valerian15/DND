@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Abilities, Character } from '../types';
+import type { Abilities, AbilityKey, Character } from '../types';
 import { ABILITY_NAMES, ABILITY_ORDER } from '../types';
 import {
   POINT_BUY_BUDGET,
@@ -10,6 +10,29 @@ import {
   pointCost,
   remaining,
 } from '../pointBuy';
+
+interface AppliedAsis {
+  race?: Partial<Record<AbilityKey, number>>;
+  subrace?: Partial<Record<AbilityKey, number>>;
+  floating?: AbilityKey[];
+}
+
+/** Combined ASI delta from race + subrace + floating picks. */
+function asiDelta(applied: AppliedAsis): Record<AbilityKey, number> {
+  const out: Record<AbilityKey, number> = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
+  for (const m of [applied.race, applied.subrace]) {
+    for (const k of ABILITY_ORDER) out[k] += m?.[k] ?? 0;
+  }
+  for (const k of applied.floating ?? []) out[k] += 1;
+  return out;
+}
+
+function subtract(a: Abilities, d: Record<AbilityKey, number>): Abilities {
+  return { str: a.str - d.str, dex: a.dex - d.dex, con: a.con - d.con, int: a.int - d.int, wis: a.wis - d.wis, cha: a.cha - d.cha };
+}
+function add(a: Abilities, d: Record<AbilityKey, number>): Abilities {
+  return { str: a.str + d.str, dex: a.dex + d.dex, con: a.con + d.con, int: a.int + d.int, wis: a.wis + d.wis, cha: a.cha + d.cha };
+}
 
 interface Props {
   character: Character;
@@ -27,15 +50,25 @@ function looksLikeStandardArray(a: Abilities): boolean {
 }
 
 export default function AbilitiesStep({ character, onChange }: Props) {
-  // Pick starting mode based on what the character currently has
-  const initialMode: Mode = looksLikeStandardArray(character.abilities) ? 'standard-array' : 'point-buy';
+  const applied = ((character.description ?? {}) as { applied_asis?: AppliedAsis }).applied_asis ?? {};
+  const delta = useMemo(() => asiDelta(applied), [applied]);
+  const rawAbilities = useMemo(() => subtract(character.abilities, delta), [character.abilities, delta]);
+
+  // Pick starting mode based on what the character currently has (raw, pre-ASI)
+  const initialMode: Mode = looksLikeStandardArray(rawAbilities) ? 'standard-array' : 'point-buy';
   const [mode, setMode] = useState<Mode>(initialMode);
-  const [scores, setScores] = useState<Abilities>(character.abilities);
+  const [scores, setScores] = useState<Abilities>(rawAbilities);
 
   useEffect(() => {
-    setScores(character.abilities);
-    setMode(looksLikeStandardArray(character.abilities) ? 'standard-array' : 'point-buy');
+    setScores(rawAbilities);
+    setMode(looksLikeStandardArray(rawAbilities) ? 'standard-array' : 'point-buy');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [character.id]);
+
+  /** Persist a raw ability map as `raw + race ASI delta`. */
+  function persistRaw(raw: Abilities) {
+    onChange({ abilities: add(raw, delta) });
+  }
 
   const scoreValues = ABILITY_ORDER.map((k) => scores[k]);
   const pointsLeft = remaining(scoreValues);
@@ -46,24 +79,24 @@ export default function AbilitiesStep({ character, onChange }: Props) {
     setMode(next);
     if (next === 'point-buy') {
       setScores(DEFAULT_BUY);
-      onChange({ abilities: DEFAULT_BUY });
+      persistRaw(DEFAULT_BUY);
     } else {
       // Reset to all-zero slots; player will assign array values themselves
       const blank: Abilities = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
       setScores(blank);
-      onChange({ abilities: blank });
+      persistRaw(blank);
     }
   }
 
-  function pbChange(key: keyof Abilities, delta: number) {
+  function pbChange(key: keyof Abilities, deltaAmount: number) {
     const current = scores[key];
-    const next = current + delta;
+    const next = current + deltaAmount;
     if (next < POINT_BUY_MIN || next > POINT_BUY_MAX) return;
     const testScores = { ...scores, [key]: next };
     const testValues = ABILITY_ORDER.map((k) => testScores[k]);
     if (remaining(testValues) < 0) return;
     setScores(testScores);
-    onChange({ abilities: testScores });
+    persistRaw(testScores);
   }
 
   // ---------- STANDARD ARRAY ----------
@@ -99,7 +132,7 @@ export default function AbilitiesStep({ character, onChange }: Props) {
       if (scores[ability] > 0) {
         const next = { ...scores, [ability]: 0 };
         setScores(next);
-        onChange({ abilities: next });
+        persistRaw(next);
       }
       return;
     }
@@ -107,14 +140,14 @@ export default function AbilitiesStep({ character, onChange }: Props) {
     // If the ability already has a value, return that value to the pool by clearing it
     const next = { ...scores, [ability]: value };
     setScores(next);
-    onChange({ abilities: next });
+    persistRaw(next);
     setPickedValueIndex(null);
   }
 
   function resetArray() {
     const blank: Abilities = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
     setScores(blank);
-    onChange({ abilities: blank });
+    persistRaw(blank);
     setPickedValueIndex(null);
   }
 
@@ -125,7 +158,7 @@ export default function AbilitiesStep({ character, onChange }: Props) {
     <div>
       <h2 style={{ marginTop: 0 }}>Ability scores</h2>
       <p style={{ color: '#666' }}>
-        Your raw ability scores before racial bonuses (applied separately).
+        Your raw ability scores. Race bonuses are added on top — picked in the Race step.
       </p>
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
@@ -192,7 +225,9 @@ export default function AbilitiesStep({ character, onChange }: Props) {
         {ABILITY_ORDER.map((key) => {
           const score = scores[key];
           const cost = pointCost(score);
-          const mod = abilityModifier(score);
+          const bonus = delta[key];
+          const finalScore = score + bonus;
+          const mod = abilityModifier(finalScore);
           const showMod = score > 0;
           const empty = mode === 'standard-array' && score === 0;
           return (
@@ -235,6 +270,12 @@ export default function AbilitiesStep({ character, onChange }: Props) {
               {mode === 'standard-array' && (
                 <div style={{ fontSize: '1.75rem', fontWeight: 'bold', margin: '0.5rem 0', color: empty ? '#ccc' : '#333' }}>
                   {empty ? '—' : score}
+                </div>
+              )}
+
+              {bonus > 0 && score > 0 && (
+                <div style={{ fontSize: '0.78rem', color: '#2a7', marginTop: '0.15rem' }}>
+                  +{bonus} race → <strong>{finalScore}</strong>
                 </div>
               )}
 

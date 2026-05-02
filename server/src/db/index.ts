@@ -490,6 +490,9 @@ export function initSchema() {
   // Legacy: previously added character.effects. Kept for compatibility but no longer used.
   try { db.exec("ALTER TABLE characters ADD COLUMN effects TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
 
+  // Subrace selection (Hill vs Mountain Dwarf, High vs Wood Elf, etc.).
+  try { db.exec('ALTER TABLE characters ADD COLUMN subrace_slug TEXT'); } catch { /* exists */ }
+
   // AOE spell templates on maps
   db.exec(`
     CREATE TABLE IF NOT EXISTS map_templates (

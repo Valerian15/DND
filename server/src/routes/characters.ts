@@ -13,6 +13,7 @@ interface CharacterRow {
   class_slug: string | null;
   subclass_slug: string | null;
   race_slug: string | null;
+  subrace_slug: string | null;
   background_slug: string | null;
   hp_current: number;
   hp_max: number;
@@ -123,6 +124,7 @@ const UPDATABLE_SCALAR = new Set([
   'class_slug',
   'subclass_slug',
   'race_slug',
+  'subrace_slug',
   'background_slug',
   'hp_current',
   'hp_max',
