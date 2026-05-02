@@ -165,6 +165,11 @@ interface ClientToServerEvents {
     roll_mode?: 'advantage' | 'normal' | 'disadvantage';
     /** Slot level the spell is cast at (when is_spell=true) — for Counterspell DC contests. */
     cast_level?: number;
+    /**
+     * GWM / Sharpshooter -5/+10 toggle. Server validates the caster has the appropriate feat
+     * before applying. Client should only show the toggle for eligible weapons.
+     */
+    power_attack?: boolean;
   }) => void;
   /**
    * Auto-hit damage resolver (Magic Missile and similar).
@@ -538,6 +543,17 @@ function counterspellAbility(classSlug: string | null): 'int' | 'cha' {
     default:
       return 'int';
   }
+}
+
+/** Add a flat bonus to a "NdM[+X]" damage expression. Returns the original on parse failure. */
+function addToDamageExpression(expr: string, bonus: number): string {
+  const m = expr.replace(/\s+/g, '').match(/^(\d+d\d+)([+-]\d+)?$/i);
+  if (!m) return expr;
+  const dice = m[1];
+  const mod = m[2] ? parseInt(m[2], 10) : 0;
+  const next = mod + bonus;
+  if (next === 0) return dice;
+  return `${dice}${next > 0 ? '+' : ''}${next}`;
 }
 
 /** Load the feats array for a PC character. Returns an empty Set if missing or unparseable. */
@@ -1372,7 +1388,7 @@ export function setupSession(io: AppServer) {
       io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(sumRow));
     });
 
-    socket.on('combat:resolve_attack', async ({ caster_token_id, target_token_ids, attack_name, attack_bonus, damage_dice, damage_type, is_spell, roll_mode, cast_level }) => {
+    socket.on('combat:resolve_attack', async ({ caster_token_id, target_token_ids, attack_name, attack_bonus, damage_dice, damage_type, is_spell, roll_mode, cast_level, power_attack }) => {
       const cid = socket.data.campaign_id;
       if (cid == null) return;
 
@@ -1390,9 +1406,22 @@ export function setupSession(io: AppServer) {
       if (!Number.isFinite(attack_bonus)) return;
       if (typeof damage_dice !== 'string' || !damage_dice.trim()) return;
 
-      const casterToken = db.prepare('SELECT label FROM tokens WHERE id = ?').get(caster_token_id) as { label: string } | undefined;
+      const casterToken = db.prepare('SELECT label, character_id FROM tokens WHERE id = ?').get(caster_token_id) as { label: string; character_id: number | null } | undefined;
       const casterName = casterToken?.label ?? 'Caster';
       const verb = is_spell ? 'casts' : 'attacks with';
+
+      // GWM / Sharpshooter -5/+10 toggle. Validate the caster has at least one of those feats.
+      let effectiveAttackBonus = attack_bonus;
+      let effectiveDamageDice = damage_dice;
+      let powerAttackApplied = false;
+      if (power_attack && !is_spell) {
+        const feats = getCharacterFeats(casterToken?.character_id);
+        if (feats.has('great-weapon-master') || feats.has('sharpshooter')) {
+          effectiveAttackBonus = attack_bonus - 5;
+          effectiveDamageDice = addToDamageExpression(damage_dice, 10);
+          powerAttackApplied = true;
+        }
+      }
 
       const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
 
@@ -1405,7 +1434,8 @@ export function setupSession(io: AppServer) {
 
       // Cast announcement
       {
-        const r = insertChat.run(cid, user.id, user.username, `/action ${casterName} ${verb} ${attack_name}.`, 'action', null);
+        const note = powerAttackApplied ? ' (-5/+10 power attack)' : '';
+        const r = insertChat.run(cid, user.id, user.username, `/action ${casterName} ${verb} ${attack_name}${note}.`, 'action', null);
         const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
       }
@@ -1427,7 +1457,7 @@ export function setupSession(io: AppServer) {
         const dicePosted = r2 === null ? [r1] : [r1, r2, atkRoll]; // chat client treats [a,b,chosen] as adv/dis display
         const isCrit = atkRoll === 20;
         const isFumble = atkRoll === 1;
-        const atkTotal = atkRoll + attack_bonus;
+        const atkTotal = atkRoll + effectiveAttackBonus;
         let hits = isCrit || (!isFumble && atkTotal >= ac);
         let shieldUsed = false;
 
@@ -1452,10 +1482,10 @@ export function setupSession(io: AppServer) {
 
         // Post the attack roll
         const advSuffix = isAdv ? 'adv' : isDis ? 'dis' : '';
-        const atkExpr = `1d20${advSuffix}${attack_bonus >= 0 ? '+' : ''}${attack_bonus}`;
+        const atkExpr = `1d20${advSuffix}${effectiveAttackBonus >= 0 ? '+' : ''}${effectiveAttackBonus}`;
         const hitLabel = isCrit ? '★ CRIT' : isFumble ? '✗ fumble' : hits ? `✓ hit (AC ${ac})` : `✗ miss (AC ${ac}${shieldUsed ? ' — Shield' : ''})`;
         const rollModeForData = isAdv ? 'advantage' : isDis ? 'disadvantage' : undefined;
-        const atkData = JSON.stringify({ expression: atkExpr, dice: dicePosted, modifier: attack_bonus, total: atkTotal, label: `${target.label} — ${attack_name} ${hitLabel}`, rollMode: rollModeForData });
+        const atkData = JSON.stringify({ expression: atkExpr, dice: dicePosted, modifier: effectiveAttackBonus, total: atkTotal, label: `${target.label} — ${attack_name} ${hitLabel}`, rollMode: rollModeForData });
         const ar = insertChat.run(cid, user.id, user.username, `/roll ${atkExpr}`, 'roll', atkData);
         const atkRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(ar.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(atkRow));
@@ -1466,14 +1496,14 @@ export function setupSession(io: AppServer) {
         }
 
         // Damage roll (with crit doubling dice)
-        const dmg = isCrit ? rollCritDamage(damage_dice) : rollDiceExpression(damage_dice);
+        const dmg = isCrit ? rollCritDamage(effectiveDamageDice) : rollDiceExpression(effectiveDamageDice);
         const dmgMod = damageModifierForToken(target, damage_type);
         const adjustedTotal = dmgMod.multiplier === 1 ? dmg.total : Math.floor(dmg.total * dmgMod.multiplier);
         const modSuffix = dmgMod.label ? ` (${dmgMod.label})` : '';
         const dmgLabel = `${target.label} — ${attack_name} ${damage_type || 'damage'}${isCrit ? ' (crit!)' : ''}${modSuffix}`;
         const undoMeta = adjustedTotal > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
-        const dmgData = JSON.stringify({ expression: damage_dice, dice: dmg.rolls, modifier: dmg.modifier, total: adjustedTotal, label: dmgLabel, ...undoMeta });
-        const dr = insertChat.run(cid, user.id, user.username, `/roll ${damage_dice}`, 'roll', dmgData);
+        const dmgData = JSON.stringify({ expression: effectiveDamageDice, dice: dmg.rolls, modifier: dmg.modifier, total: adjustedTotal, label: dmgLabel, ...undoMeta });
+        const dr = insertChat.run(cid, user.id, user.username, `/roll ${effectiveDamageDice}`, 'roll', dmgData);
         const dmgRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(dr.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(dmgRow));
 

@@ -20,6 +20,8 @@ const AUTOMATED_FEATS: Record<string, string> = {
   'tough': '+2 HP per level (auto-applied to HP max)',
   'alert': '+5 to initiative rolls (auto-applied)',
   'war-caster': 'Advantage on Con concentration saves (auto-applied)',
+  'great-weapon-master': '−5/+10 power attack toggle on heavy melee weapons (in-game sheet)',
+  'sharpshooter': '−5/+10 power attack toggle on ranged weapons (in-game sheet)',
 };
 
 export default function FeatsStep({ character, onChange }: Props) {

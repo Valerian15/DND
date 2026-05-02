@@ -128,6 +128,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const [preparedSlugs, setPreparedSlugs] = useState<string[]>([]);
   const [preparingSaving, setPreparingSaving] = useState(false);
   const [rollMode, setRollMode] = useState<'advantage' | 'normal' | 'disadvantage'>('normal');
+  const [powerAttack, setPowerAttack] = useState(false);
   const [concentratingOn, setConcentratingOn] = useState<string | null>(null);
   const [slotsUsed, setSlotsUsed] = useState<Record<string, number>>({});
   const [hitDiceUsed, setHitDiceUsed] = useState(0);
@@ -1000,8 +1001,28 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
           </Section>
 
           {/* Attacks — weapons only */}
-          {hasWeapons && (
+          {hasWeapons && (() => {
+            const feats = character.feats ?? [];
+            const hasGwm = feats.includes('great-weapon-master');
+            const hasSharp = feats.includes('sharpshooter');
+            const showPowerAttack = hasGwm || hasSharp;
+            return (
             <Section title="Attacks">
+              {showPowerAttack && (
+                <div style={{ marginBottom: '0.4rem' }}>
+                  <button onClick={() => setPowerAttack(!powerAttack)}
+                    title={`Power attack: -5 to attack, +10 damage. ${hasGwm ? 'GWM applies on heavy melee weapons. ' : ''}${hasSharp ? 'Sharpshooter applies on ranged weapons.' : ''}`}
+                    style={{
+                      width: '100%', padding: '0.3rem 0.5rem', fontSize: '0.75rem', borderRadius: 4,
+                      border: `1px solid ${powerAttack ? '#a60' : '#ddd'}`,
+                      background: powerAttack ? '#fdf3e0' : '#fff',
+                      color: powerAttack ? '#a60' : '#888',
+                      fontWeight: powerAttack ? 700 : 400, cursor: 'pointer',
+                    }}>
+                    {powerAttack ? '⚔ Power Attack ON (−5/+10)' : 'Power Attack: off'}
+                  </button>
+                </div>
+              )}
               <div style={{ display: 'grid', gap: '0.35rem' }}>
                 {character.weapons?.map((slug) => {
                   const w = weaponData[slug];
@@ -1009,6 +1030,8 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                   const proficient = isWeaponProficient(character.class_slug, slug, w.category);
                   const isFinesse = w.properties.includes('finesse');
                   const isRanged = w.weapon_type === 'Ranged';
+                  const isHeavy = w.properties.includes('heavy');
+                  const powerEligible = (hasGwm && !isRanged && isHeavy) || (hasSharp && isRanged);
                   const abilityMod = isRanged ? dexMod : isFinesse ? Math.max(strMod, dexMod) : strMod;
                   const damageMod  = isFinesse ? Math.max(strMod, dexMod) : isRanged ? dexMod : strMod;
                   const attackBonus = abilityMod + (proficient ? prof : 0);
@@ -1020,12 +1043,13 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                     ? `${w.damage_dice}${damageMod !== 0 ? formatModifier(damageMod) : ''}`
                     : null;
                   return (
-                    <InGameAttackRow key={slug} name={w.name} tag={`${w.category} ${w.weapon_type}`}
+                    <InGameAttackRow key={slug} name={w.name} tag={`${w.category} ${w.weapon_type}${powerAttack && powerEligible ? ' · −5/+10' : ''}`}
                       attackLabel={formatModifier(attackBonus)} damageLabel={damageStr} damageType={w.damage_type}
                       extra={w.versatile_dice ? `${w.versatile_dice}${formatModifier(damageMod)} 2H` : undefined}
                       onRoll={() => {
                         // AUTO MODE: server resolves attack vs target AC + damage on hit
                         if (combatAutomation && selectedTargetIds.length > 0 && dmgExpr) {
+                          const usePower = powerAttack && powerEligible;
                           socket.emit('combat:resolve_attack', {
                             caster_token_id: tokenId,
                             target_token_ids: selectedTargetIds,
@@ -1034,8 +1058,10 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                             damage_dice: dmgExpr,
                             damage_type: w.damage_type,
                             roll_mode: rollMode,
+                            power_attack: usePower,
                           });
                           if (rollMode !== 'normal') setRollMode('normal');
+                          if (powerAttack) setPowerAttack(false);
                           return;
                         }
                         // MANUAL MODE: existing behavior
@@ -1046,7 +1072,8 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                 })}
               </div>
             </Section>
-          )}
+            );
+          })()}
 
           {/* Roll Mode (Advantage / Disadvantage) */}
           <Section title="Roll Mode">
