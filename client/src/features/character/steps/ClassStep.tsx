@@ -2,7 +2,15 @@ import { useEffect, useState } from 'react';
 import type { Character, ClassEntry, LibraryItem } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
 import { defaultResourcesForClass } from '../classResources';
-import { meetsMulticlassPrereqs, missingMulticlassPrereqs, MULTICLASS_PREREQS } from '../rules';
+import { CLASS_SAVE_PROFICIENCIES, meetsMulticlassPrereqs, missingMulticlassPrereqs, MULTICLASS_PREREQS } from '../rules';
+import type { AbilityKey } from '../types';
+
+function savesForClass(slug: string): Record<string, { proficient: boolean }> {
+  const profs = CLASS_SAVE_PROFICIENCIES[slug] ?? [];
+  const out: Record<string, { proficient: boolean }> = {};
+  for (const k of profs) out[k as AbilityKey] = { proficient: true };
+  return out;
+}
 
 interface Props {
   character: Character;
@@ -85,6 +93,7 @@ export default function ClassStep({ character, onChange }: Props) {
       subclass_slug: null,
       classes: [{ slug, subclass_slug: null, level: startingLevel, hit_dice_used: 0 }],
       skills: {},
+      saves: savesForClass(slug),
       inventory,
       resources: defaultResourcesForClass(slug, startingLevel),
     });
@@ -92,7 +101,7 @@ export default function ClassStep({ character, onChange }: Props) {
 
   function replaceFirstClass(slug: string) {
     if (slug === classes[0]?.slug) return;
-    if (!confirm(`Switch your starting class to ${slug}? This clears your subclass, skills, and starter kit.`)) return;
+    if (!confirm(`Switch your starting class to ${slug}? This clears your subclass, skills, saves, and starter kit.`)) return;
     const inventory = ((character.inventory ?? []) as Array<{ source?: string }>).filter(
       (i) => i?.source !== 'class-starter',
     );
@@ -103,6 +112,7 @@ export default function ClassStep({ character, onChange }: Props) {
       class_slug: slug,
       subclass_slug: null,
       skills: {},
+      saves: savesForClass(slug),
       inventory,
       resources: defaultResourcesForClass(slug, startingLevel),
     });
