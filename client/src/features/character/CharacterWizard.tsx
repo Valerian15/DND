@@ -75,7 +75,7 @@ export default function CharacterWizard() {
     setSaving(true);
     try {
       let updated = await updateCharacter(character.id, patch);
-      const affectsDerived = 'abilities' in patch || 'class_slug' in patch || 'level' in patch;
+      const affectsDerived = 'abilities' in patch || 'class_slug' in patch || 'level' in patch || 'feats' in patch || 'classes' in patch;
       if (affectsDerived) {
         const derived = recomputeDerived(updated, hitDieSize);
         updated = await updateCharacter(character.id, derived);

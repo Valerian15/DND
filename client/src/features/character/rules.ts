@@ -135,6 +135,11 @@ export function recomputeDerived(
     slots = computeSpellSlots(character.class_slug, character.level);
   }
 
+  // Tough feat: +2 HP per character level.
+  if ((character.feats ?? []).includes('tough')) {
+    hpMax += 2 * character.level;
+  }
+
   const hpCurrent = character.hp_current === 0 ? hpMax : Math.min(character.hp_current, hpMax);
   return {
     hp_max: hpMax,

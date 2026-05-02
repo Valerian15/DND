@@ -540,6 +540,18 @@ function counterspellAbility(classSlug: string | null): 'int' | 'cha' {
   }
 }
 
+/** Load the feats array for a PC character. Returns an empty Set if missing or unparseable. */
+function getCharacterFeats(characterId: number | null | undefined): Set<string> {
+  if (!characterId) return new Set();
+  const ch = db.prepare('SELECT feats FROM characters WHERE id = ?').get(characterId) as { feats: string } | undefined;
+  if (!ch) return new Set();
+  try {
+    const arr = JSON.parse(ch.feats || '[]');
+    if (Array.isArray(arr)) return new Set(arr.filter((s): s is string => typeof s === 'string'));
+  } catch { /* fall through */ }
+  return new Set();
+}
+
 // Compute spellcasting modifier for a PC = ability_mod + proficiency_bonus.
 function spellcastingMod(characterId: number): number {
   const ch = db.prepare('SELECT class_slug, level, abilities FROM characters WHERE id = ?').get(characterId) as { class_slug: string | null; level: number; abilities: string } | undefined;
@@ -952,7 +964,9 @@ export function setupSession(io: AppServer) {
         const dexScore = getNpcDex(token);
         const dexMod = Math.floor((dexScore - 10) / 2);
         const roll = Math.floor(Math.random() * 20) + 1;
-        insertStmt.run(campaign_id, token.id, token.label, roll + dexMod, dexScore);
+        // Alert feat: +5 to initiative.
+        const alertBonus = getCharacterFeats(token.character_id).has('alert') ? 5 : 0;
+        insertStmt.run(campaign_id, token.id, token.label, roll + dexMod + alertBonus, dexScore);
       }
 
       // Set round 1 and highlight first entry
@@ -1096,13 +1110,21 @@ export function setupSession(io: AppServer) {
 
       const dc = Math.max(10, Math.floor(damage / 2));
       const conMod = computeSaveModForToken(token, 'con');
-      const roll = Math.floor(Math.random() * 20) + 1;
+
+      // War Caster: advantage on Con saves to maintain concentration.
+      const feats = getCharacterFeats(token.character_id);
+      const hasWarCaster = feats.has('war-caster');
+      const r1 = Math.floor(Math.random() * 20) + 1;
+      const r2 = hasWarCaster ? Math.floor(Math.random() * 20) + 1 : null;
+      const roll = r2 !== null ? Math.max(r1, r2) : r1;
       const total = roll + conMod;
       const passed = total >= dc;
 
-      const expr = `1d20${conMod >= 0 ? '+' : ''}${conMod}`;
-      const label = `${token.label} — Concentration Save (DC ${dc}) ${passed ? '✓ held' : '✗ broken'}`;
-      const data = JSON.stringify({ expression: expr, dice: [roll], modifier: conMod, total, label });
+      const expr = hasWarCaster ? `2d20kh1${conMod >= 0 ? '+' : ''}${conMod}` : `1d20${conMod >= 0 ? '+' : ''}${conMod}`;
+      const advNote = hasWarCaster ? ' (War Caster advantage)' : '';
+      const label = `${token.label} — Concentration Save (DC ${dc})${advNote} ${passed ? '✓ held' : '✗ broken'}`;
+      const dice = r2 !== null ? [r1, r2] : [r1];
+      const data = JSON.stringify({ expression: expr, dice, modifier: conMod, total, label });
       const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
       const r = insertChat.run(cid, user.id, user.username, `/roll ${expr}`, 'roll', data);
       const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;

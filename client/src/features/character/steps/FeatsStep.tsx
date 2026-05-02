@@ -15,6 +15,13 @@ interface Props {
   onChange: (patch: Partial<Character>) => void;
 }
 
+/** Feats whose mechanical effect is wired into the game automation. */
+const AUTOMATED_FEATS: Record<string, string> = {
+  'tough': '+2 HP per level (auto-applied to HP max)',
+  'alert': '+5 to initiative rolls (auto-applied)',
+  'war-caster': 'Advantage on Con concentration saves (auto-applied)',
+};
+
 export default function FeatsStep({ character, onChange }: Props) {
   const [allFeats, setAllFeats] = useState<LibraryItem[]>([]);
   const [details, setDetails] = useState<Record<string, FeatData>>({});
@@ -87,12 +94,23 @@ export default function FeatsStep({ character, onChange }: Props) {
             return (
               <div key={slug} style={{ background: '#f9f9f9', border: '1px solid #e0e0e0', borderRadius: 6, padding: '0.75rem 1rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: feat?.desc || feat?.effects_desc ? '0.5rem' : 0 }}>
-                  <strong style={{ fontSize: '1rem' }}>✦ {feat?.name ?? slug}</strong>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <strong style={{ fontSize: '1rem' }}>✦ {feat?.name ?? slug}</strong>
+                    {AUTOMATED_FEATS[slug] && (
+                      <span title={AUTOMATED_FEATS[slug]}
+                        style={{ fontSize: '0.7rem', color: '#2a7', background: '#e7f7ec', border: '1px solid #c2e7d0', borderRadius: 3, padding: '0.1rem 0.4rem' }}>
+                        ⚙ auto
+                      </span>
+                    )}
+                  </div>
                   <button onClick={() => removeFeat(slug)}
                     style={{ padding: '0.25rem 0.6rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 4, background: '#fff', color: 'crimson', fontSize: '0.8rem' }}>
                     Remove
                   </button>
                 </div>
+                {AUTOMATED_FEATS[slug] && (
+                  <div style={{ fontSize: '0.78rem', color: '#2a7', marginBottom: '0.4rem' }}>{AUTOMATED_FEATS[slug]}</div>
+                )}
                 {feat && (
                   <div style={{ fontSize: '0.85rem', color: '#444', lineHeight: 1.5 }}>
                     {feat.prerequisite && <div style={{ fontStyle: 'italic', color: '#888', marginBottom: '0.4rem' }}>Prerequisite: {feat.prerequisite}</div>}
