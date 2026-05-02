@@ -4,6 +4,7 @@ import { ABILITY_NAMES, ABILITY_ORDER } from '../types';
 import { getLibraryItem, listLibrary } from '../api';
 import { MD } from '../../library/Statblock';
 import { SKILLS } from '../skills';
+import { parseRaceGrants, type RaceGrants } from '../raceParse';
 
 interface Props {
   character: Character;
@@ -87,47 +88,6 @@ interface AppliedAsis {
 const RACES_WITH_SKILL_GRANT: Record<string, true> = {
   'human-variant': true,
 };
-
-const KNOWN_LANGUAGES = [
-  'Common', 'Dwarvish', 'Elvish', 'Giant', 'Gnomish', 'Goblin', 'Halfling', 'Orc',
-  'Abyssal', 'Celestial', 'Deep Speech', 'Draconic', 'Infernal', 'Primordial',
-  'Sylvan', 'Undercommon', 'Auran', 'Aquan', 'Ignan', 'Terran', 'Druidic',
-];
-
-const DAMAGE_TYPES_FOR_PARSE = ['acid', 'bludgeoning', 'cold', 'fire', 'force', 'lightning', 'necrotic', 'piercing', 'poison', 'psychic', 'radiant', 'slashing', 'thunder'];
-
-interface RaceGrants {
-  languages: string[];
-  resistances: string[];
-  speed: number;
-}
-
-/**
- * Extract auto-applicable race grants (languages, damage resistances, speed) from race data.
- * Heuristics over the markdown text — catches the common cases (tiefling fire, dwarf poison,
- * etc.) and silently skips anything it doesn't recognise. The player can fix-up via Details.
- */
-function parseRaceGrants(race: { speed?: { walk?: number }; languages?: string; traits?: string }): RaceGrants {
-  const grants: RaceGrants = { languages: [], resistances: [], speed: 30 };
-  if (typeof race.speed?.walk === 'number') grants.speed = race.speed.walk;
-
-  const langText = (race.languages ?? '').toLowerCase();
-  for (const lang of KNOWN_LANGUAGES) {
-    if (langText.includes(lang.toLowerCase())) grants.languages.push(lang);
-  }
-
-  const traitsText = race.traits ?? '';
-  // Match "resistance to <type> damage" or "resistance against <type> damage".
-  const resRe = /resistance\s+(?:to|against)\s+(\w+)\s*damage/gi;
-  let m;
-  while ((m = resRe.exec(traitsText)) !== null) {
-    const dt = m[1].toLowerCase();
-    if (DAMAGE_TYPES_FOR_PARSE.includes(dt) && !grants.resistances.includes(dt)) {
-      grants.resistances.push(dt);
-    }
-  }
-  return grants;
-}
 
 export default function RaceStep({ character, onChange }: Props) {
   const [races, setRaces] = useState<LibraryItem[]>([]);

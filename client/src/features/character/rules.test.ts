@@ -185,3 +185,49 @@ describe('CLASS_SAVE_PROFICIENCIES', () => {
     }
   });
 });
+
+describe('multiclass HP — edge cases', () => {
+  it('Wizard 1 / Paladin 1 / Fighter 1 — first class (wizard d6) anchors level 1, then averages', () => {
+    // L1 (wizard d6 + Con) + L1 paladin (avg d10 + Con) + L1 fighter (avg d10 + Con)
+    // = 6 + 2 + (6 + 2) + (6 + 2) = 24
+    const classes: ClassEntry[] = [
+      { slug: 'wizard', subclass_slug: null, level: 1, hit_dice_used: 0 },
+      { slug: 'paladin', subclass_slug: null, level: 1, hit_dice_used: 0 },
+      { slug: 'fighter', subclass_slug: null, level: 1, hit_dice_used: 0 },
+    ];
+    expect(computeMulticlassHp(classes, 2)).toBe(24);
+  });
+
+  it('zero Con mod produces sane HP (no negatives)', () => {
+    const classes: ClassEntry[] = [
+      { slug: 'wizard', subclass_slug: null, level: 5, hit_dice_used: 0 },
+    ];
+    expect(computeMulticlassHp(classes, 0)).toBeGreaterThan(0);
+  });
+
+  it('negative Con mod still respects the level-1 minimum', () => {
+    expect(computeMaxHp(1, 6, -3)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('computeMulticlassSpellSlots — extras', () => {
+  it('Eldritch Knight 6 + Wizard 0 (single fighter EK) returns slots from caster level 2', () => {
+    const slots = computeMulticlassSpellSlots([
+      { slug: 'fighter', subclass_slug: 'eldritch-knight', level: 6, hit_dice_used: 0 },
+    ]);
+    expect(slots).toEqual({ '1': 3 }); // Caster level 2 = 3 first-level slots
+  });
+
+  it('Plain fighter (no EK) returns no slots even at high level', () => {
+    expect(computeMulticlassSpellSlots([
+      { slug: 'fighter', subclass_slug: null, level: 11, hit_dice_used: 0 },
+    ])).toEqual({});
+  });
+
+  it('Sorcerer 1 / Wizard 1 = full caster level 2 = 3 first-level slots', () => {
+    expect(computeMulticlassSpellSlots([
+      { slug: 'sorcerer', subclass_slug: null, level: 1, hit_dice_used: 0 },
+      { slug: 'wizard', subclass_slug: null, level: 1, hit_dice_used: 0 },
+    ])).toEqual({ '1': 3 });
+  });
+});
