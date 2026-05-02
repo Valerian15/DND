@@ -164,7 +164,11 @@ router.post('/:eid/restore', (req: AuthRequest, res) => {
 
   // Broadcast a fresh session:state-equivalent so clients reload tokens + initiative.
   // Clients already listen for token:created and initiative:updated; emit both.
-  const newTokens = db.prepare('SELECT * FROM tokens WHERE map_id = ?').all(c.active_map_id) as TokenRow[];
+  // We must JOIN with campaign_npcs so category_id is hydrated — without it the "On Map"
+  // tab filter (token.category_id === cat.id) drops restored tokens silently.
+  const newTokens = db.prepare(
+    'SELECT t.*, cnpc.category_id FROM tokens t LEFT JOIN campaign_npcs cnpc ON cnpc.id = t.campaign_npc_id WHERE t.map_id = ?'
+  ).all(c.active_map_id) as TokenRow[];
   const io = getIo();
   for (const t of newTokens) {
     io.to(`campaign:${campaignId}`).emit('token:created', hydrateToken(t));
