@@ -243,7 +243,7 @@ export default function CharacterSheet() {
           <h1 style={{ margin: '0.25rem 0 0' }}>{character.name}</h1>
           <div style={{ color: '#666' }}>
             Level {character.level}
-            {raceName && ` · ${raceName}`}
+            {raceName && ` · ${character.subrace_slug ? humanize(character.subrace_slug) : raceName}`}
             {(() => {
               // Multiclass: render "Fighter 3 (Battle Master) / Wizard 2 (Evoker)"
               const cls = character.classes ?? [];
@@ -563,6 +563,10 @@ export default function CharacterSheet() {
       )}
     </div>
   );
+}
+
+function humanize(slug: string): string {
+  return slug.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
 }
 
 function Card({ children }: { children: React.ReactNode }) {

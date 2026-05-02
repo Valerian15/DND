@@ -95,7 +95,7 @@ export default function CharactersPage() {
               <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{c.name}</div>
               <div style={{ fontSize: '0.85rem', color: '#666' }}>
                 Level {c.level}
-                {c.race_slug && ` · ${humanize(c.race_slug)}`}
+                {c.race_slug && ` · ${humanize(c.subrace_slug ?? c.race_slug)}`}
                 {c.classes && c.classes.length > 0
                   ? ` · ${c.classes.map((cl) => `${humanize(cl.slug)} ${cl.level}${cl.subclass_slug ? ` (${humanize(cl.subclass_slug)})` : ''}`).join(' / ')}`
                   : c.class_slug && ` · ${humanize(c.class_slug)}${c.subclass_slug ? ` (${humanize(c.subclass_slug)})` : ''}`}
