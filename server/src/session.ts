@@ -693,12 +693,51 @@ async function maybeCounterspell(cid: number, casterTokenId: number, spellName: 
 }
 
 function applyTokenHpChange(cid: number, tokenId: number, characterId: number | null, newHp: number) {
+  // Read prev HP so we can detect wake-from-down transitions.
+  const prevRow = db.prepare('SELECT hp_current FROM tokens WHERE id = ?').get(tokenId) as { hp_current: number } | undefined;
+  const prevHp = prevRow?.hp_current ?? 0;
+
   db.prepare('UPDATE tokens SET hp_current = ? WHERE id = ?').run(newHp, tokenId);
   if (characterId !== null) {
     db.prepare("UPDATE characters SET hp_current = ?, updated_at = strftime('%s', 'now') WHERE id = ?")
       .run(newHp, characterId);
+
+    // Heal-from-down: PC was at 0, now > 0 → reset death saves and post a wake note.
+    if (prevHp === 0 && newHp > 0) {
+      const char = db.prepare('SELECT name, death_saves_success, death_saves_failure FROM characters WHERE id = ?').get(characterId) as { name: string; death_saves_success: number; death_saves_failure: number } | undefined;
+      if (char && (char.death_saves_success > 0 || char.death_saves_failure > 0)) {
+        db.prepare('UPDATE characters SET death_saves_success = 0, death_saves_failure = 0 WHERE id = ?').run(characterId);
+        const r = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(cid, 0, 'system', `/action ${char.name} regains consciousness — death saves reset.`, 'action', null);
+        const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+        getIo().to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
+      }
+    }
   }
   getIo().to(`campaign:${cid}`).emit('token:hp_updated', { token_id: tokenId, hp_current: newHp });
+}
+
+/**
+ * Damage-while-down: if a PC was already at 0 HP and just took damage, RAW says they
+ * automatically fail one death save (two on a crit). Caller passes wasCrit so we know.
+ */
+function applyDownDamageFail(cid: number, characterId: number | null, wasCrit: boolean) {
+  if (characterId === null) return;
+  const char = db.prepare('SELECT name, death_saves_failure FROM characters WHERE id = ?').get(characterId) as { name: string; death_saves_failure: number } | undefined;
+  if (!char) return;
+  const fails = wasCrit ? 2 : 1;
+  const next = Math.min(3, (char.death_saves_failure ?? 0) + fails);
+  if (next === char.death_saves_failure) return;
+  db.prepare('UPDATE characters SET death_saves_failure = ? WHERE id = ?').run(next, characterId);
+  const insertChat = db.prepare('INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)');
+  const r = insertChat.run(cid, 0, 'system', `/action ${char.name} takes damage while down — ${fails} death save failure${fails > 1 ? 's' : ''} (now ${next}/3).`, 'action', null);
+  const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(r.lastInsertRowid) as ChatMessageRow;
+  getIo().to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
+  if (next >= 3) {
+    const dr = insertChat.run(cid, 0, 'system', `/action ${char.name} dies (3 death save failures).`, 'action', null);
+    const drow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(dr.lastInsertRowid) as ChatMessageRow;
+    getIo().to(`campaign:${cid}`).emit('chat:message', hydrateMessage(drow));
+  }
 }
 
 /** Read the AC of any token (PC / library monster / campaign NPC). Defaults to 10 if missing. */
@@ -1383,9 +1422,11 @@ export function setupSession(io: AppServer) {
 
         // Apply damage
         if (damageDealt > 0) {
+          const wasDown = target.hp_current === 0;
           const newHp = Math.max(0, target.hp_current - damageDealt);
           applyTokenHpChange(cid, tid, target.character_id, newHp);
           triggerConcentrationSave(cid, tid, damageDealt);
+          if (wasDown) applyDownDamageFail(cid, target.character_id, false);
         }
 
         // Apply curated conditions only to targets that failed their save
@@ -1581,9 +1622,11 @@ export function setupSession(io: AppServer) {
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(dmgRow));
 
         if (adjustedTotal > 0) {
+          const wasDown = target.hp_current === 0;
           const newHp = Math.max(0, target.hp_current - adjustedTotal);
           applyTokenHpChange(cid, tid, target.character_id, newHp);
           triggerConcentrationSave(cid, tid, adjustedTotal);
+          if (wasDown) applyDownDamageFail(cid, target.character_id, isCrit);
           // GWM trigger: melee crit OR target dropped to 0 HP. is_spell excluded (ranged
           // weapon attacks aren't strictly in scope either, but RAW says "with a melee
           // weapon" — we don't track weapon-type here so the client gates the toggle UI;
@@ -1701,9 +1744,11 @@ export function setupSession(io: AppServer) {
         const dmgRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(dr.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(dmgRow));
 
+        const wasDown = target.hp_current === 0;
         const newHp = Math.max(0, target.hp_current - adjustedDmg);
         applyTokenHpChange(cid, tid, target.character_id, newHp);
         triggerConcentrationSave(cid, tid, adjustedDmg);
+        if (wasDown) applyDownDamageFail(cid, target.character_id, false);
         summaries.push(`${target.label}: ${hits}× → ${adjustedDmg}${modSuffix}`);
       }
 

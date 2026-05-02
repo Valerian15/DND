@@ -523,9 +523,17 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     const roll = Math.floor(Math.random() * 20) + 1;
     let label: string;
     if (roll === 20) {
-      label = `Death Save — Natural 20! 2 successes`;
-      await handleDeathSave('success', 2);
-    } else if (roll >= 11) {
+      // RAW: nat 20 on a death save regains 1 HP. Counters reset implicitly via the wake path.
+      label = `Death Save — Natural 20! Regains 1 HP`;
+      setHpCurrent(1);
+      setDeathSavesSuccess(0);
+      setDeathSavesFailure(0);
+      try {
+        await updateCharacter(character.id, { hp_current: 1, death_saves_success: 0, death_saves_failure: 0 });
+        if (tokenId > 0) await updateTokenHp(tokenId, 1);
+      } catch { /* ignore */ }
+    } else if (roll >= 10) {
+      // RAW: 10 or higher is a success (the prior code used >= 11, which was wrong).
       label = `Death Save — ${roll}, success`;
       await handleDeathSave('success', 1);
     } else if (roll === 1) {
@@ -536,6 +544,11 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
       await handleDeathSave('failure', 1);
     }
     socket.emit('chat:send', { body: `/action ${character.name}: ${label}` });
+    // Auto-announce stabilisation / death after the increment.
+    const newS = roll === 20 ? 0 : (roll >= 10 ? Math.min(3, deathSavesSuccess + 1) : deathSavesSuccess);
+    const newF = roll === 1 ? Math.min(3, deathSavesFailure + 2) : (roll < 10 && roll !== 20 && roll !== 1 ? Math.min(3, deathSavesFailure + 1) : roll === 20 ? 0 : deathSavesFailure);
+    if (newS >= 3) socket.emit('chat:send', { body: `/action ${character.name} stabilises (3 death save successes).` });
+    if (newF >= 3) socket.emit('chat:send', { body: `/action ${character.name} dies (3 death save failures).` });
   }
 
   async function resetDeathSaves() {
