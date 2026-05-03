@@ -237,6 +237,23 @@ router.patch('/:id', (req: AuthRequest, res) => {
 
   db.prepare(`UPDATE characters SET ${sets.join(', ')} WHERE id = ?`).run(...values);
 
+  // Exhaustion side-effects: when the level changes, normalise hp_current.
+  //   L4+: cap at floor(hp_max / 2) — RAW max-HP halving. Players who were already below
+  //         the new cap stay where they are.
+  //   L6:  set hp_current = 0. RAW: dead.
+  if (typeof body.exhaustion_level === 'number') {
+    const after = db.prepare('SELECT hp_max, hp_current, exhaustion_level FROM characters WHERE id = ?').get(id) as { hp_max: number; hp_current: number; exhaustion_level: number };
+    let nextHp = after.hp_current;
+    if (after.exhaustion_level >= 6) nextHp = 0;
+    else if (after.exhaustion_level >= 4) {
+      const cap = Math.max(1, Math.floor(after.hp_max / 2));
+      if (nextHp > cap) nextHp = cap;
+    }
+    if (nextHp !== after.hp_current) {
+      db.prepare("UPDATE characters SET hp_current = ?, updated_at = strftime('%s', 'now') WHERE id = ?").run(nextHp, id);
+    }
+  }
+
   const updated = db.prepare('SELECT * FROM characters WHERE id = ?').get(id) as CharacterRow;
   res.json({ character: hydrate(updated) });
 });

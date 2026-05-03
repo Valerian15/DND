@@ -2,6 +2,29 @@ import type { Abilities, AbilityKey, Character, ClassEntry } from './types';
 import { abilityModifier } from './pointBuy';
 import { computeAcFromEquipment } from './inventoryView';
 
+/**
+ * Effective HP max — RAW exhaustion 4+ halves the character's max HP. Returns the value
+ * to display + cap healing against, without mutating the stored hp_max (so dropping below
+ * exhaustion 4 restores the full cap automatically).
+ */
+export function effectiveHpMax(hp_max: number, exhaustion_level: number): number {
+  if ((exhaustion_level ?? 0) >= 4) return Math.max(1, Math.floor(hp_max / 2));
+  return hp_max;
+}
+
+/** Roman numeral for exhaustion levels 1..5; "Dead" for 6; empty for 0. */
+export function exhaustionRoman(level: number): string {
+  switch (level) {
+    case 1: return 'I';
+    case 2: return 'II';
+    case 3: return 'III';
+    case 4: return 'IV';
+    case 5: return 'V';
+    case 6: return 'Dead';
+    default: return '';
+  }
+}
+
 /** 5e proficiency bonus by character level */
 export function proficiencyBonus(level: number): number {
   if (level >= 17) return 6;

@@ -326,6 +326,8 @@ export const VALID_CONDITIONS = new Set([
   'blinded', 'charmed', 'concentration', 'deafened', 'exhaustion', 'frightened', 'grappled',
   'incapacitated', 'invisible', 'paralyzed', 'petrified', 'poisoned',
   'prone', 'restrained', 'stunned', 'unconscious',
+  // Stage-aware exhaustion markers (synced from character.exhaustion_level by InGameSheet).
+  'exhausted-1', 'exhausted-2', 'exhausted-3', 'exhausted-4', 'exhausted-5', 'dead',
 ]);
 
 // PATCH /api/tokens/:id/conditions  (DM/admin or token's PC owner)

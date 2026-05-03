@@ -4,7 +4,7 @@ import type { Abilities, Character, ClassEntry } from './types';
 import { ABILITY_NAMES, ABILITY_ORDER } from './types';
 import { getCharacter, getLibraryItem, updateCharacter } from './api';
 import { abilityModifier, formatModifier } from './pointBuy';
-import { initiative, parseHitDie, passivePerception, proficiencyBonus, recomputeDerived } from './rules';
+import { initiative, parseHitDie, passivePerception, proficiencyBonus, recomputeDerived, effectiveHpMax } from './rules';
 import { getCasterConfig } from './casters';
 import { SKILLS } from './skills';
 import { isWeaponProficient, isWeaponProficientForClasses } from './weaponProficiency';
@@ -178,7 +178,8 @@ export default function CharacterSheet() {
 
   async function adjustHp(newCurrent: number) {
     if (!character) return;
-    const clamped = Math.max(0, Math.min(character.hp_max, newCurrent));
+    const cap = effectiveHpMax(character.hp_max, character.exhaustion_level ?? 0);
+    const clamped = Math.max(0, Math.min(cap, newCurrent));
     const updated = await updateCharacter(character.id, { hp_current: clamped });
     setCharacter(updated);
     setHpDraft(updated.hp_current);
@@ -307,28 +308,36 @@ export default function CharacterSheet() {
 
           <Card>
             <SectionTitle>Vitals</SectionTitle>
-            <BigStat label="Hit Points">
-              {hpEditing ? (
-                <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
-                  <input type="number" value={hpDraft} onChange={(e) => setHpDraft(Number(e.target.value))}
-                    onBlur={() => { adjustHp(hpDraft); setHpEditing(false); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { adjustHp(hpDraft); setHpEditing(false); } }}
-                    autoFocus style={{ width: 60, padding: '0.25rem', fontSize: '1.1rem', textAlign: 'center' }} />
-                  <span>/ {character.hp_max}</span>
-                </div>
-              ) : (
-                <button onClick={() => setHpEditing(true)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>
-                  {character.hp_current} / {character.hp_max}
-                </button>
-              )}
-            </BigStat>
-            <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.25rem' }}>
-              <button onClick={() => adjustHp(character.hp_current - 5)} style={chip()}>-5</button>
-              <button onClick={() => adjustHp(character.hp_current - 1)} style={chip()}>-1</button>
-              <button onClick={() => adjustHp(character.hp_current + 1)} style={chip()}>+1</button>
-              <button onClick={() => adjustHp(character.hp_current + 5)} style={chip()}>+5</button>
-              <button onClick={() => adjustHp(character.hp_max)} style={chip()} title="Full heal">Full</button>
-            </div>
+            {(() => {
+              const effMax = effectiveHpMax(character.hp_max, character.exhaustion_level ?? 0);
+              const halved = effMax !== character.hp_max;
+              return (
+                <>
+                  <BigStat label="Hit Points">
+                    {hpEditing ? (
+                      <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+                        <input type="number" value={hpDraft} onChange={(e) => setHpDraft(Number(e.target.value))}
+                          onBlur={() => { adjustHp(hpDraft); setHpEditing(false); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { adjustHp(hpDraft); setHpEditing(false); } }}
+                          autoFocus style={{ width: 60, padding: '0.25rem', fontSize: '1.1rem', textAlign: 'center' }} />
+                        <span>/ {effMax}{halved && <span style={{ fontSize: '0.75rem', color: '#a44', marginLeft: 4 }}>(halved)</span>}</span>
+                      </div>
+                    ) : (
+                      <button onClick={() => setHpEditing(true)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>
+                        {character.hp_current} / {effMax}{halved && <span style={{ fontSize: '0.75rem', color: '#a44', marginLeft: 4, fontWeight: 400 }}>(halved by exhaustion)</span>}
+                      </button>
+                    )}
+                  </BigStat>
+                  <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.25rem' }}>
+                    <button onClick={() => adjustHp(character.hp_current - 5)} style={chip()}>-5</button>
+                    <button onClick={() => adjustHp(character.hp_current - 1)} style={chip()}>-1</button>
+                    <button onClick={() => adjustHp(character.hp_current + 1)} style={chip()}>+1</button>
+                    <button onClick={() => adjustHp(character.hp_current + 5)} style={chip()}>+5</button>
+                    <button onClick={() => adjustHp(effMax)} style={chip()} title="Full heal (to current effective max)">Full</button>
+                  </div>
+                </>
+              );
+            })()}
             <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#666' }}>
               Temp HP: <input type="number" value={character.hp_temp}
                 onChange={(e) => setTempHp(Number(e.target.value))}

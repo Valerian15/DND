@@ -48,7 +48,7 @@ import { listNotes, createNote, updateNote, deleteNote } from '../features/sessi
 import type { CampaignNote } from '../features/session/campaignNotesApi';
 import { listEncounters, saveEncounter, deleteEncounter, restoreEncounter, type SavedEncounter } from '../features/session/encounterApi';
 import type { WallSegment, MapTemplate, TemplateShape, MapDrawing } from '../features/session/types';
-import { InGameSheet, CONDITION_COLORS, CONDITIONS } from '../features/session/InGameSheet';
+import { InGameSheet, CONDITION_COLORS, CONDITIONS, conditionLabel } from '../features/session/InGameSheet';
 import { MonsterSheet } from '../features/session/MonsterSheet';
 import { NpcSheet } from '../features/session/NpcSheet';
 import { QuickCastHotbar } from '../features/session/QuickCastHotbar';
@@ -214,7 +214,7 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, isTarge
         <div style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', marginTop: token.hp_visible && token.hp_max > 0 ? 14 : 4, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 2, pointerEvents: 'none', zIndex: 21, maxWidth: Math.max(size, 80) }}>
           {activeConditions.map((cond) => (
             <div key={cond} style={{ background: CONDITION_COLORS[cond] ?? '#555', color: '#fff', fontSize: 8, fontWeight: 700, padding: '1px 3px', borderRadius: 2, whiteSpace: 'nowrap', textTransform: 'capitalize' }}>
-              {cond}
+              {conditionLabel(cond)}
             </div>
           ))}
           {(token.effects ?? []).map((eff) => (
@@ -244,7 +244,7 @@ function TokenOnMap({ token, map, isDragging, dragCol, dragRow, canMove, isTarge
             </div>
           )}
           {showStatsInTooltip && activeConditions.length > 0 && (
-            <div style={{ fontSize: 10, color: '#cbb', marginTop: 2, textTransform: 'capitalize' }}>{activeConditions.join(', ')}</div>
+            <div style={{ fontSize: 10, color: '#cbb', marginTop: 2, textTransform: 'capitalize' }}>{activeConditions.map(conditionLabel).join(', ')}</div>
           )}
           {showStatsInTooltip && (token.effects ?? []).length > 0 && (
             <div style={{ fontSize: 10, color: '#bcb', marginTop: 2 }}>
@@ -2358,7 +2358,7 @@ export default function CampaignSessionPage() {
                             {entryConditions.length > 0 && (
                               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.15rem', marginTop: '0.15rem' }}>
                                 {entryConditions.map((cond) => (
-                                  <span key={cond} style={{ fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: 3, background: CONDITION_COLORS[cond] ?? '#888', color: '#fff', fontWeight: 600, textTransform: 'capitalize' }}>{cond}</span>
+                                  <span key={cond} style={{ fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: 3, background: CONDITION_COLORS[cond] ?? '#888', color: '#fff', fontWeight: 600, textTransform: 'capitalize' }}>{conditionLabel(cond)}</span>
                                 ))}
                               </div>
                             )}

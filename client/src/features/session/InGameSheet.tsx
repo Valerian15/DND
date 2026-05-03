@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getCharacter, getLibraryItem, updateCharacter } from '../character/api';
 import { abilityModifier, formatModifier } from '../character/pointBuy';
-import { proficiencyBonus, initiative, passivePerception } from '../character/rules';
+import { proficiencyBonus, initiative, passivePerception, effectiveHpMax } from '../character/rules';
 import { getCasterConfig, preparedCount } from '../character/casters';
 import type { CasterConfig } from '../character/casters';
 import { SKILLS } from '../character/skills';
@@ -64,7 +64,24 @@ export const CONDITION_COLORS: Record<string, string> = {
   incapacitated: '#aa2222', invisible: '#4488aa', paralyzed: '#cc5500',
   petrified: '#5577aa', poisoned: '#228844', prone: '#997722',
   restrained: '#884422', stunned: '#cc6600', unconscious: '#222',
+  // Stage-aware exhaustion markers — escalate from yellow to red.
+  'exhausted-1': '#a08030', 'exhausted-2': '#a06030', 'exhausted-3': '#a04030',
+  'exhausted-4': '#a02020', 'exhausted-5': '#800010', 'dead': '#000',
 };
+
+/**
+ * Display label for a condition. Stage-specific exhaustion markers render as
+ * "Exhausted I…V"; 'dead' renders as "Dead". Other conditions use their own slug.
+ */
+export function conditionLabel(cond: string): string {
+  if (cond === 'dead') return 'Dead';
+  const m = cond.match(/^exhausted-(\d)$/);
+  if (m) {
+    const roman = ['', 'I', 'II', 'III', 'IV', 'V'][Number(m[1])] ?? '';
+    return `Exhausted ${roman}`;
+  }
+  return cond;
+}
 
 interface Props {
   characterId: number;
@@ -288,15 +305,17 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
 
   async function adjustHp(delta: number) {
     if (!character || saving) return;
+    const cap = effectiveHpMax(character.hp_max, character.exhaustion_level ?? 0);
     const damage = delta < 0 ? Math.abs(delta) : 0;
-    await commitHp(Math.max(0, Math.min(character.hp_max, hpCurrent + delta)), damage);
+    await commitHp(Math.max(0, Math.min(cap, hpCurrent + delta)), damage);
   }
 
   async function commitHpInput() {
     if (!character) return;
     const val = parseInt(hpInput, 10);
     if (!isNaN(val)) {
-      const next = Math.max(0, Math.min(character.hp_max, val));
+      const cap = effectiveHpMax(character.hp_max, character.exhaustion_level ?? 0);
+      const next = Math.max(0, Math.min(cap, val));
       const damage = val < hpCurrent ? hpCurrent - val : 0;
       await commitHp(next, damage);
     }
@@ -378,12 +397,31 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     }
   }
 
-  function rollInChat(label: string, expression: string) {
+  /**
+   * Roll a labeled expression in chat, honouring the player's manual rollMode (Adv/Dis)
+   * and exhaustion-forced disadvantage where appropriate.
+   *   kind 'check'  → L1+ exhaustion forces disadvantage (skills + ability checks)
+   *   kind 'save'   → L3+ exhaustion forces disadvantage
+   *   kind undefined / 'other' → no exhaustion handling (hit dice, lucky reroll, etc.)
+   * Adv + Dis cancel to normal (RAW).
+   */
+  function rollInChat(label: string, expression: string, kind?: 'check' | 'save' | 'other') {
     let expr = expression;
-    if (rollMode !== 'normal' && /^1d20/.test(expression)) {
-      expr = expression.replace('1d20', `1d20${rollMode === 'advantage' ? 'adv' : 'dis'}`);
+    const exhaust = character?.exhaustion_level ?? 0;
+    let exhaustForcesDis = false;
+    if (kind === 'check' && exhaust >= 1) exhaustForcesDis = true;
+    if (kind === 'save' && exhaust >= 3) exhaustForcesDis = true;
+
+    let effective: 'normal' | 'advantage' | 'disadvantage' = rollMode;
+    if (exhaustForcesDis) {
+      if (effective === 'advantage') effective = 'normal'; // cancellation
+      else effective = 'disadvantage';
     }
-    socket.emit('chat:send', { body: `/roll ${expr}`, label });
+    if (effective !== 'normal' && /^1d20/.test(expression)) {
+      expr = expression.replace('1d20', `1d20${effective === 'advantage' ? 'adv' : 'dis'}`);
+    }
+    const labelWithTag = exhaustForcesDis && effective === 'disadvantage' ? `${label} (exhausted, dis)` : label;
+    socket.emit('chat:send', { body: `/roll ${expr}`, label: labelWithTag });
     setRollMode('normal');
   }
 
@@ -412,7 +450,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
       if (!target || target.hit_dice_used >= target.level) return;
       const roll = Math.floor(Math.random() * die) + 1;
       const heal = Math.max(1, roll + conMod);
-      const nextHp = Math.min(character.hp_max, hpCurrent + heal);
+      const nextHp = Math.min(effectiveHpMax(character.hp_max, character.exhaustion_level ?? 0), hpCurrent + heal);
       const nextClasses = cls.map((c) => c.slug === classSlug ? { ...c, hit_dice_used: c.hit_dice_used + 1 } : c);
       setHpCurrent(nextHp);
       socket.emit('chat:send', { body: `/action ${character.name} uses a ${classSlug} Hit Die: rolls ${roll}${conMod !== 0 ? formatModifier(conMod) : ''} = +${heal} HP.` });
@@ -643,12 +681,17 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     setExhaustion(clamped);
     try { await updateCharacter(character.id, { exhaustion_level: clamped }); }
     catch { setExhaustion(prev); return; }
-    // Keep the 'exhaustion' condition badge in sync with whether level > 0
-    const hasCondition = conditions.includes('exhaustion');
-    if (clamped > 0 && !hasCondition) {
-      await onConditionsChange([...conditions, 'exhaustion']);
-    } else if (clamped === 0 && hasCondition) {
-      await onConditionsChange(conditions.filter((c) => c !== 'exhaustion'));
+
+    // Sync token conditions to reflect the exhaustion stage. Drop any prior stage marker
+    // (or legacy 'exhaustion' / 'dead') and add the one matching the new level.
+    const stageStrip = (c: string) =>
+      c === 'exhaustion' || c === 'dead' || /^exhausted-\d$/.test(c);
+    const filtered = conditions.filter((c) => !stageStrip(c));
+    let next = filtered;
+    if (clamped >= 6) next = [...filtered, 'dead'];
+    else if (clamped >= 1) next = [...filtered, `exhausted-${clamped}`];
+    if (JSON.stringify(next) !== JSON.stringify(conditions)) {
+      await onConditionsChange(next);
     }
   }
 
@@ -664,7 +707,8 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
 
   async function handleLongRest() {
     if (!character) return;
-    const nextHp = character.hp_max;
+    // Long rest heals to effective max (still capped if exhaustion 4+).
+    const nextHp = effectiveHpMax(character.hp_max, character.exhaustion_level ?? 0);
     const nextSlotsUsed: Record<string, number> = {};
     const nextHDUsed = 0;
     const nextResources = localResources.map((r) => ({ ...r, current: r.max }));
@@ -705,7 +749,8 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const profSaves = character.saves as Record<string, { proficient?: boolean }>;
   const perceptionProf = !!profSkills['perception']?.proficient;
   const passive = passivePerception(character.abilities, perceptionProf, prof);
-  const hpPct = character.hp_max > 0 ? Math.max(0, Math.min(1, hpCurrent / character.hp_max)) : 0;
+  const effHpMax = effectiveHpMax(character.hp_max, character.exhaustion_level ?? 0);
+  const hpPct = effHpMax > 0 ? Math.max(0, Math.min(1, hpCurrent / effHpMax)) : 0;
   const hpBarColor = hpPct > 0.5 ? '#4a4' : hpPct > 0.25 ? '#aa4' : '#a44';
 
   const config = getCasterConfig(character.class_slug);
@@ -790,11 +835,13 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                   {hpCurrent}
                 </div>
               )}
-              <span style={{ color: '#888', fontSize: '0.9rem' }}>/ {character.hp_max}</span>
+              <span style={{ color: '#888', fontSize: '0.9rem' }}>
+                / {effHpMax}{effHpMax !== character.hp_max && <span style={{ color: '#a44', fontSize: '0.75rem', marginLeft: 3 }}>(½)</span>}
+              </span>
               {character.hp_temp > 0 && <span style={{ fontSize: '0.82rem', color: '#55a' }}>+{character.hp_temp} temp</span>}
-              {canEditHp && <HpBtn label="+1" onClick={() => adjustHp(1)} disabled={saving || hpCurrent >= character.hp_max} />}
-              {canEditHp && <HpBtn label="+5" onClick={() => adjustHp(5)} disabled={saving || hpCurrent >= character.hp_max} />}
-              {canEditHp && <HpBtn label="+10" onClick={() => adjustHp(10)} disabled={saving || hpCurrent >= character.hp_max} />}
+              {canEditHp && <HpBtn label="+1" onClick={() => adjustHp(1)} disabled={saving || hpCurrent >= effHpMax} />}
+              {canEditHp && <HpBtn label="+5" onClick={() => adjustHp(5)} disabled={saving || hpCurrent >= effHpMax} />}
+              {canEditHp && <HpBtn label="+10" onClick={() => adjustHp(10)} disabled={saving || hpCurrent >= effHpMax} />}
             </div>
             <div style={{ height: 8, background: '#ddd', borderRadius: 4 }}>
               <div style={{ height: '100%', width: `${hpPct * 100}%`, background: hpBarColor, borderRadius: 4, transition: 'width 0.3s' }} />
@@ -1348,7 +1395,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                 const isProficient = !!(profSaves[key] as any)?.proficient;
                 const total = mod + (isProficient ? prof : 0);
                 return (
-                  <div key={key} onClick={() => rollInChat(`${ABILITY_NAMES[key]} Save`, `1d20${formatModifier(total)}`)}
+                  <div key={key} onClick={() => rollInChat(`${ABILITY_NAMES[key]} Save`, `1d20${formatModifier(total)}`, 'save')}
                     style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', padding: '0.15rem 0.3rem', borderRadius: 3, cursor: 'pointer' }}
                     title={`Roll ${ABILITY_NAMES[key]} saving throw`}>
                     <span style={{ color: '#444', fontWeight: isProficient ? 600 : 400 }}>
@@ -1373,7 +1420,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                 const total = mod + profMod;
                 const marker = isExpertise ? '⬢ ' : isProficient ? '◆ ' : '◇ ';
                 return (
-                  <div key={sk.key} onClick={() => rollInChat(`${sk.name} Check`, `1d20${formatModifier(total)}`)}
+                  <div key={sk.key} onClick={() => rollInChat(`${sk.name} Check`, `1d20${formatModifier(total)}`, 'check')}
                     style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.1rem 0.3rem', borderRadius: 3, cursor: 'pointer' }}
                     title={`Roll ${sk.name} check${isExpertise ? ' (expertise)' : ''}`}>
                     <span style={{ color: '#444', fontWeight: isProficient ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

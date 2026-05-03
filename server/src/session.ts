@@ -683,6 +683,13 @@ function applyRageDefense(
   return { adjusted: Math.floor(dmg / 2), reduced: true };
 }
 
+/** Read exhaustion level (0..6) for a PC character. Returns 0 for non-PC tokens. */
+function getCharacterExhaustion(characterId: number | null | undefined): number {
+  if (!characterId) return 0;
+  const row = db.prepare('SELECT exhaustion_level FROM characters WHERE id = ?').get(characterId) as { exhaustion_level: number } | undefined;
+  return row?.exhaustion_level ?? 0;
+}
+
 /** Load the feats array for a PC character. Returns an empty Set if missing or unparseable. */
 function getCharacterFeats(characterId: number | null | undefined): Set<string> {
   if (!characterId) return new Set();
@@ -1294,16 +1301,25 @@ export function setupSession(io: AppServer) {
       const conMod = computeSaveModForToken(token, 'con');
 
       // War Caster: advantage on Con saves to maintain concentration.
+      // Exhaustion 3+: disadvantage on saves. Adv + Dis cancel to normal (RAW).
       const feats = getCharacterFeats(token.character_id);
       const hasWarCaster = feats.has('war-caster');
+      const exhausted = getCharacterExhaustion(token.character_id) >= 3;
+      const adv = hasWarCaster && !exhausted;
+      const dis = exhausted && !hasWarCaster;
       const r1 = Math.floor(Math.random() * 20) + 1;
-      const r2 = hasWarCaster ? Math.floor(Math.random() * 20) + 1 : null;
-      const roll = r2 !== null ? Math.max(r1, r2) : r1;
+      const r2 = (adv || dis) ? Math.floor(Math.random() * 20) + 1 : null;
+      const roll = r2 !== null ? (adv ? Math.max(r1, r2) : Math.min(r1, r2)) : r1;
       const total = roll + conMod;
       const passed = total >= dc;
 
-      const expr = hasWarCaster ? `2d20kh1${conMod >= 0 ? '+' : ''}${conMod}` : `1d20${conMod >= 0 ? '+' : ''}${conMod}`;
-      const advNote = hasWarCaster ? ' (War Caster advantage)' : '';
+      const expr = adv ? `2d20kh1${conMod >= 0 ? '+' : ''}${conMod}`
+        : dis ? `2d20kl1${conMod >= 0 ? '+' : ''}${conMod}`
+        : `1d20${conMod >= 0 ? '+' : ''}${conMod}`;
+      const advNote = adv ? ' (War Caster adv)'
+        : dis ? ' (exhausted, dis)'
+        : (hasWarCaster && exhausted) ? ' (War Caster vs exhausted — cancels to normal)'
+        : '';
       const label = `${token.label} — Concentration Save (DC ${dc})${advNote} ${passed ? '✓ held' : '✗ broken'}`;
       const dice = r2 !== null ? [r1, r2] : [r1];
       const data = JSON.stringify({ expression: expr, dice, modifier: conMod, total, label });
@@ -1417,12 +1433,12 @@ export function setupSession(io: AppServer) {
 
       // Get all PC characters in this campaign (joined via campaign_members)
       const pcs = db.prepare(`
-        SELECT c.id, c.name, c.level, c.abilities, c.skills, c.saves
+        SELECT c.id, c.name, c.level, c.abilities, c.skills, c.saves, c.exhaustion_level
         FROM characters c
         JOIN campaign_members cm ON cm.character_id = c.id
         WHERE cm.campaign_id = ?
         ORDER BY c.name ASC
-      `).all(cid) as { id: number; name: string; level: number; abilities: string; skills: string; saves: string }[];
+      `).all(cid) as { id: number; name: string; level: number; abilities: string; skills: string; saves: string; exhaustion_level: number }[];
 
       const insertStmt = db.prepare(
         'INSERT INTO chat_messages (campaign_id, user_id, username, body, type, data) VALUES (?, ?, ?, ?, ?, ?)'
@@ -1450,10 +1466,20 @@ export function setupSession(io: AppServer) {
           mod = abilMod + profMod;
         } catch { /* fall through with mod = 0 */ }
 
-        const roll = Math.floor(Math.random() * 20) + 1;
+        // Exhaustion: L1+ → disadvantage on ability checks (skills are ability checks).
+        // L3+ → also disadvantage on saves. Roll 2d20 take low when applicable.
+        const exhaust = pc.exhaustion_level ?? 0;
+        const dis = (kind === 'skill' || kind === 'ability') ? exhaust >= 1
+          : kind === 'save' ? exhaust >= 3
+          : false;
+        const r1 = Math.floor(Math.random() * 20) + 1;
+        const r2 = dis ? Math.floor(Math.random() * 20) + 1 : null;
+        const roll = dis && r2 !== null ? Math.min(r1, r2) : r1;
         const total = roll + mod;
-        const expression = `1d20${mod >= 0 ? '+' : ''}${mod}`;
-        const data = JSON.stringify({ expression, dice: [roll], modifier: mod, total, label: `${pc.name} — ${labelBase}` });
+        const exhaustTag = dis ? ' (exhausted, dis)' : '';
+        const expression = dis ? `2d20kl1${mod >= 0 ? '+' : ''}${mod}` : `1d20${mod >= 0 ? '+' : ''}${mod}`;
+        const dice = dis && r2 !== null ? [r1, r2, roll] : [r1];
+        const data = JSON.stringify({ expression, dice, modifier: mod, total, label: `${pc.name} — ${labelBase}${exhaustTag}` });
         const res = insertStmt.run(cid, user.id, user.username, `/roll ${expression}`, 'roll', data);
         const row = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(res.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(row));
@@ -1517,7 +1543,12 @@ export function setupSession(io: AppServer) {
         if (!target) continue;
 
         const saveMod = computeSaveModForToken(target, save_ability);
-        const saveRoll = Math.floor(Math.random() * 20) + 1;
+        // Exhaustion 3+ on the target: roll save with disadvantage (2d20 take low).
+        const targetExhaustion = getCharacterExhaustion(target.character_id);
+        const saveDis = targetExhaustion >= 3;
+        const r1 = Math.floor(Math.random() * 20) + 1;
+        const r2 = saveDis ? Math.floor(Math.random() * 20) + 1 : null;
+        const saveRoll = saveDis && r2 !== null ? Math.min(r1, r2) : r1;
         const saveTotal = saveRoll + saveMod;
         const passed = saveTotal >= save_dc;
         let damageDealt = passed ? (half_on_save ? Math.floor(dmg.total / 2) : 0) : dmg.total;
@@ -1534,9 +1565,11 @@ export function setupSession(io: AppServer) {
         const saveExpr = `1d20${saveMod >= 0 ? '+' : ''}${saveMod}`;
         const hamNote = ham.reduced ? ' (HAM −3)' : '';
         const rageNote = rageDef.reduced ? ' (rage resistance)' : '';
-        const saveLabel = `${target.label} — ${save_ability.toUpperCase()} Save (DC ${save_dc}) ${passed ? '✓ saved' : '✗ failed'}${hamNote}${rageNote}`;
+        const exhaustNote = saveDis ? ' (exhausted, dis)' : '';
+        const saveLabel = `${target.label} — ${save_ability.toUpperCase()} Save (DC ${save_dc}) ${passed ? '✓ saved' : '✗ failed'}${hamNote}${rageNote}${exhaustNote}`;
         const undoMeta = damageDealt > 0 ? { target_token_id: tid, prev_hp: target.hp_current } : {};
-        const saveData = JSON.stringify({ expression: saveExpr, dice: [saveRoll], modifier: saveMod, total: saveTotal, label: saveLabel, ...undoMeta });
+        const saveDice = saveDis && r2 !== null ? [r1, r2, saveRoll] : [saveRoll];
+        const saveData = JSON.stringify({ expression: saveExpr, dice: saveDice, modifier: saveMod, total: saveTotal, label: saveLabel, ...undoMeta });
         const sr = insertChat.run(cid, user.id, user.username, `/roll ${saveExpr}`, 'roll', saveData);
         const saveRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(sr.lastInsertRowid) as ChatMessageRow;
         io.to(`campaign:${cid}`).emit('chat:message', hydrateMessage(saveRow));
@@ -1668,8 +1701,19 @@ export function setupSession(io: AppServer) {
         const baseAc = computeAcForToken(target);
         let ac = baseAc;
         // Advantage / disadvantage: roll 2d20 and pick high/low. Normal: roll 1d20.
-        const isAdv = roll_mode === 'advantage';
-        const isDis = roll_mode === 'disadvantage';
+        // Exhaustion 3+ on the attacker forces disadvantage (RAW). Stacks with manual roll
+        // mode by RAW: adv + dis cancels to normal; dis + dis = dis. We model "force dis"
+        // as: if normal/disadvantage chosen, ensure dis; if advantage was chosen, downgrade
+        // to normal (cancellation).
+        const attackerExhaustion = !is_spell && casterToken?.character_id ? getCharacterExhaustion(casterToken.character_id) : 0;
+        const exhaustionForcesDis = attackerExhaustion >= 3;
+        let effectiveRollMode = roll_mode;
+        if (exhaustionForcesDis) {
+          if (effectiveRollMode === 'advantage') effectiveRollMode = 'normal';
+          else effectiveRollMode = 'disadvantage';
+        }
+        const isAdv = effectiveRollMode === 'advantage';
+        const isDis = effectiveRollMode === 'disadvantage';
         const r1 = Math.floor(Math.random() * 20) + 1;
         const r2 = (isAdv || isDis) ? Math.floor(Math.random() * 20) + 1 : null;
         const atkRoll = r2 === null ? r1 : (isAdv ? Math.max(r1, r2) : Math.min(r1, r2));
@@ -1740,7 +1784,8 @@ export function setupSession(io: AppServer) {
         const advSuffix = isAdv ? 'adv' : isDis ? 'dis' : '';
         const atkExpr = `1d20${advSuffix}${effectiveAttackBonus >= 0 ? '+' : ''}${effectiveAttackBonus}`;
         const luckyTag = luckyUsedTag ? ' — Lucky reroll' : '';
-        const hitLabel = isCrit ? '★ CRIT' : isFumble ? '✗ fumble' : hits ? `✓ hit (AC ${ac})${luckyTag}` : `✗ miss (AC ${ac}${shieldUsed ? ' — Shield' : luckyTag})`;
+        const exhaustTag = exhaustionForcesDis ? ' — Exhausted (dis)' : '';
+        const hitLabel = isCrit ? '★ CRIT' : isFumble ? '✗ fumble' : hits ? `✓ hit (AC ${ac})${luckyTag}${exhaustTag}` : `✗ miss (AC ${ac}${shieldUsed ? ' — Shield' : luckyTag}${exhaustTag})`;
         const rollModeForData = isAdv ? 'advantage' : isDis ? 'disadvantage' : undefined;
         const atkData = JSON.stringify({ expression: atkExpr, dice: dicePosted2, modifier: effectiveAttackBonus, total: atkTotal, label: `${target.label} — ${attack_name} ${hitLabel}`, rollMode: rollModeForData });
         const ar = insertChat.run(cid, user.id, user.username, `/roll ${atkExpr}`, 'roll', atkData);
@@ -1967,13 +2012,19 @@ export function setupSession(io: AppServer) {
       for (const tid of validTargets) {
         const target = db.prepare('SELECT id, label, hp_current, hp_max, character_id FROM tokens WHERE id = ?').get(tid) as { id: number; label: string; hp_current: number; hp_max: number; character_id: number | null } | undefined;
         if (!target) continue;
-        if (target.hp_current >= target.hp_max) {
+        // Effective max for PCs: exhaustion 4+ halves it. Healing can't push past the cap.
+        let effMax = target.hp_max;
+        if (target.character_id) {
+          const ch = db.prepare('SELECT exhaustion_level FROM characters WHERE id = ?').get(target.character_id) as { exhaustion_level: number } | undefined;
+          if (ch && ch.exhaustion_level >= 4) effMax = Math.max(1, Math.floor(target.hp_max / 2));
+        }
+        if (target.hp_current >= effMax) {
           summaries.push(`${target.label}: full HP`);
           continue;
         }
 
         const heal = rollDiceExpression(heal_dice);
-        const newHp = Math.min(target.hp_max, target.hp_current + heal.total);
+        const newHp = Math.min(effMax, target.hp_current + heal.total);
         const actual = newHp - target.hp_current;
 
         const healLabel = `${target.label} — ${spell_name} (heal)`;
