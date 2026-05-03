@@ -70,6 +70,10 @@ export interface InventoryItem {
   max_dex_bonus?: number;
   /** Minimum STR required to wear without a 10-ft speed penalty. */
   str_requirement?: number;
+  /** Magic AC bonus from the item itself (e.g. +1 Plate, +2 Shield). Adds when equipped. */
+  magic_ac_bonus?: number;
+  /** True if the magic item requires attunement (informational; affects the slot count when attuned). */
+  requires_attunement?: boolean;
 }
 
 /**

@@ -9,7 +9,7 @@ import { getCasterConfig } from './casters';
 import { SKILLS } from './skills';
 import { isWeaponProficient, isWeaponProficientForClasses } from './weaponProficiency';
 import { isArmorProficientForClasses } from './armorProficiency';
-import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity, hasStealthDisadvantage, failingStrengthRequirement, viewEquippedArmor, viewEquippedShield } from './inventoryView';
+import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity, hasStealthDisadvantage, failingStrengthRequirement, viewEquippedArmor, viewEquippedShield, viewAttunedCount } from './inventoryView';
 import { parseSpellForAttack, scaleCantripDice } from './attackUtils';
 import LevelUpDialog from './LevelUpDialog';
 import { MD } from '../library/Statblock';
@@ -555,12 +555,18 @@ export default function CharacterSheet() {
               const carried = viewTotalWeight(character);
               const cap = carryCapacity(character);
               const overEncumbered = carried > cap;
+              const attuned = viewAttunedCount(character);
+              const overAttuned = attuned > 3;
               return (
                 <>
                   <SectionTitle>Inventory</SectionTitle>
-                  <div style={{ fontSize: '0.78rem', color: overEncumbered ? '#a44' : '#888', marginBottom: '0.5rem' }}>
+                  <div style={{ fontSize: '0.78rem', color: overEncumbered ? '#a44' : '#888', marginBottom: '0.25rem' }}>
                     Carried: <strong>{carried.toFixed(1)}</strong> / {cap} lb
                     {overEncumbered && <span style={{ marginLeft: '0.4rem' }}>⚠ over capacity</span>}
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: overAttuned ? '#a44' : '#888', marginBottom: '0.5rem' }}>
+                    Attuned: <strong>{attuned}</strong> / 3
+                    {overAttuned && <span style={{ marginLeft: '0.4rem' }}>⚠ over the 3-slot cap</span>}
                   </div>
                 </>
               );
@@ -763,9 +769,20 @@ function InventoryEditor({
       ) : (
         items.map((item, i) => {
           const canToggleEquip = item.category === 'weapon' || item.category === 'armor';
+          const canAttune = item.category === 'armor' || item.category === 'weapon' || item.category === 'gear' || item.category === 'other';
           const toggleEquip = async () => {
             const next = items.slice();
             next[i] = { ...next[i], equipped: !next[i].equipped };
+            await persist(next);
+          };
+          const toggleAttuned = async () => {
+            const next = items.slice();
+            next[i] = { ...next[i], attuned: !next[i].attuned };
+            await persist(next);
+          };
+          const setMagicBonus = async (value: number | undefined) => {
+            const next = items.slice();
+            next[i] = { ...next[i], magic_ac_bonus: value };
             await persist(next);
           };
           const catColors: Record<string, string> = {
@@ -790,6 +807,7 @@ function InventoryEditor({
                   {item.equipped ? '✓ Equipped' : 'Equip'}
                 </button>
               )}
+              {item.attuned && <span title="Attuned (counts toward 3-slot cap)" style={{ fontSize: '0.62rem', color: '#fff', background: '#a83', borderRadius: 2, padding: '0.05rem 0.3rem' }}>★ ATT</span>}
               <button onClick={(e) => { e.preventDefault(); adjustQty(i, -1); }} disabled={saving || (item.quantity ?? 1) <= 1}
                 style={{ width: 22, height: 22, padding: 0, fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ddd', borderRadius: 3, background: '#fff' }}>−</button>
               <button onClick={(e) => { e.preventDefault(); adjustQty(i, +1); }} disabled={saving}
@@ -797,11 +815,34 @@ function InventoryEditor({
               <button onClick={(e) => { e.preventDefault(); removeItem(i); }} disabled={saving}
                 style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 3, background: '#fff', color: 'crimson' }}>×</button>
             </summary>
-            {item.description && (
-              <div style={{ fontSize: '0.9rem', marginTop: '0.25rem', color: '#555' }}>
-                <MD text={String(item.description)} />
+            <div style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8rem' }}>
+                {canAttune && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={!!item.attuned} disabled={saving}
+                      onChange={() => toggleAttuned()} />
+                    Attuned
+                  </label>
+                )}
+                {item.category === 'armor' && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                    Magic AC bonus:
+                    <input type="number" min={0} max={5} step={1}
+                      value={item.magic_ac_bonus ?? 0} disabled={saving}
+                      onChange={(e) => {
+                        const v = Math.max(0, Math.min(5, parseInt(e.target.value, 10) || 0));
+                        setMagicBonus(v === 0 ? undefined : v);
+                      }}
+                      style={{ width: 50, padding: '0.15rem 0.3rem', border: '1px solid #ccc', borderRadius: 3, fontSize: '0.8rem' }} />
+                  </label>
+                )}
               </div>
-            )}
+              {item.description && (
+                <div style={{ fontSize: '0.9rem', color: '#555' }}>
+                  <MD text={String(item.description)} />
+                </div>
+              )}
+            </div>
           </details>
           );
         })

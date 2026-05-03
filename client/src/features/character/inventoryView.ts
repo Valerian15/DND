@@ -146,7 +146,7 @@ export function computeAcFromEquipment(character: Character): number {
   if (armor) {
     const cap = armor.max_dex_bonus;
     const dexBonus = typeof cap === 'number' ? Math.min(dexMod, cap) : dexMod;
-    base = (armor.armor_class ?? 10) + dexBonus;
+    base = (armor.armor_class ?? 10) + dexBonus + (armor.magic_ac_bonus ?? 0);
   } else {
     // Unarmored: barbarian / monk class features apply.
     const classes = character.classes ?? (character.class_slug ? [{ slug: character.class_slug, level: character.level }] : []);
@@ -157,8 +157,13 @@ export function computeAcFromEquipment(character: Character): number {
     else base = 10 + dexMod;
   }
 
-  if (shield) base += shield.armor_class ?? 2;
+  if (shield) base += (shield.armor_class ?? 2) + (shield.magic_ac_bonus ?? 0);
   return base;
+}
+
+/** Count of attuned items on the character — RAW max is 3. */
+export function viewAttunedCount(character: Character): number {
+  return viewInventory(character).filter((i) => i.attuned === true).length;
 }
 
 /** True if equipped armor imposes disadvantage on Stealth checks. */
