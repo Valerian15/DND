@@ -8,7 +8,8 @@ import { initiative, parseHitDie, passivePerception, proficiencyBonus, recompute
 import { getCasterConfig } from './casters';
 import { SKILLS } from './skills';
 import { isWeaponProficient, isWeaponProficientForClasses } from './weaponProficiency';
-import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity, hasStealthDisadvantage, failingStrengthRequirement } from './inventoryView';
+import { isArmorProficientForClasses } from './armorProficiency';
+import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity, hasStealthDisadvantage, failingStrengthRequirement, viewEquippedArmor, viewEquippedShield } from './inventoryView';
 import { parseSpellForAttack, scaleCantripDice } from './attackUtils';
 import LevelUpDialog from './LevelUpDialog';
 import { MD } from '../library/Statblock';
@@ -340,6 +341,13 @@ export default function CharacterSheet() {
               const stealthDis = hasStealthDisadvantage(character);
               const strReq = failingStrengthRequirement(character);
               const speed = (character.speed_walk ?? 30) - (strReq != null ? 10 : 0);
+              const classSlugs = (character.classes && character.classes.length > 0)
+                ? character.classes.map((c) => c.slug)
+                : (character.class_slug ? [character.class_slug] : []);
+              const armor = viewEquippedArmor(character);
+              const shield = viewEquippedShield(character);
+              const armorNotProf = armor && armor.armor_type && !isArmorProficientForClasses(classSlugs, armor.armor_type);
+              const shieldNotProf = shield && !isArmorProficientForClasses(classSlugs, 'shield');
               return (
                 <>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
@@ -349,8 +357,10 @@ export default function CharacterSheet() {
                     <BigStat label="Passive Perception">{passive}</BigStat>
                     <BigStat label="Speed">{speed} ft</BigStat>
                   </div>
-                  {(stealthDis || strReq != null) && (
+                  {(stealthDis || strReq != null || armorNotProf || shieldNotProf) && (
                     <div style={{ marginTop: '0.5rem', fontSize: '0.78rem', color: '#a60' }}>
+                      {armorNotProf && <div>⚠ Not proficient with {armor!.name} — disadv on STR/DEX checks, attacks, saves; can't cast spells</div>}
+                      {shieldNotProf && <div>⚠ Not proficient with {shield!.name} — same penalties as non-proficient armor</div>}
                       {stealthDis && <div>⚠ Disadvantage on Stealth (armor)</div>}
                       {strReq != null && <div>⚠ STR {strReq} not met — speed reduced by 10 ft</div>}
                     </div>

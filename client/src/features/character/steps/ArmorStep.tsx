@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { apiFetch } from '../../../lib/api';
 import { getLibraryItem } from '../api';
 import { viewInventory, viewEquippedArmor, viewEquippedShield, parseWeight, parseCostGp } from '../inventoryView';
+import { isArmorProficientForClasses, type ArmorType } from '../armorProficiency';
 import type { Character, InventoryItem } from '../types';
 
 interface ArmorListItem {
@@ -56,6 +57,9 @@ export default function ArmorStep({ character, onChange }: Props) {
   const inventory = viewInventory(character);
   const equippedArmor = viewEquippedArmor(character);
   const equippedShield = viewEquippedShield(character);
+  const classSlugs = (character.classes && character.classes.length > 0)
+    ? character.classes.map((c) => c.slug)
+    : (character.class_slug ? [character.class_slug] : []);
 
   async function equipArmor(item: ArmorListItem) {
     const armorType = ARMOR_TYPE_FROM_CATEGORY[item.category ?? ''];
@@ -163,18 +167,24 @@ export default function ArmorStep({ character, onChange }: Props) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.5rem' }}>
             {list.map((a) => {
               const isEquipped = a.slug === equippedArmor?.library_slug || a.slug === equippedShield?.library_slug;
+              const armorType: ArmorType = ARMOR_TYPE_FROM_CATEGORY[a.category ?? ''] ?? 'light';
+              const proficient = isArmorProficientForClasses(classSlugs, armorType);
               return (
                 <button key={a.slug} type="button"
                   onClick={() => isEquipped ? unequip(category === 'Shield' ? 'shield' : 'body') : equipArmor(a)}
+                  title={proficient ? '' : 'Not proficient — wearing imposes disadvantage on STR/DEX checks, attacks, saves; cannot cast spells (RAW)'}
                   style={{
                     padding: '0.5rem 0.75rem', textAlign: 'left',
                     borderRadius: 6,
-                    border: isEquipped ? '2px solid #2a7' : '2px solid #ddd',
-                    background: isEquipped ? '#e8f8ed' : '#fff',
+                    border: isEquipped ? '2px solid #2a7' : proficient ? '2px solid #ddd' : '2px dashed #c96',
+                    background: isEquipped ? '#e8f8ed' : proficient ? '#fff' : '#faf3eb',
                     cursor: 'pointer',
-                    fontSize: '0.88rem', color: '#333', fontWeight: isEquipped ? 600 : 400,
+                    fontSize: '0.88rem', color: proficient ? '#333' : '#a73', fontWeight: isEquipped ? 600 : 400,
                   }}>
-                  <div>{a.name} {isEquipped && <span style={{ color: '#2a7', fontSize: '0.7rem' }}>✓ equipped</span>}</div>
+                  <div>
+                    {a.name} {isEquipped && <span style={{ color: '#2a7', fontSize: '0.7rem' }}>✓ equipped</span>}
+                    {!proficient && <span style={{ color: '#a73', fontSize: '0.7rem', marginLeft: '0.3rem' }}>not prof.</span>}
+                  </div>
                   <div style={{ fontSize: '0.72rem', color: '#888', marginTop: 2 }}>
                     AC {a.base_ac}{category === 'Shield' ? ' (shield bonus)' : ''}
                   </div>

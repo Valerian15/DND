@@ -10,7 +10,8 @@ import type { Character, ClassResource, TimedEffect } from '../character/types';
 import { parseSpellDurationRounds, getSpellConditions, isHealingSpell, buildHealDice } from './spellEffects';
 import { TokenAuraControl } from './TokenAuraControl';
 import { isWeaponProficientForClasses } from '../character/weaponProficiency';
-import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity, hasStealthDisadvantage, failingStrengthRequirement } from '../character/inventoryView';
+import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity, hasStealthDisadvantage, failingStrengthRequirement, viewEquippedArmor, viewEquippedShield } from '../character/inventoryView';
+import { isArmorProficientForClasses } from '../character/armorProficiency';
 import type { InventoryItem as StructuredInventoryItem } from '../character/types';
 import { parseSpellForAttack, scaleCantripDice } from '../character/attackUtils';
 import { updateTokenHp } from './tokenApi';
@@ -1004,9 +1005,18 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
             {(() => {
               const stealthDis = hasStealthDisadvantage(character);
               const strReq = failingStrengthRequirement(character);
-              if (!stealthDis && strReq == null) return null;
+              const classSlugs = (character.classes && character.classes.length > 0)
+                ? character.classes.map((c) => c.slug)
+                : (character.class_slug ? [character.class_slug] : []);
+              const armor = viewEquippedArmor(character);
+              const shield = viewEquippedShield(character);
+              const armorNotProf = armor && armor.armor_type && !isArmorProficientForClasses(classSlugs, armor.armor_type);
+              const shieldNotProf = shield && !isArmorProficientForClasses(classSlugs, 'shield');
+              if (!stealthDis && strReq == null && !armorNotProf && !shieldNotProf) return null;
               return (
                 <div style={{ marginBottom: '0.5rem', fontSize: '0.72rem', color: '#a60' }}>
+                  {armorNotProf && <div>⚠ Not proficient with {armor!.name}</div>}
+                  {shieldNotProf && <div>⚠ Not proficient with {shield!.name}</div>}
                   {stealthDis && <div>⚠ Disadvantage on Stealth</div>}
                   {strReq != null && <div>⚠ STR {strReq} not met — speed −10 ft (now {(character.speed_walk ?? 30) - 10} ft)</div>}
                 </div>
