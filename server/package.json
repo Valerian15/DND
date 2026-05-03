@@ -8,6 +8,7 @@
     "seed:srd": "tsx src/db/seedSrd.ts",
     "seed:expanded": "tsx src/db/seedExpanded.ts",
     "migrate:equipment": "tsx src/db/migrateEquipment.ts",
+    "patch:armor-weights": "tsx src/db/patchArmorWeights.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
