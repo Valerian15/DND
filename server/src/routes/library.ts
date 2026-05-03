@@ -129,6 +129,8 @@ router.get('/:type', (req, res) => {
     const rows = db.prepare(`
       SELECT id, slug, name, item_type, rarity,
         json_extract(data, '$.requires_attunement') AS requires_attunement,
+        json_extract(data, '$.category') AS category,
+        json_extract(data, '$.base_ac') AS base_ac,
         source
       FROM items ORDER BY name
     `).all();

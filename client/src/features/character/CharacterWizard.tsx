@@ -11,6 +11,7 @@ import BackgroundStep from './steps/BackgroundStep';
 import SkillsStep from './steps/SkillsStep';
 import EquipmentStep from './steps/EquipmentStep';
 import WeaponsStep from './steps/WeaponsStep';
+import ArmorStep from './steps/ArmorStep';
 import SpellsStep from './steps/SpellsStep';
 import FeatsStep from './steps/FeatsStep';
 import DetailsStep from './steps/DetailsStep';
@@ -26,6 +27,7 @@ const STEPS = [
   { key: 'skills', label: 'Skills' },
   { key: 'equipment', label: 'Equipment' },
   { key: 'weapons', label: 'Weapons' },
+  { key: 'armor', label: 'Armor' },
   { key: 'spells', label: 'Spells' },
   { key: 'feats', label: 'Feats' },
   { key: 'details', label: 'Details' },
@@ -162,6 +164,7 @@ export default function CharacterWizard() {
           {currentStep.key === 'skills' && <SkillsStep character={character} onChange={save} />}
           {currentStep.key === 'equipment' && <EquipmentStep character={character} onChange={save} />}
           {currentStep.key === 'weapons' && <WeaponsStep character={character} onChange={save} />}
+          {currentStep.key === 'armor' && <ArmorStep character={character} onChange={save} />}
           {currentStep.key === 'spells' && <SpellsStep character={character} onChange={save} />}
           {currentStep.key === 'feats' && <FeatsStep character={character} onChange={save} />}
           {currentStep.key === 'details' && <DetailsStep character={character} onChange={save} />}
