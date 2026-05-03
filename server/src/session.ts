@@ -1365,6 +1365,20 @@ export function setupSession(io: AppServer) {
       if (cid == null) return;
       if (!Array.isArray(conditions)) return;
       if (!tokenIsInCampaign(token_id, cid)) return;
+      // Permission: DM/admin of the campaign, or the PC character's owner, or a member of
+      // the token's controlled_by list. Mirrors the REST handler in routes/tokens.ts.
+      const tokRow = db.prepare('SELECT token_type, character_id, controlled_by FROM tokens WHERE id = ?')
+        .get(token_id) as { token_type: string; character_id: number | null; controlled_by: string } | undefined;
+      if (!tokRow) return;
+      let allowed = isDmOrAdmin(user, cid);
+      if (!allowed) {
+        let controlled: number[] = [];
+        try { controlled = JSON.parse(tokRow.controlled_by) ?? []; } catch { /* */ }
+        const ownsChar = tokRow.token_type === 'pc' && tokRow.character_id != null
+          && !!db.prepare('SELECT 1 FROM characters WHERE id = ? AND owner_id = ?').get(tokRow.character_id, user.id);
+        allowed = controlled.includes(user.id) || ownsChar;
+      }
+      if (!allowed) return;
       const filtered = (conditions as unknown[]).filter((c): c is string => typeof c === 'string' && VALID_CONDITIONS.has(c));
       const json = JSON.stringify(filtered);
       db.prepare('UPDATE tokens SET conditions = ? WHERE id = ?').run(json, token_id);

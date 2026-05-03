@@ -175,11 +175,29 @@ const UPDATABLE_JSON = new Set([
   'description',
 ]);
 
+/**
+ * True when the requesting user is the DM of any campaign that lists this character in
+ * its members. Lets a non-admin DM edit player PCs in their own campaign (HP, exhaustion,
+ * inventory, etc.) without granting them global admin rights.
+ */
+function isDmOfCharactersCampaign(userId: number, characterId: number): boolean {
+  const row = db.prepare(
+    `SELECT 1 FROM campaign_members cm
+       JOIN campaigns c ON c.id = cm.campaign_id
+       WHERE cm.character_id = ? AND c.dm_id = ?
+       LIMIT 1`
+  ).get(characterId, userId);
+  return !!row;
+}
+
 router.patch('/:id', (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM characters WHERE id = ?').get(id) as CharacterRow | undefined;
   if (!row) return res.status(404).json({ error: 'Character not found' });
-  if (row.owner_id !== req.user!.id && req.user!.role !== 'admin') {
+  const isOwner = row.owner_id === req.user!.id;
+  const isAdmin = req.user!.role === 'admin';
+  const isCampaignDm = !isOwner && !isAdmin && isDmOfCharactersCampaign(req.user!.id, id);
+  if (!isOwner && !isAdmin && !isCampaignDm) {
     return res.status(403).json({ error: 'Not your character' });
   }
 
