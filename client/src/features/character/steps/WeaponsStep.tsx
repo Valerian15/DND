@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { apiFetch } from '../../../lib/api';
 import { isWeaponProficientForClasses } from '../weaponProficiency';
 import { getLibraryItem } from '../api';
-import { viewInventory } from '../inventoryView';
+import { viewInventory, parseWeight, parseCostGp } from '../inventoryView';
 import type { Character, InventoryItem } from '../types';
 
 interface WeaponListItem {
@@ -60,6 +60,8 @@ export default function WeaponsStep({ character, onChange }: Props) {
         quantity: 1,
         category: 'weapon',
         equipped: true,
+        weight_lbs: parseWeight(lib.data?.weight_lbs ?? lib.data?.weight),
+        cost_gp: parseCostGp(lib.data?.cost_gp ?? lib.data?.cost),
         damage_dice: lib.data?.damage_dice,
         damage_type: lib.data?.damage_type,
         weapon_type: lib.weapon_type === 'Ranged' ? 'Ranged' : 'Melee',

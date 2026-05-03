@@ -10,7 +10,8 @@ import type { Character, ClassResource, TimedEffect } from '../character/types';
 import { parseSpellDurationRounds, getSpellConditions, isHealingSpell, buildHealDice } from './spellEffects';
 import { TokenAuraControl } from './TokenAuraControl';
 import { isWeaponProficientForClasses } from '../character/weaponProficiency';
-import { viewEquippedWeapons } from '../character/inventoryView';
+import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity } from '../character/inventoryView';
+import type { InventoryItem as StructuredInventoryItem } from '../character/types';
 import { parseSpellForAttack, scaleCantripDice } from '../character/attackUtils';
 import { updateTokenHp } from './tokenApi';
 import { socket } from '../../lib/socket';
@@ -39,13 +40,8 @@ interface SpellMeta {
   casting_time?: string;
 }
 
-interface InventoryItem {
-  id: string;
-  source?: string;
-  name: string;
-  quantity: number;
-  description?: string;
-}
+// Local InGameSheet shape mirrors the structured InventoryItem so we can read/write inventory_v2.
+type InventoryItem = StructuredInventoryItem;
 
 const HIT_DIE_BY_CLASS: Record<string, number> = {
   barbarian: 12, fighter: 10, paladin: 10, ranger: 10,
@@ -153,12 +149,11 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
         setSlotsUsed(c.spell_slots_used ?? {});
         setHitDiceUsed(c.hit_dice_used ?? 0);
         setLocalResources(c.resources ?? []);
-        setLocalInventory(((c.inventory ?? []) as InventoryItem[]).map((i) => ({
+        // Read the structured inventory (inventory_v2 with legacy fallback). Pre-migration
+        // characters get a synthesised view; post-migration this is the canonical source.
+        setLocalInventory(viewInventory(c).map((i) => ({
+          ...i,
           id: i.id ?? `it-${Date.now()}-${Math.random()}`,
-          source: i.source,
-          name: i.name ?? 'Unnamed',
-          quantity: typeof i.quantity === 'number' ? i.quantity : 1,
-          description: i.description,
         })));
         setLocalCurrency({
           pp: c.currency?.pp ?? 0, gp: c.currency?.gp ?? 0, ep: c.currency?.ep ?? 0,
@@ -458,7 +453,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     if (!character) return;
     const prev = localInventory;
     setLocalInventory(next);
-    try { await updateCharacter(character.id, { inventory: next }); }
+    try { await updateCharacter(character.id, { inventory_v2: next }); }
     catch { setLocalInventory(prev); }
   }
 
@@ -480,6 +475,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     const item: InventoryItem = {
       id: `it-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       name, quantity: qty,
+      category: 'gear',
       description: newItemDesc.trim() || undefined,
     };
     setNewItemName(''); setNewItemQty('1'); setNewItemDesc('');
@@ -1465,6 +1461,17 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
           </Section>
 
           <Section title={`Inventory (${localInventory.length})`}>
+            {(() => {
+              const carried = localInventory.reduce((sum, i) => sum + (i.weight_lbs ?? 0) * (i.quantity ?? 1), 0);
+              const cap = carryCapacity(character);
+              const over = carried > cap;
+              return (
+                <div style={{ fontSize: '0.74rem', color: over ? '#a44' : '#888', marginBottom: '0.4rem' }}>
+                  Carried: <strong>{carried.toFixed(1)}</strong> / {cap} lb
+                  {over && <span style={{ marginLeft: '0.4rem' }}>⚠ over capacity</span>}
+                </div>
+              );
+            })()}
             {localInventory.length === 0 ? (
               <div style={{ color: '#aaa', fontSize: '0.85rem', padding: '0.5rem 0' }}>No items yet.</div>
             ) : (

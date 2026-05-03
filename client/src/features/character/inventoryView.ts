@@ -93,3 +93,31 @@ export function isMigrated(character: Character): boolean {
   const desc = (character.description ?? {}) as { equipment_migrated_at?: number };
   return typeof desc.equipment_migrated_at === 'number';
 }
+
+/** Parse "3 lb." / "3" / 3 → 3. Returns undefined on failure. */
+export function parseWeight(raw: unknown): number | undefined {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const m = raw.match(/[\d.]+/);
+    if (m) return Number(m[0]);
+  }
+  return undefined;
+}
+
+/** Parse "15 gp" / "15" / 15 → 15 (in gold pieces). */
+export function parseCostGp(raw: unknown): number | undefined {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const m = raw.match(/(\d+(?:\.\d+)?)\s*(gp|sp|cp|pp|ep)?/i);
+    if (m) {
+      const n = Number(m[1]);
+      const unit = (m[2] ?? 'gp').toLowerCase();
+      if (unit === 'gp') return n;
+      if (unit === 'sp') return n / 10;
+      if (unit === 'cp') return n / 100;
+      if (unit === 'ep') return n / 2;
+      if (unit === 'pp') return n * 10;
+    }
+  }
+  return undefined;
+}
