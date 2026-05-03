@@ -10,7 +10,7 @@ import type { Character, ClassResource, TimedEffect } from '../character/types';
 import { parseSpellDurationRounds, getSpellConditions, isHealingSpell, buildHealDice } from './spellEffects';
 import { TokenAuraControl } from './TokenAuraControl';
 import { isWeaponProficientForClasses } from '../character/weaponProficiency';
-import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity } from '../character/inventoryView';
+import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity, hasStealthDisadvantage, failingStrengthRequirement } from '../character/inventoryView';
 import type { InventoryItem as StructuredInventoryItem } from '../character/types';
 import { parseSpellForAttack, scaleCantripDice } from '../character/attackUtils';
 import { updateTokenHp } from './tokenApi';
@@ -998,6 +998,17 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                 </div>
               ))}
             </div>
+            {(() => {
+              const stealthDis = hasStealthDisadvantage(character);
+              const strReq = failingStrengthRequirement(character);
+              if (!stealthDis && strReq == null) return null;
+              return (
+                <div style={{ marginBottom: '0.5rem', fontSize: '0.72rem', color: '#a60' }}>
+                  {stealthDis && <div>⚠ Disadvantage on Stealth</div>}
+                  {strReq != null && <div>⚠ STR {strReq} not met — speed −10 ft (now {(character.speed_walk ?? 30) - 10} ft)</div>}
+                </div>
+              );
+            })()}
             <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
               {([
                 { key: 'action', label: 'Action', field: 'action_used' as const },

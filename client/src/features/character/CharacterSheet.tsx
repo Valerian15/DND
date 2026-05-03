@@ -8,7 +8,7 @@ import { initiative, parseHitDie, passivePerception, proficiencyBonus, recompute
 import { getCasterConfig } from './casters';
 import { SKILLS } from './skills';
 import { isWeaponProficient, isWeaponProficientForClasses } from './weaponProficiency';
-import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity } from './inventoryView';
+import { viewEquippedWeapons, viewInventory, viewTotalWeight, carryCapacity, hasStealthDisadvantage, failingStrengthRequirement } from './inventoryView';
 import { parseSpellForAttack, scaleCantripDice } from './attackUtils';
 import LevelUpDialog from './LevelUpDialog';
 import { MD } from '../library/Statblock';
@@ -336,13 +336,28 @@ export default function CharacterSheet() {
           </Card>
 
           <Card>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-              <BigStat label="AC">{character.ac}</BigStat>
-              <BigStat label="Initiative">{formatModifier(init)}</BigStat>
-              <BigStat label="Proficiency">{formatModifier(prof)}</BigStat>
-              <BigStat label="Passive Perception">{passive}</BigStat>
-              <BigStat label="Speed">{character.speed_walk ?? 30} ft</BigStat>
-            </div>
+            {(() => {
+              const stealthDis = hasStealthDisadvantage(character);
+              const strReq = failingStrengthRequirement(character);
+              const speed = (character.speed_walk ?? 30) - (strReq != null ? 10 : 0);
+              return (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                    <BigStat label="AC">{character.ac}</BigStat>
+                    <BigStat label="Initiative">{formatModifier(init)}</BigStat>
+                    <BigStat label="Proficiency">{formatModifier(prof)}</BigStat>
+                    <BigStat label="Passive Perception">{passive}</BigStat>
+                    <BigStat label="Speed">{speed} ft</BigStat>
+                  </div>
+                  {(stealthDis || strReq != null) && (
+                    <div style={{ marginTop: '0.5rem', fontSize: '0.78rem', color: '#a60' }}>
+                      {stealthDis && <div>⚠ Disadvantage on Stealth (armor)</div>}
+                      {strReq != null && <div>⚠ STR {strReq} not met — speed reduced by 10 ft</div>}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </Card>
 
           <Card>

@@ -1,5 +1,6 @@
 import type { Abilities, AbilityKey, Character, ClassEntry } from './types';
 import { abilityModifier } from './pointBuy';
+import { computeAcFromEquipment } from './inventoryView';
 
 /** 5e proficiency bonus by character level */
 export function proficiencyBonus(level: number): number {
@@ -111,7 +112,9 @@ export function recomputeDerived(
   hitDieSize: number,
 ): Partial<Character> {
   const conMod = abilityModifier(character.abilities.con);
-  const ac = baseAc(character.abilities);
+  // AC derives from equipped armor + DEX (capped) + shield + class unarmored defense.
+  // Falls back to 10 + DEX when nothing's equipped.
+  const ac = computeAcFromEquipment(character);
   const classes = character.classes ?? [];
 
   // Multiclass path: classes[] populated with at least one entry → use multiclass math.
