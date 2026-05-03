@@ -9,6 +9,7 @@
 //     after running it the lazy fallback is never needed again.
 
 import type { Character, InventoryItem, InventoryCategory } from './types';
+import { abilityModifier } from './pointBuy';
 
 interface LegacyInventoryRow {
   id?: string;
@@ -102,6 +103,66 @@ export function parseWeight(raw: unknown): number | undefined {
     if (m) return Number(m[0]);
   }
   return undefined;
+}
+
+/** Equipped non-shield armor (light / medium / heavy). At most one. */
+export function viewEquippedArmor(character: Character): InventoryItem | null {
+  return viewInventory(character).find(
+    (i) => i.category === 'armor' && i.equipped === true && i.armor_type !== 'shield',
+  ) ?? null;
+}
+
+/** Equipped shield (separate slot from armor). At most one. */
+export function viewEquippedShield(character: Character): InventoryItem | null {
+  return viewInventory(character).find(
+    (i) => i.category === 'armor' && i.equipped === true && i.armor_type === 'shield',
+  ) ?? null;
+}
+
+/**
+ * Compute AC from equipped armor + DEX (capped) + shield bonus + class unarmored defense.
+ * Falls back to 10 + DEX when nothing relevant is equipped.
+ */
+export function computeAcFromEquipment(character: Character): number {
+  const armor = viewEquippedArmor(character);
+  const shield = viewEquippedShield(character);
+  const dexMod = abilityModifier(character.abilities.dex);
+  const conMod = abilityModifier(character.abilities.con);
+  const wisMod = abilityModifier(character.abilities.wis);
+
+  let base: number;
+  if (armor) {
+    const cap = armor.max_dex_bonus;
+    const dexBonus = typeof cap === 'number' ? Math.min(dexMod, cap) : dexMod;
+    base = (armor.armor_class ?? 10) + dexBonus;
+  } else {
+    // Unarmored: barbarian / monk class features apply.
+    const classes = character.classes ?? (character.class_slug ? [{ slug: character.class_slug, level: character.level }] : []);
+    const isBarb = classes.some((c) => c.slug === 'barbarian');
+    const isMonk = classes.some((c) => c.slug === 'monk');
+    if (isBarb) base = 10 + dexMod + Math.max(0, conMod);
+    else if (isMonk && !shield) base = 10 + dexMod + Math.max(0, wisMod);
+    else base = 10 + dexMod;
+  }
+
+  if (shield) base += shield.armor_class ?? 2;
+  return base;
+}
+
+/** True if equipped armor imposes disadvantage on Stealth checks. */
+export function hasStealthDisadvantage(character: Character): boolean {
+  return !!viewEquippedArmor(character)?.stealth_disadvantage;
+}
+
+/**
+ * Returns the STR requirement that the character fails to meet for their equipped armor,
+ * or null if there's no requirement / it's met. RAW: failing the STR req while in heavy
+ * armor imposes a 10-ft speed penalty.
+ */
+export function failingStrengthRequirement(character: Character): number | null {
+  const armor = viewEquippedArmor(character);
+  if (!armor?.str_requirement) return null;
+  return character.abilities.str < armor.str_requirement ? armor.str_requirement : null;
 }
 
 /** Parse "15 gp" / "15" / 15 → 15 (in gold pieces). */

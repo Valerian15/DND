@@ -66,6 +66,10 @@ export interface InventoryItem {
   armor_class?: number;
   armor_type?: 'light' | 'medium' | 'heavy' | 'shield';
   stealth_disadvantage?: boolean;
+  /** DEX-bonus cap when computing AC. 0 = no DEX bonus (heavy / shield); 2 = medium armor cap; undefined = unlimited (light). */
+  max_dex_bonus?: number;
+  /** Minimum STR required to wear without a 10-ft speed penalty. */
+  str_requirement?: number;
 }
 
 /**
