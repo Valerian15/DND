@@ -78,9 +78,21 @@ export function viewEquippedWeapons(character: Character): InventoryItem[] {
   return viewInventory(character).filter((i) => i.category === 'weapon' && i.equipped === true);
 }
 
-/** Total carried weight in pounds (equipped + carried, magic ignored). */
+/** Total carried weight in pounds — items + currency (50 coins = 1 lb, RAW PHB p.143). */
 export function viewTotalWeight(character: Character): number {
+  return viewItemsWeight(character) + viewCurrencyWeight(character);
+}
+
+/** Weight from items only (ignores coins). Useful when displaying breakdown. */
+export function viewItemsWeight(character: Character): number {
   return viewInventory(character).reduce((sum, i) => sum + (i.weight_lbs ?? 0) * (i.quantity ?? 1), 0);
+}
+
+/** Weight from coins (every 50 coins = 1 lb, regardless of denomination). */
+export function viewCurrencyWeight(character: Character): number {
+  const c = character.currency ?? { pp: 0, gp: 0, ep: 0, sp: 0, cp: 0 };
+  const totalCoins = (c.pp ?? 0) + (c.gp ?? 0) + (c.ep ?? 0) + (c.sp ?? 0) + (c.cp ?? 0);
+  return totalCoins / 50;
 }
 
 /** STR × 15 by 5e RAW — basic carrying capacity. */

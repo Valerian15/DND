@@ -536,6 +536,11 @@ export default function CharacterSheet() {
           })()}
 
           <Card>
+            <SectionTitle>Currency</SectionTitle>
+            <CurrencyEditor character={character} setCharacter={setCharacter} />
+          </Card>
+
+          <Card>
             {(() => {
               const carried = viewTotalWeight(character);
               const cap = carryCapacity(character);
@@ -633,6 +638,53 @@ function humanize(slug: string): string {
   return slug.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
 }
 
+function CurrencyEditor({
+  character,
+  setCharacter,
+}: {
+  character: Character;
+  setCharacter: (c: Character) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const cur = character.currency ?? { pp: 0, gp: 0, ep: 0, sp: 0, cp: 0 };
+  const colors: Record<string, string> = { pp: '#cad', gp: '#cb4', ep: '#bbb', sp: '#aab', cp: '#a85' };
+  async function setValue(coin: 'pp' | 'gp' | 'ep' | 'sp' | 'cp', value: number) {
+    setSaving(true);
+    try {
+      const next = { ...cur, [coin]: Math.max(0, Math.floor(value) || 0) };
+      const updated = await updateCharacter(character.id, { currency: next });
+      setCharacter(updated);
+    } finally { setSaving(false); }
+  }
+  async function adjust(coin: 'pp' | 'gp' | 'ep' | 'sp' | 'cp', delta: number) {
+    await setValue(coin, (cur[coin] ?? 0) + delta);
+  }
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.4rem' }}>
+        {(['pp', 'gp', 'ep', 'sp', 'cp'] as const).map((coin) => (
+          <div key={coin} style={{ background: '#fafafa', border: `1px solid ${colors[coin]}`, borderRadius: 6, padding: '0.35rem 0.25rem', textAlign: 'center' }}>
+            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: colors[coin], textTransform: 'uppercase', marginBottom: 2 }}>{coin}</div>
+            <input type="number" value={cur[coin] ?? 0} min={0} disabled={saving}
+              onChange={(e) => setValue(coin, Number(e.target.value))}
+              style={{ width: '100%', padding: '0.15rem 0.2rem', border: '1px solid #ccc', borderRadius: 3, fontSize: '0.85rem', textAlign: 'center', fontWeight: 700, boxSizing: 'border-box' }} />
+            <div style={{ display: 'flex', gap: 2, marginTop: 3 }}>
+              <button onClick={() => adjust(coin, -1)} disabled={saving || (cur[coin] ?? 0) === 0}
+                style={{ flex: 1, padding: '0.1rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #ddd', borderRadius: 2, background: '#fff', color: '#666' }}>−</button>
+              <button onClick={() => adjust(coin, 1)} disabled={saving}
+                style={{ flex: 1, padding: '0.1rem', fontSize: '0.7rem', cursor: 'pointer', border: '1px solid #ddd', borderRadius: 2, background: '#fff', color: '#666' }}>+</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: '0.4rem', fontSize: '0.72rem', color: '#888' }}>
+        Coin weight: {((cur.pp ?? 0) + (cur.gp ?? 0) + (cur.ep ?? 0) + (cur.sp ?? 0) + (cur.cp ?? 0)) / 50} lb
+        <span style={{ color: '#bbb', marginLeft: '0.4rem' }}>(50 coins = 1 lb)</span>
+      </div>
+    </div>
+  );
+}
+
 function InventoryEditor({
   character,
   setCharacter,
@@ -643,6 +695,7 @@ function InventoryEditor({
   const [adding, setAdding] = useState(false);
   const [draftName, setDraftName] = useState('');
   const [draftQty, setDraftQty] = useState('1');
+  const [draftWeight, setDraftWeight] = useState('');
   const [draftDesc, setDraftDesc] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -664,16 +717,19 @@ function InventoryEditor({
     const name = draftName.trim();
     if (!name) return;
     const qty = Math.max(1, Math.min(999, parseInt(draftQty, 10) || 1));
+    const weightNum = draftWeight.trim() === '' ? undefined : Math.max(0, parseFloat(draftWeight));
     const item = {
       id: `it-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name,
       quantity: qty,
       category: 'gear' as const,
+      ...(typeof weightNum === 'number' && Number.isFinite(weightNum) ? { weight_lbs: weightNum } : {}),
       description: draftDesc.trim() || undefined,
     };
     await persist([...items, item]);
     setDraftName('');
     setDraftQty('1');
+    setDraftWeight('');
     setDraftDesc('');
     setAdding(false);
   }
@@ -748,6 +804,9 @@ function InventoryEditor({
               style={{ flex: 2, padding: '0.3rem', fontSize: '0.85rem', border: '1px solid #ddd', borderRadius: 3 }} />
             <input value={draftQty} onChange={(e) => setDraftQty(e.target.value)} placeholder="Qty" type="number" min={1}
               style={{ width: 60, padding: '0.3rem', fontSize: '0.85rem', border: '1px solid #ddd', borderRadius: 3 }} />
+            <input value={draftWeight} onChange={(e) => setDraftWeight(e.target.value)} placeholder="lb (each)" type="number" min={0} step={0.5}
+              title="Weight per single item in pounds (multiplied by quantity for encumbrance)"
+              style={{ width: 70, padding: '0.3rem', fontSize: '0.85rem', border: '1px solid #ddd', borderRadius: 3 }} />
           </div>
           <textarea value={draftDesc} onChange={(e) => setDraftDesc(e.target.value)} placeholder="Description (optional)"
             rows={2} style={{ width: '100%', padding: '0.3rem', fontSize: '0.85rem', border: '1px solid #ddd', borderRadius: 3, fontFamily: 'inherit', boxSizing: 'border-box' }} />
@@ -756,7 +815,7 @@ function InventoryEditor({
               style={{ padding: '0.3rem 0.7rem', fontSize: '0.85rem', cursor: draftName.trim() ? 'pointer' : 'not-allowed', border: '1px solid #2a7', background: draftName.trim() ? '#e7f7ec' : '#f5f5f5', color: '#2a7', borderRadius: 3, fontWeight: 600 }}>
               Add
             </button>
-            <button onClick={() => { setAdding(false); setDraftName(''); setDraftQty('1'); setDraftDesc(''); }}
+            <button onClick={() => { setAdding(false); setDraftName(''); setDraftQty('1'); setDraftWeight(''); setDraftDesc(''); }}
               style={{ padding: '0.3rem 0.7rem', fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #ccc', background: '#fff', color: '#666', borderRadius: 3 }}>
               Cancel
             </button>

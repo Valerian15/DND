@@ -117,6 +117,7 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
   const [localInventory, setLocalInventory] = useState<InventoryItem[]>([]);
   const [newItemName, setNewItemName] = useState('');
   const [newItemQty, setNewItemQty] = useState('1');
+  const [newItemWeight, setNewItemWeight] = useState('');
   const [newItemDesc, setNewItemDesc] = useState('');
   const [localCurrency, setLocalCurrency] = useState<{ pp: number; gp: number; ep: number; sp: number; cp: number }>({ pp: 0, gp: 0, ep: 0, sp: 0, cp: 0 });
   // Action-economy flags now live on the character (DB-backed) so the hotbar and sheet share
@@ -472,13 +473,15 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
     const name = newItemName.trim();
     if (!name) return;
     const qty = Math.max(1, Number(newItemQty) || 1);
+    const weightNum = newItemWeight.trim() === '' ? undefined : Math.max(0, parseFloat(newItemWeight));
     const item: InventoryItem = {
       id: `it-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       name, quantity: qty,
       category: 'gear',
+      ...(typeof weightNum === 'number' && Number.isFinite(weightNum) ? { weight_lbs: weightNum } : {}),
       description: newItemDesc.trim() || undefined,
     };
-    setNewItemName(''); setNewItemQty('1'); setNewItemDesc('');
+    setNewItemName(''); setNewItemQty('1'); setNewItemWeight(''); setNewItemDesc('');
     await saveInventory([...localInventory, item]);
   }
 
@@ -1473,12 +1476,16 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
 
           <Section title={`Inventory (${localInventory.length})`}>
             {(() => {
-              const carried = localInventory.reduce((sum, i) => sum + (i.weight_lbs ?? 0) * (i.quantity ?? 1), 0);
+              const itemWeight = localInventory.reduce((sum, i) => sum + (i.weight_lbs ?? 0) * (i.quantity ?? 1), 0);
+              const coinTotal = localCurrency.pp + localCurrency.gp + localCurrency.ep + localCurrency.sp + localCurrency.cp;
+              const coinWeight = coinTotal / 50;
+              const carried = itemWeight + coinWeight;
               const cap = carryCapacity(character);
               const over = carried > cap;
               return (
                 <div style={{ fontSize: '0.74rem', color: over ? '#a44' : '#888', marginBottom: '0.4rem' }}>
                   Carried: <strong>{carried.toFixed(1)}</strong> / {cap} lb
+                  {coinWeight > 0 && <span style={{ marginLeft: '0.4rem', color: '#aaa' }}>(items {itemWeight.toFixed(1)} + coins {coinWeight.toFixed(1)})</span>}
                   {over && <span style={{ marginLeft: '0.4rem' }}>⚠ over capacity</span>}
                 </div>
               );
@@ -1519,6 +1526,10 @@ export function InGameSheet({ characterId, tokenId, canEditHp, canEditConditions
                   style={{ flex: 1, padding: '0.35rem 0.5rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem', boxSizing: 'border-box' }} />
                 <input type="number" value={newItemQty} onChange={(e) => setNewItemQty(e.target.value)}
                   min={1} placeholder="Qty"
+                  style={{ width: 56, padding: '0.35rem 0.5rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem', boxSizing: 'border-box' }} />
+                <input type="number" value={newItemWeight} onChange={(e) => setNewItemWeight(e.target.value)}
+                  min={0} step={0.5} placeholder="lb"
+                  title="Weight per single item in pounds (counts towards encumbrance × quantity)"
                   style={{ width: 60, padding: '0.35rem 0.5rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem', boxSizing: 'border-box' }} />
               </div>
               <textarea value={newItemDesc} onChange={(e) => setNewItemDesc(e.target.value)}
