@@ -718,7 +718,16 @@ export default function CampaignSessionPage() {
   const [newFolderName, setNewFolderName] = useState('');
 
   const [showLeftPanel, setShowLeftPanel] = useState(false);
-  const [leftTab, setLeftTab] = useState<'maps' | 'monsters' | 'tokens'>('maps');
+  // Accordion-style sections (Proposal A): user can expand multiple at once. Default opens
+  // Maps so the typical session start (pick a map) doesn't require a click.
+  const [expandedDmSections, setExpandedDmSections] = useState<Set<'maps' | 'monsters' | 'tokens'>>(new Set(['maps']));
+  function toggleDmSection(key: 'maps' | 'monsters' | 'tokens') {
+    setExpandedDmSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
   // Whether the DM Notes panel under the Maps tab is expanded.
   const [dmNotesExpanded, setDmNotesExpanded] = useState(false);
   // Encounter save/load disclosure state.
@@ -874,11 +883,12 @@ export default function CampaignSessionPage() {
   }, [campaign?.id, isDmOrAdmin]);
 
   useEffect(() => {
-    if (leftTab !== 'monsters' || monsterLibrary.length > 0) return;
+    if (!expandedDmSections.has('monsters') || monsterLibrary.length > 0) return;
     apiFetch<{ items: MonsterListItem[] }>('/library/monsters')
       .then((r) => setMonsterLibrary(r.items))
       .catch(() => {});
-  }, [leftTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedDmSections]);
 
   useEffect(() => {
     if (activeMap) {
@@ -1500,8 +1510,8 @@ export default function CampaignSessionPage() {
           {showLeftPanel && (
           <div style={{ width: 260, background: '#fafafa', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }}>
 
-            {/* Tools section */}
-            <div style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #ddd', display: 'flex', flexWrap: 'wrap', gap: '0.35rem', flexShrink: 0 }}>
+            {/* Actions row — one-shot DM commands. */}
+            <div style={{ padding: '0.5rem 0.75rem 0.4rem', borderBottom: '1px solid #f0f0f0', display: 'flex', flexWrap: 'wrap', gap: '0.35rem', flexShrink: 0 }}>
               <button onClick={() => socket.emit('initiative:roll')} title="Roll initiative for all map tokens"
                 style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', color: '#333', fontSize: '0.78rem' }}>
                 ⚔ Initiative
@@ -1557,33 +1567,37 @@ export default function CampaignSessionPage() {
                   <option value="ability:cha">CHA</option>
                 </optgroup>
               </select>
-              {activeMap && (
+            </div>
+
+            {/* Map modes row — toggles for the canvas. Conditional cleanup buttons sit
+                inline next to their toggle so the layout doesn't lose width when off. */}
+            {activeMap && (
+              <div style={{ padding: '0.4rem 0.75rem 0.5rem', borderBottom: '1px solid #ddd', display: 'flex', flexWrap: 'wrap', gap: '0.35rem', flexShrink: 0, alignItems: 'center' }}>
+                <span style={{ fontSize: '0.62rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', marginRight: '0.2rem' }}>Map:</span>
                 <button onClick={() => setWallMode((w) => !w)}
                   title={wallMode ? 'Exit wall editor' : 'Enter wall editor'}
                   style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: `1px solid ${wallMode ? '#c44' : '#ccc'}`, borderRadius: 4, background: wallMode ? '#fdecea' : '#fff', color: wallMode ? '#c44' : '#333', fontSize: '0.78rem', fontWeight: wallMode ? 700 : 400 }}>
                   🧱 {wallMode ? 'Walls ON' : 'Walls'}
                 </button>
-              )}
-              {activeMap && walls.length > 0 && (
-                <button onClick={() => { if (confirm('Clear all walls on this map?')) clearWalls(activeMap.id).catch((e: Error) => setError(e.message)); }}
-                  style={{ padding: '0.25rem 0.5rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 4, background: '#fff', color: 'crimson', fontSize: '0.75rem' }} title="Delete all walls">
-                  Clear walls
-                </button>
-              )}
-              {activeMap && (
+                {walls.length > 0 && (
+                  <button onClick={() => { if (confirm('Clear all walls on this map?')) clearWalls(activeMap.id).catch((e: Error) => setError(e.message)); }}
+                    style={{ padding: '0.25rem 0.4rem', cursor: 'pointer', border: '1px solid #fcc', borderRadius: 4, background: '#fff', color: 'crimson', fontSize: '0.7rem' }} title="Delete all walls">
+                    × Clear
+                  </button>
+                )}
                 <button onClick={() => toggleFog(activeMap.id).then((m) => setActiveMap(m)).catch((e: Error) => setError(e.message))}
                   title={activeMap.fog_enabled ? 'Fog ON — click to disable' : 'Fog OFF — click to enable'}
                   style={{ padding: '0.25rem 0.55rem', cursor: 'pointer', border: `1px solid ${activeMap.fog_enabled ? '#448' : '#ccc'}`, borderRadius: 4, background: activeMap.fog_enabled ? '#eef' : '#fff', color: activeMap.fog_enabled ? '#448' : '#333', fontSize: '0.78rem', fontWeight: activeMap.fog_enabled ? 700 : 400 }}>
                   🌫 {activeMap.fog_enabled ? 'Fog ON' : 'Fog'}
                 </button>
-              )}
-              {!!activeMap?.fog_enabled && (
-                <button onClick={() => { if (confirm('Reset fog? All explored cells will be cleared.')) resetFog(activeMap.id).catch((e: Error) => setError(e.message)); }}
-                  style={{ padding: '0.25rem 0.5rem', cursor: 'pointer', border: '1px solid #cce', borderRadius: 4, background: '#fff', color: '#448', fontSize: '0.75rem' }} title="Clear all explored fog">
-                  Reset fog
-                </button>
-              )}
-            </div>
+                {!!activeMap.fog_enabled && (
+                  <button onClick={() => { if (confirm('Reset fog? All explored cells will be cleared.')) resetFog(activeMap.id).catch((e: Error) => setError(e.message)); }}
+                    style={{ padding: '0.25rem 0.4rem', cursor: 'pointer', border: '1px solid #cce', borderRadius: 4, background: '#fff', color: '#448', fontSize: '0.7rem' }} title="Clear all explored fog">
+                    ↺ Reset
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Encounters: save / restore tokens + initiative as a named snapshot. */}
             {campaign && (
@@ -1645,16 +1659,12 @@ export default function CampaignSessionPage() {
               </div>
             )}
 
-            <div style={{ display: 'flex', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
-              {(['maps', 'monsters', 'tokens'] as const).map((tab) => (
-                <button key={tab} onClick={() => setLeftTab(tab)} style={{ flex: 1, padding: '0.6rem', border: 'none', borderBottom: leftTab === tab ? '2px solid #333' : '2px solid transparent', background: 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: leftTab === tab ? 600 : 400, color: leftTab === tab ? '#333' : '#888' }}>
-                  {tab === 'maps' ? 'Maps' : tab === 'monsters' ? 'Monsters' : 'On Map'}
-                </button>
-              ))}
-            </div>
-
-            {/* Maps tab */}
-            {leftTab === 'maps' && (
+            {/* Maps accordion */}
+            <button onClick={() => toggleDmSection('maps')}
+              style={{ width: '100%', textAlign: 'left', padding: '0.5rem 0.75rem', background: '#f0f0f0', border: 'none', borderBottom: '1px solid #ddd', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700, color: '#444', textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0 }}>
+              {expandedDmSections.has('maps') ? '▾' : '▸'} Maps
+            </button>
+            {expandedDmSections.has('maps') && (
               <>
                 <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
                   <strong style={{ fontSize: '0.9rem' }}>Maps</strong>
@@ -1870,8 +1880,12 @@ export default function CampaignSessionPage() {
               </>
             )}
 
-            {/* Templates tab */}
-            {leftTab === 'monsters' && (() => {
+            {/* Monsters accordion */}
+            <button onClick={() => toggleDmSection('monsters')}
+              style={{ width: '100%', textAlign: 'left', padding: '0.5rem 0.75rem', background: '#f0f0f0', border: 'none', borderTop: '1px solid #ddd', borderBottom: '1px solid #ddd', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700, color: '#444', textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0 }}>
+              {expandedDmSections.has('monsters') ? '▾' : '▸'} Monsters / Encounter
+            </button>
+            {expandedDmSections.has('monsters') && (() => {
               const searchLower = monsterSearch.toLowerCase();
               const allResults = monsterSearch.length < 1 ? [] : monsterLibrary.filter((m) => m.name.toLowerCase().includes(searchLower));
 
@@ -2044,8 +2058,12 @@ export default function CampaignSessionPage() {
               );
             })()}
 
-            {/* On-Map tokens tab — DM-only NPC/monster list per category, click to open the sheet. */}
-            {leftTab === 'tokens' && (
+            {/* On-Map accordion — DM-only NPC/monster list per category, click to open the sheet. */}
+            <button onClick={() => toggleDmSection('tokens')}
+              style={{ width: '100%', textAlign: 'left', padding: '0.5rem 0.75rem', background: '#f0f0f0', border: 'none', borderTop: '1px solid #ddd', borderBottom: '1px solid #ddd', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700, color: '#444', textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0 }}>
+              {expandedDmSections.has('tokens') ? '▾' : '▸'} On Map
+            </button>
+            {expandedDmSections.has('tokens') && (
               <div style={{ flex: 1, overflowY: 'auto' }}>
                 {npcCategories.map((cat) => {
                   const catTokens = tokens.filter((t) => t.token_type === 'npc' && t.category_id === cat.id);
